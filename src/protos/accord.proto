@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package accord;
+
+service Accord {
+  rpc PreAccept (PreAcceptRequest) returns (PreAcceptResponse) {}
+  rpc Commit (CommitRequest) returns (CommitResponse) {}
+  rpc Read (ReadRequest) returns (ReadResponse) {}
+  rpc Apply (ApplyRequest) returns (ApplyResponse) {}
+  rpc Recover (RecoverRequest) returns (RecoverResponse) {}
+}
+
+message Dependency {
+  bytes timestamp = 1;
+  bytes event = 2;
+}
+
+message PreAcceptRequest {
+  string node = 1;
+  bytes timestamp_zero = 2;
+  bytes event = 3;
+}
+
+message PreAcceptResponse {
+  string node = 1;
+  bytes timestamp = 2;
+  repeated Dependency dependencies = 3;
+}
+
+message CommitRequest {
+  string node = 1;
+  bytes timestamp_zero = 2;
+  bytes timestamp = 3;
+  repeated Dependency dependencies = 4;
+}
+
+message ReadRequest {
+  string node = 1;
+  bytes event = 2;
+  bytes timestamp = 3;
+  repeated Dependency dependencies = 4;
+}
+
+message ReadResponse {
+  string node = 1;
+  repeated Dependency results = 2; // Placeholder
+}
+
+message CommitResponse {}
+
+message ApplyRequest {
+  string node = 1;
+  bytes event = 2;
+  bytes timestamp = 3;
+  repeated Dependency dependencies = 4;
+  bytes result = 5;
+}
+
+message ApplyResponse {}
+
+// TODO:
+message RecoverRequest {}
+message RecoverResponse {}
