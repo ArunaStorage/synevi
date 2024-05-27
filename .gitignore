@@ -17,3 +17,9 @@ Cargo.lock
 # Added by cargo
 
 /target
+
+# Jetbrains bloat dirs
+/.idea/.gitignore
+/.idea/modules.xml
+/.idea/synevi.iml
+/.idea/vcs.xml
