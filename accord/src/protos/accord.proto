@@ -58,6 +58,23 @@ message ApplyRequest {
 
 message ApplyResponse {}
 
-// TODO:
-message RecoverRequest {}
-message RecoverResponse {}
+message RecoverRequest {
+  string node = 1;
+  bytes event = 2;
+}
+
+enum State {
+  STATE_UNDEFINED = 0;
+  STATE_PRE_ACCEPTED = 1;
+  STATE_ACCEPTED = 2;
+  STATE_APPLIED = 3;
+  STATE_COMMITED = 4;
+
+}
+
+message RecoverResponse {
+  string node = 1;
+  State local_state = 2;
+  repeated Dependency wait = 3;
+  repeated Dependency superseding = 4;
+}

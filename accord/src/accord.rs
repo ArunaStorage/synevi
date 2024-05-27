@@ -89,15 +89,64 @@ pub struct ApplyRequest {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ApplyResponse {}
-/// TODO:
 #[derive(serde::Deserialize, serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct RecoverRequest {}
+pub struct RecoverRequest {
+    #[prost(string, tag = "1")]
+    pub node: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "2")]
+    pub event: ::prost::alloc::vec::Vec<u8>,
+}
 #[derive(serde::Deserialize, serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct RecoverResponse {}
+pub struct RecoverResponse {
+    #[prost(string, tag = "1")]
+    pub node: ::prost::alloc::string::String,
+    #[prost(enumeration = "State", tag = "2")]
+    pub local_state: i32,
+    #[prost(message, repeated, tag = "3")]
+    pub wait: ::prost::alloc::vec::Vec<Dependency>,
+    #[prost(message, repeated, tag = "4")]
+    pub superseding: ::prost::alloc::vec::Vec<Dependency>,
+}
+#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum State {
+    Undefined = 0,
+    PreAccepted = 1,
+    Accepted = 2,
+    Applied = 3,
+    Commited = 4,
+}
+impl State {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            State::Undefined => "STATE_UNDEFINED",
+            State::PreAccepted => "STATE_PRE_ACCEPTED",
+            State::Accepted => "STATE_ACCEPTED",
+            State::Applied => "STATE_APPLIED",
+            State::Commited => "STATE_COMMITED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "STATE_UNDEFINED" => Some(Self::Undefined),
+            "STATE_PRE_ACCEPTED" => Some(Self::PreAccepted),
+            "STATE_ACCEPTED" => Some(Self::Accepted),
+            "STATE_APPLIED" => Some(Self::Applied),
+            "STATE_COMMITED" => Some(Self::Commited),
+            _ => None,
+        }
+    }
+}
 /// Generated client implementations.
 pub mod accord_client {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
