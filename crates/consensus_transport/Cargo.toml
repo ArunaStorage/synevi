@@ -1,5 +1,5 @@
 [package]
-name = "accord"
+name = "consensus_transport"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true

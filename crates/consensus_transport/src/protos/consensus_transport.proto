@@ -1,11 +1,10 @@
 syntax = "proto3";
 
-package accord;
+package consensus_transport;
 
-service Accord {
+service ConsensusTransport {
   rpc PreAccept (PreAcceptRequest) returns (PreAcceptResponse) {}
   rpc Commit (CommitRequest) returns (CommitResponse) {}
-  rpc Read (ReadRequest) returns (ReadResponse) {}
   rpc Apply (ApplyRequest) returns (ApplyResponse) {}
   rpc Recover (RecoverRequest) returns (RecoverResponse) {}
 }
@@ -34,19 +33,10 @@ message CommitRequest {
   repeated Dependency dependencies = 4;
 }
 
-message ReadRequest {
-  string node = 1;
-  bytes event = 2;
-  bytes timestamp = 3;
-  repeated Dependency dependencies = 4;
-}
-
-message ReadResponse {
+message CommitResponse {
   string node = 1;
   repeated Dependency results = 2; // Placeholder
 }
-
-message CommitResponse {}
 
 message ApplyRequest {
   string node = 1;
@@ -69,6 +59,7 @@ enum State {
   STATE_ACCEPTED = 2;
   STATE_COMMITED = 3;
   STATE_APPLIED = 4;
+  STATE_RECOVER = 5;
 
 }
 

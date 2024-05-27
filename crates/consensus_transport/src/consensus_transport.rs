@@ -46,30 +46,13 @@ pub struct CommitRequest {
 #[derive(serde::Deserialize, serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ReadRequest {
-    #[prost(string, tag = "1")]
-    pub node: ::prost::alloc::string::String,
-    #[prost(bytes = "vec", tag = "2")]
-    pub event: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", tag = "3")]
-    pub timestamp: ::prost::alloc::vec::Vec<u8>,
-    #[prost(message, repeated, tag = "4")]
-    pub dependencies: ::prost::alloc::vec::Vec<Dependency>,
-}
-#[derive(serde::Deserialize, serde::Serialize)]
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ReadResponse {
+pub struct CommitResponse {
     #[prost(string, tag = "1")]
     pub node: ::prost::alloc::string::String,
     /// Placeholder
     #[prost(message, repeated, tag = "2")]
     pub results: ::prost::alloc::vec::Vec<Dependency>,
 }
-#[derive(serde::Deserialize, serde::Serialize)]
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CommitResponse {}
 #[derive(serde::Deserialize, serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -120,6 +103,7 @@ pub enum State {
     Accepted = 2,
     Commited = 3,
     Applied = 4,
+    Recover = 5,
 }
 impl State {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -133,6 +117,7 @@ impl State {
             State::Accepted => "STATE_ACCEPTED",
             State::Commited => "STATE_COMMITED",
             State::Applied => "STATE_APPLIED",
+            State::Recover => "STATE_RECOVER",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -143,20 +128,21 @@ impl State {
             "STATE_ACCEPTED" => Some(Self::Accepted),
             "STATE_COMMITED" => Some(Self::Commited),
             "STATE_APPLIED" => Some(Self::Applied),
+            "STATE_RECOVER" => Some(Self::Recover),
             _ => None,
         }
     }
 }
 /// Generated client implementations.
-pub mod accord_client {
+pub mod consensus_transport_client {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
     use tonic::codegen::*;
     use tonic::codegen::http::Uri;
     #[derive(Debug, Clone)]
-    pub struct AccordClient<T> {
+    pub struct ConsensusTransportClient<T> {
         inner: tonic::client::Grpc<T>,
     }
-    impl AccordClient<tonic::transport::Channel> {
+    impl ConsensusTransportClient<tonic::transport::Channel> {
         /// Attempt to create a new client by connecting to a given endpoint.
         pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
         where
@@ -167,7 +153,7 @@ pub mod accord_client {
             Ok(Self::new(conn))
         }
     }
-    impl<T> AccordClient<T>
+    impl<T> ConsensusTransportClient<T>
     where
         T: tonic::client::GrpcService<tonic::body::BoxBody>,
         T::Error: Into<StdError>,
@@ -185,7 +171,7 @@ pub mod accord_client {
         pub fn with_interceptor<F>(
             inner: T,
             interceptor: F,
-        ) -> AccordClient<InterceptedService<T, F>>
+        ) -> ConsensusTransportClient<InterceptedService<T, F>>
         where
             F: tonic::service::Interceptor,
             T::ResponseBody: Default,
@@ -199,7 +185,7 @@ pub mod accord_client {
                 http::Request<tonic::body::BoxBody>,
             >>::Error: Into<StdError> + Send + Sync,
         {
-            AccordClient::new(InterceptedService::new(inner, interceptor))
+            ConsensusTransportClient::new(InterceptedService::new(inner, interceptor))
         }
         /// Compress requests with the given encoding.
         ///
@@ -249,9 +235,17 @@ pub mod accord_client {
                     )
                 })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/accord.Accord/PreAccept");
+            let path = http::uri::PathAndQuery::from_static(
+                "/consensus_transport.ConsensusTransport/PreAccept",
+            );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new("accord.Accord", "PreAccept"));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "consensus_transport.ConsensusTransport",
+                        "PreAccept",
+                    ),
+                );
             self.inner.unary(req, path, codec).await
         }
         pub async fn commit(
@@ -268,28 +262,14 @@ pub mod accord_client {
                     )
                 })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/accord.Accord/Commit");
+            let path = http::uri::PathAndQuery::from_static(
+                "/consensus_transport.ConsensusTransport/Commit",
+            );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new("accord.Accord", "Commit"));
-            self.inner.unary(req, path, codec).await
-        }
-        pub async fn read(
-            &mut self,
-            request: impl tonic::IntoRequest<super::ReadRequest>,
-        ) -> std::result::Result<tonic::Response<super::ReadResponse>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/accord.Accord/Read");
-            let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new("accord.Accord", "Read"));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("consensus_transport.ConsensusTransport", "Commit"),
+                );
             self.inner.unary(req, path, codec).await
         }
         pub async fn apply(
@@ -306,9 +286,14 @@ pub mod accord_client {
                     )
                 })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/accord.Accord/Apply");
+            let path = http::uri::PathAndQuery::from_static(
+                "/consensus_transport.ConsensusTransport/Apply",
+            );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new("accord.Accord", "Apply"));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("consensus_transport.ConsensusTransport", "Apply"),
+                );
             self.inner.unary(req, path, codec).await
         }
         pub async fn recover(
@@ -328,20 +313,25 @@ pub mod accord_client {
                     )
                 })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/accord.Accord/Recover");
+            let path = http::uri::PathAndQuery::from_static(
+                "/consensus_transport.ConsensusTransport/Recover",
+            );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new("accord.Accord", "Recover"));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("consensus_transport.ConsensusTransport", "Recover"),
+                );
             self.inner.unary(req, path, codec).await
         }
     }
 }
 /// Generated server implementations.
-pub mod accord_server {
+pub mod consensus_transport_server {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
     use tonic::codegen::*;
-    /// Generated trait containing gRPC methods that should be implemented for use with AccordServer.
+    /// Generated trait containing gRPC methods that should be implemented for use with ConsensusTransportServer.
     #[async_trait]
-    pub trait Accord: Send + Sync + 'static {
+    pub trait ConsensusTransport: Send + Sync + 'static {
         async fn pre_accept(
             &self,
             request: tonic::Request<super::PreAcceptRequest>,
@@ -353,10 +343,6 @@ pub mod accord_server {
             &self,
             request: tonic::Request<super::CommitRequest>,
         ) -> std::result::Result<tonic::Response<super::CommitResponse>, tonic::Status>;
-        async fn read(
-            &self,
-            request: tonic::Request<super::ReadRequest>,
-        ) -> std::result::Result<tonic::Response<super::ReadResponse>, tonic::Status>;
         async fn apply(
             &self,
             request: tonic::Request<super::ApplyRequest>,
@@ -367,7 +353,7 @@ pub mod accord_server {
         ) -> std::result::Result<tonic::Response<super::RecoverResponse>, tonic::Status>;
     }
     #[derive(Debug)]
-    pub struct AccordServer<T: Accord> {
+    pub struct ConsensusTransportServer<T: ConsensusTransport> {
         inner: _Inner<T>,
         accept_compression_encodings: EnabledCompressionEncodings,
         send_compression_encodings: EnabledCompressionEncodings,
@@ -375,7 +361,7 @@ pub mod accord_server {
         max_encoding_message_size: Option<usize>,
     }
     struct _Inner<T>(Arc<T>);
-    impl<T: Accord> AccordServer<T> {
+    impl<T: ConsensusTransport> ConsensusTransportServer<T> {
         pub fn new(inner: T) -> Self {
             Self::from_arc(Arc::new(inner))
         }
@@ -427,9 +413,9 @@ pub mod accord_server {
             self
         }
     }
-    impl<T, B> tonic::codegen::Service<http::Request<B>> for AccordServer<T>
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for ConsensusTransportServer<T>
     where
-        T: Accord,
+        T: ConsensusTransport,
         B: Body + Send + 'static,
         B::Error: Into<StdError> + Send + 'static,
     {
@@ -445,10 +431,12 @@ pub mod accord_server {
         fn call(&mut self, req: http::Request<B>) -> Self::Future {
             let inner = self.inner.clone();
             match req.uri().path() {
-                "/accord.Accord/PreAccept" => {
+                "/consensus_transport.ConsensusTransport/PreAccept" => {
                     #[allow(non_camel_case_types)]
-                    struct PreAcceptSvc<T: Accord>(pub Arc<T>);
-                    impl<T: Accord> tonic::server::UnaryService<super::PreAcceptRequest>
+                    struct PreAcceptSvc<T: ConsensusTransport>(pub Arc<T>);
+                    impl<
+                        T: ConsensusTransport,
+                    > tonic::server::UnaryService<super::PreAcceptRequest>
                     for PreAcceptSvc<T> {
                         type Response = super::PreAcceptResponse;
                         type Future = BoxFuture<
@@ -461,7 +449,7 @@ pub mod accord_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as Accord>::pre_accept(&inner, request).await
+                                <T as ConsensusTransport>::pre_accept(&inner, request).await
                             };
                             Box::pin(fut)
                         }
@@ -489,10 +477,12 @@ pub mod accord_server {
                     };
                     Box::pin(fut)
                 }
-                "/accord.Accord/Commit" => {
+                "/consensus_transport.ConsensusTransport/Commit" => {
                     #[allow(non_camel_case_types)]
-                    struct CommitSvc<T: Accord>(pub Arc<T>);
-                    impl<T: Accord> tonic::server::UnaryService<super::CommitRequest>
+                    struct CommitSvc<T: ConsensusTransport>(pub Arc<T>);
+                    impl<
+                        T: ConsensusTransport,
+                    > tonic::server::UnaryService<super::CommitRequest>
                     for CommitSvc<T> {
                         type Response = super::CommitResponse;
                         type Future = BoxFuture<
@@ -505,7 +495,7 @@ pub mod accord_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as Accord>::commit(&inner, request).await
+                                <T as ConsensusTransport>::commit(&inner, request).await
                             };
                             Box::pin(fut)
                         }
@@ -533,55 +523,12 @@ pub mod accord_server {
                     };
                     Box::pin(fut)
                 }
-                "/accord.Accord/Read" => {
+                "/consensus_transport.ConsensusTransport/Apply" => {
                     #[allow(non_camel_case_types)]
-                    struct ReadSvc<T: Accord>(pub Arc<T>);
-                    impl<T: Accord> tonic::server::UnaryService<super::ReadRequest>
-                    for ReadSvc<T> {
-                        type Response = super::ReadResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::ReadRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as Accord>::read(&inner, request).await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let inner = inner.0;
-                        let method = ReadSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/accord.Accord/Apply" => {
-                    #[allow(non_camel_case_types)]
-                    struct ApplySvc<T: Accord>(pub Arc<T>);
-                    impl<T: Accord> tonic::server::UnaryService<super::ApplyRequest>
-                    for ApplySvc<T> {
+                    struct ApplySvc<T: ConsensusTransport>(pub Arc<T>);
+                    impl<
+                        T: ConsensusTransport,
+                    > tonic::server::UnaryService<super::ApplyRequest> for ApplySvc<T> {
                         type Response = super::ApplyResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
@@ -593,7 +540,7 @@ pub mod accord_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as Accord>::apply(&inner, request).await
+                                <T as ConsensusTransport>::apply(&inner, request).await
                             };
                             Box::pin(fut)
                         }
@@ -621,10 +568,12 @@ pub mod accord_server {
                     };
                     Box::pin(fut)
                 }
-                "/accord.Accord/Recover" => {
+                "/consensus_transport.ConsensusTransport/Recover" => {
                     #[allow(non_camel_case_types)]
-                    struct RecoverSvc<T: Accord>(pub Arc<T>);
-                    impl<T: Accord> tonic::server::UnaryService<super::RecoverRequest>
+                    struct RecoverSvc<T: ConsensusTransport>(pub Arc<T>);
+                    impl<
+                        T: ConsensusTransport,
+                    > tonic::server::UnaryService<super::RecoverRequest>
                     for RecoverSvc<T> {
                         type Response = super::RecoverResponse;
                         type Future = BoxFuture<
@@ -637,7 +586,7 @@ pub mod accord_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as Accord>::recover(&inner, request).await
+                                <T as ConsensusTransport>::recover(&inner, request).await
                             };
                             Box::pin(fut)
                         }
@@ -680,7 +629,7 @@ pub mod accord_server {
             }
         }
     }
-    impl<T: Accord> Clone for AccordServer<T> {
+    impl<T: ConsensusTransport> Clone for ConsensusTransportServer<T> {
         fn clone(&self) -> Self {
             let inner = self.inner.clone();
             Self {
@@ -692,7 +641,7 @@ pub mod accord_server {
             }
         }
     }
-    impl<T: Accord> Clone for _Inner<T> {
+    impl<T: ConsensusTransport> Clone for _Inner<T> {
         fn clone(&self) -> Self {
             Self(Arc::clone(&self.0))
         }
@@ -702,7 +651,8 @@ pub mod accord_server {
             write!(f, "{:?}", self.0)
         }
     }
-    impl<T: Accord> tonic::server::NamedService for AccordServer<T> {
-        const NAME: &'static str = "accord.Accord";
+    impl<T: ConsensusTransport> tonic::server::NamedService
+    for ConsensusTransportServer<T> {
+        const NAME: &'static str = "consensus_transport.ConsensusTransport";
     }
 }
