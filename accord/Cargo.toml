@@ -1,0 +1,18 @@
+[package]
+name = "accord"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono = "0.4.38"
+rocksdb = "0.22.0"
+tonic = "0.11.0"
+prost = "0.12.6"
+tonic-build = "0.11.0"
+tokio = {workspace = true}
+
+[build-dependencies]
+tonic-build = "0.11.0"
