@@ -7,14 +7,13 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-chrono = "0.4.38"
-rocksdb = "0.22.0"
-tonic = "0.11.0"
 prost = "0.12.6"
-tonic-build = "0.11.0"
-tokio = {workspace = true}
 serde = {workspace = true}
 serde_json = {workspace = true}
+tokio = {workspace = true}
+tonic = {workspace = true}
+tonic-build = "0.11.0"
+
 
 [build-dependencies]
 tonic-build = "0.11.0"

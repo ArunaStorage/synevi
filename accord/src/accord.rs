@@ -118,8 +118,8 @@ pub enum State {
     Undefined = 0,
     PreAccepted = 1,
     Accepted = 2,
-    Applied = 3,
-    Commited = 4,
+    Commited = 3,
+    Applied = 4,
 }
 impl State {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -131,8 +131,8 @@ impl State {
             State::Undefined => "STATE_UNDEFINED",
             State::PreAccepted => "STATE_PRE_ACCEPTED",
             State::Accepted => "STATE_ACCEPTED",
-            State::Applied => "STATE_APPLIED",
             State::Commited => "STATE_COMMITED",
+            State::Applied => "STATE_APPLIED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -141,8 +141,8 @@ impl State {
             "STATE_UNDEFINED" => Some(Self::Undefined),
             "STATE_PRE_ACCEPTED" => Some(Self::PreAccepted),
             "STATE_ACCEPTED" => Some(Self::Accepted),
-            "STATE_APPLIED" => Some(Self::Applied),
             "STATE_COMMITED" => Some(Self::Commited),
+            "STATE_APPLIED" => Some(Self::Applied),
             _ => None,
         }
     }
