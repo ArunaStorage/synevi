@@ -5,6 +5,7 @@ package consensus_transport;
 service ConsensusTransport {
   rpc PreAccept (PreAcceptRequest) returns (PreAcceptResponse) {}
   rpc Commit (CommitRequest) returns (CommitResponse) {}
+  rpc Accept(AcceptRequest) returns (AcceptResponse) {}
   rpc Apply (ApplyRequest) returns (ApplyResponse) {}
   rpc Recover (RecoverRequest) returns (RecoverResponse) {}
 }
@@ -68,4 +69,15 @@ message RecoverResponse {
   State local_state = 2;
   repeated Dependency wait = 3;
   repeated Dependency superseding = 4;
+}
+
+message AcceptRequest {
+  string node = 1;
+  bytes timestamp_zero = 2;
+  bytes timestamp = 3;
+  repeated Dependency dependencies = 4;
+}
+message AcceptResponse {
+  string node = 1;
+  repeated Dependency dependencies = 2;
 }

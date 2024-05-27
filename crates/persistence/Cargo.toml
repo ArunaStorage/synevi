@@ -5,3 +5,6 @@ authors.workspace = true
 edition.workspace = true
 repository.workspace = true
 license.workspace = true
+
+[dependencies]
+rocksdb = "0.22.0"

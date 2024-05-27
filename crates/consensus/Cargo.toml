@@ -12,7 +12,6 @@ anyhow = {workspace = true}
 bytes = "1.6.0"
 chrono = "0.4.38"
 diesel-ulid = "0.3.1"
-rocksdb = "0.22.0"
 tonic = {workspace = true}
 tokio = {workspace = true}
 serde = {workspace = true}
