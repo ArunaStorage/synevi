@@ -7,7 +7,7 @@ fn main() {
         .out_dir("./src/")
         .compile(
             &["./src/protos/consensus_transport.proto"],
-           &["./src/protos"],
+            &["./src/protos"],
         )
         .unwrap();
 }
