@@ -1,8 +1,6 @@
 use anyhow::anyhow;
 use bytes::Bytes;
-use consensus_transport::consensus_transport::{
-    AcceptResponse, ApplyResponse, CommitResponse, Dependency, PreAcceptResponse,
-};
+use consensus_transport::consensus_transport::{AcceptResponse, ApplyResponse, CommitResponse, Dependency, PreAcceptResponse, State};
 use diesel_ulid::DieselUlid;
 use std::collections::HashMap;
 
@@ -47,11 +45,12 @@ impl IntoInner<ApplyResponse> for crate::coordinator::ConsensusResponse {
     }
 }
 
-pub fn into_dependency(map: HashMap<DieselUlid, Bytes>) -> Vec<Dependency> {
+pub fn into_dependency(map: HashMap<DieselUlid, (Bytes, State)>) -> Vec<Dependency> {
     map.iter()
         .map(|(k, v)| Dependency {
             timestamp: k.as_byte_array().into(),
-            event: v.to_vec(),
+            event: v.0.to_vec(),
+            state: v.1.into(),
         })
         .collect()
 }

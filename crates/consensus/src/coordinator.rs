@@ -33,7 +33,7 @@ pub struct Transaction {
     pub transaction: Bytes,
     pub t_zero: DieselUlid,
     pub t: DieselUlid,
-    pub dependencies: HashMap<DieselUlid, Bytes>,
+    pub dependencies: HashMap<DieselUlid, (Bytes, State)>,
 }
 
 impl Transaction {
@@ -42,6 +42,7 @@ impl Transaction {
         let t_zero = DieselUlid::generate();
 
         // Insert into event store
+        todo!("Insert only after receiving PreAccept requests");
         event_store.lock().await.insert(
             t_zero,
             Event {
@@ -63,20 +64,24 @@ impl Transaction {
         let t_response = DieselUlid::try_from(response.timestamp.as_slice())?;
         if self.t.timestamp() < t_response.timestamp() {
             self.t = t_response;
-            self.handle_dependencies(response.dependencies, State::PreAccepted, event_store).await?;
+            // These deps stem from individually collected replicas and get unified here
+            // that in return will be sent via Accept{} so that every participating replica
+            // knows of ALL (unified) dependencies
+            self.handle_dependencies(response.dependencies, event_store).await?;
         }
         Ok(())
     }
 
     async fn accept(&mut self, response: AcceptResponse, event_store: &Mutex<EventStore>) -> Result<()> {
-        self.handle_dependencies(response.dependencies, State::Accepted, event_store).await?;
+        // This is where I don't get why dependencies are returned
+        self.handle_dependencies(response.dependencies, event_store).await?;
         Ok(())
     }
     async fn commit(&mut self, event_store: &Mutex<EventStore>) -> Result<()> {
         event_store
             .lock()
             .await
-            .update_state(&self.t_zero, State::Commited)?;
+            .update_state(&self.t_zero, State::Commited)?; // This should probably be `t` here
         self.state = State::Commited;
         Ok(())
     }
@@ -87,8 +92,8 @@ impl Transaction {
         event_store: &Mutex<EventStore>,
     ) -> Result<()> {
         for response in responses {
-            for Dependency{timestamp, event} in response.results {
-                self.dependencies.insert( DieselUlid::try_from(timestamp.as_slice())?, event.clone().into());
+            for Dependency{timestamp, event, state} in response.results {
+                self.dependencies.insert( DieselUlid::try_from(timestamp.as_slice())?, (event.clone().into(), state.try_into()?));
             }
         }
         for ulid in self.dependencies.keys() {
@@ -96,10 +101,11 @@ impl Transaction {
         }
         Ok(())
     }
-    async fn handle_dependencies(&mut self, dependencies: Vec<Dependency>, state: State, event_store: &Mutex<EventStore>) -> Result<()> {
-        for Dependency { timestamp, event } in dependencies {
+    async fn handle_dependencies(&mut self, dependencies: Vec<Dependency>, event_store: &Mutex<EventStore>) -> Result<()> {
+        for Dependency { timestamp, event , state} in dependencies {
+            let state = state.try_into()?;
             self.dependencies
-                .insert(DieselUlid::try_from(timestamp.as_slice())?, event.clone().into());
+                .insert(DieselUlid::try_from(timestamp.as_slice())?, (event.clone().into() , state));
             event_store.lock().await.insert(DieselUlid::try_from(timestamp.as_slice())?, Event{ state, event: event.into() });
         }
         Ok(())

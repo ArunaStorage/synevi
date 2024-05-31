@@ -7,6 +7,8 @@ pub struct Dependency {
     pub timestamp: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "2")]
     pub event: ::prost::alloc::vec::Vec<u8>,
+    #[prost(enumeration = "State", tag = "3")]
+    pub state: i32,
 }
 #[derive(serde::Deserialize, serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
