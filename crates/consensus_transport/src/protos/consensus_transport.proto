@@ -12,6 +12,7 @@ service ConsensusTransport {
 
 message Dependency {
   bytes timestamp = 1;
+  bytes timestamp_zero = 2;
 }
 
 message PreAcceptRequest {
@@ -28,6 +29,7 @@ message PreAcceptResponse {
 
 message CommitRequest {
   string node = 1;
+  bytes event = 5;
   bytes timestamp_zero = 2;
   bytes timestamp = 3;
   repeated Dependency dependencies = 4;
@@ -35,15 +37,16 @@ message CommitRequest {
 
 message CommitResponse {
   string node = 1;
-  repeated Dependency results = 2; // Placeholder
+  repeated Dependency results = 2; // Theoretically not needed? 
 }
 
 message ApplyRequest {
   string node = 1;
   bytes event = 2;
   bytes timestamp = 3;
+  bytes timestamp_zero = 6;
   repeated Dependency dependencies = 4;
-  bytes result = 5;
+  bytes result = 5; // Theoretically not needed?
 }
 
 message ApplyResponse {}
@@ -72,6 +75,7 @@ message RecoverResponse {
 
 message AcceptRequest {
   string node = 1;
+  bytes event = 5;
   bytes timestamp_zero = 2;
   bytes timestamp = 3;
   repeated Dependency dependencies = 4;

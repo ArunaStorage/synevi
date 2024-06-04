@@ -1,10 +1,15 @@
-use anyhow::anyhow;
-use bytes::Bytes;
-use consensus_transport::consensus_transport::{
-    AcceptResponse, ApplyResponse, CommitResponse, Dependency, PreAcceptResponse, State,
-};
-use diesel_ulid::DieselUlid;
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
+
+use anyhow::{anyhow, Result};
+use diesel_ulid::DieselUlid;
+use tonic::Status;
+
+use crate::coordinator::MAX_RETRIES;
+use crate::event_store::Event;
+use consensus_transport::consensus_transport::{
+    AcceptResponse, ApplyResponse, CommitResponse, Dependency, PreAcceptResponse,
+};
 
 pub trait IntoInner<T> {
     fn into_inner(self) -> anyhow::Result<T>;
@@ -47,10 +52,26 @@ impl IntoInner<ApplyResponse> for crate::coordinator::ConsensusResponse {
     }
 }
 
-pub fn into_dependency(map: HashSet<DieselUlid>) -> Vec<Dependency> {
+pub fn into_dependency(map: HashMap<DieselUlid, DieselUlid>) -> Vec<Dependency> {
     map.iter()
-        .map(|k| Dependency {
-            timestamp: k.as_byte_array().into(),
+        .map(|(t, t_zero)| Dependency {
+            timestamp: t.as_byte_array().into(),
+            timestamp_zero: t_zero.as_byte_array().into(),
         })
         .collect()
+}
+
+pub fn from_dependency(deps: Vec<Dependency>) -> Result<HashMap<DieselUlid, DieselUlid>> {
+    let mut map = HashMap::new();
+    for Dependency {
+        timestamp,
+        timestamp_zero,
+    } in deps
+    {
+        map.insert(
+            DieselUlid::try_from(timestamp.as_slice())?,
+            DieselUlid::try_from(timestamp_zero.as_slice())?,
+        );
+    }
+    Ok(map)
 }
