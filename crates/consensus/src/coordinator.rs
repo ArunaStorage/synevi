@@ -1,6 +1,6 @@
-use crate::event_store::{Event, EventStore};
+use crate::event_store::{EventStore};
 use crate::utils::{into_dependency, IntoInner};
-use anyhow::{anyhow, Result};
+use anyhow::{Result};
 use bytes::Bytes;
 use consensus_transport::consensus_transport::consensus_transport_client::ConsensusTransportClient;
 use consensus_transport::consensus_transport::{
@@ -8,7 +8,7 @@ use consensus_transport::consensus_transport::{
     Dependency, PreAcceptRequest, PreAcceptResponse, State,
 };
 use diesel_ulid::DieselUlid;
-use std::collections::HashMap;
+use std::collections::{HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -18,6 +18,7 @@ pub struct Coordinator {
     pub node: String,
     pub members: Vec<Member>,
     pub event_store: Arc<Mutex<EventStore>>,
+    pub transaction: Transaction,
 }
 
 #[derive(Clone, Debug)]
@@ -33,80 +34,98 @@ pub struct Transaction {
     pub transaction: Bytes,
     pub t_zero: DieselUlid,
     pub t: DieselUlid,
-    pub dependencies: HashMap<DieselUlid, (Bytes, State)>,
+    pub dependencies: HashSet<DieselUlid>,
 }
 
-impl Transaction {
-    async fn init(transaction: Bytes, event_store: &Mutex<EventStore>) -> Self {
+impl Coordinator {
+    async fn init(&mut self, transaction: Bytes) {
         // Generate timestamp
         let t_zero = DieselUlid::generate();
 
-        // Insert into event store
-        todo!("Insert only after receiving PreAccept requests");
-        event_store.lock().await.insert(
-            t_zero,
-            Event {
-                state: State::PreAccepted,
-                event: transaction.clone(),
-            },
-        );
-
         // Create struct
-        Transaction {
+        self.transaction = Transaction {
             state: State::PreAccepted,
             transaction,
             t_zero,
             t: t_zero,
-            dependencies: HashMap::new(),
-        }
+            dependencies: HashSet::new(),
+        };
     }
-    async fn pre_accept(&mut self, response: PreAcceptResponse, event_store: &Mutex<EventStore>) -> Result<()> {
+    async fn pre_accept(&mut self, response: PreAcceptResponse) -> Result<()> {
         let t_response = DieselUlid::try_from(response.timestamp.as_slice())?;
-        if self.t.timestamp() < t_response.timestamp() {
-            self.t = t_response;
-            // These deps stem from individually collected replicas and get unified here
-            // that in return will be sent via Accept{} so that every participating replica
-            // knows of ALL (unified) dependencies
-            self.handle_dependencies(response.dependencies, event_store).await?;
+        if self.transaction.t.timestamp() < t_response.timestamp() {
+            self.transaction.t = t_response;
         }
-        Ok(())
-    }
+        // These deps stem from individually collected replicas and get unified here
+        // that in return will be sent via Accept{} so that every participating replica
+        // knows of ALL (unified) dependencies
+        self.handle_dependencies(response.dependencies).await?;
 
-    async fn accept(&mut self, response: AcceptResponse, event_store: &Mutex<EventStore>) -> Result<()> {
-        // This is where I don't get why dependencies are returned
-        self.handle_dependencies(response.dependencies, event_store).await?;
-        Ok(())
-    }
-    async fn commit(&mut self, event_store: &Mutex<EventStore>) -> Result<()> {
-        event_store
+        // upsert into event store with updated deps and reordered t
+        self.event_store
             .lock()
             .await
-            .update_state(&self.t_zero, State::Commited)?; // This should probably be `t` here
-        self.state = State::Commited;
+            .update(t_response, &self.transaction)?;
         Ok(())
     }
 
-    async fn execute(
-        &mut self,
-        responses: Vec<CommitResponse>,
-        event_store: &Mutex<EventStore>,
-    ) -> Result<()> {
-        for response in responses {
-            for Dependency{timestamp, event, state} in response.results {
-                self.dependencies.insert( DieselUlid::try_from(timestamp.as_slice())?, (event.clone().into(), state.try_into()?));
+    async fn accept(&mut self, response: AcceptResponse) -> Result<()> {
+        // Handle returned dependencies
+        self.handle_dependencies(response.dependencies).await?;
+
+        // Mut state and update entry
+        self.transaction.state = State::Accepted;
+        self.event_store
+            .lock()
+            .await
+            .update(self.transaction.t, &self.transaction)?;
+
+        Ok(())
+    }
+    async fn commit(&mut self) -> Result<()> {
+        self.transaction.state = State::Commited;
+        self.event_store
+            .lock()
+            .await
+            .update_state(&self.transaction.t, State::Commited)?; // This should probably be `t` here
+        let mut wait = true;
+        while wait {
+            let dependencies = self.transaction.dependencies.clone();
+            for ulid in  dependencies {
+                match self.event_store.lock().await.search(&ulid) {
+                    Some(event) => {
+                        if matches!(event.state, State::Applied) {
+                            self.transaction.dependencies.remove(&ulid);
+                        }}
+                    None => todo!(),
+                }
             }
-        }
-        for ulid in self.dependencies.keys() {
-            event_store.lock().await.persist(ulid)?
+            if self.transaction.dependencies.is_empty() {
+                wait = false;
+            } else {
+                todo!("timeout counter/start recovery")
+            }
         }
         Ok(())
     }
-    async fn handle_dependencies(&mut self, dependencies: Vec<Dependency>, event_store: &Mutex<EventStore>) -> Result<()> {
-        for Dependency { timestamp, event , state} in dependencies {
-            let state = state.try_into()?;
-            self.dependencies
-                .insert(DieselUlid::try_from(timestamp.as_slice())?, (event.clone().into() , state));
-            event_store.lock().await.insert(DieselUlid::try_from(timestamp.as_slice())?, Event{ state, event: event.into() });
+
+    async fn execute(&mut self, _responses: Vec<CommitResponse>) -> Result<()> {
+        
+        // TODO: Read commit responses and calc client response
+        
+        self.event_store
+            .lock()
+            .await
+            .update_state(&self.transaction.t, State::Applied)?; // This should probably be `t` here
+        self.transaction.state = State::Applied;
+        
+        Ok(())
+    }
+    async fn handle_dependencies(&mut self, dependencies: Vec<Dependency>) -> Result<()> {
+        for Dependency { timestamp, .. } in dependencies {
+            self.transaction
+                .dependencies
+                .insert(DieselUlid::try_from(timestamp.as_slice())?);
         }
         Ok(())
     }
@@ -129,10 +148,10 @@ pub(crate) enum ConsensusResponse {
 }
 
 impl Coordinator {
-    async fn add_members(&self, members: Vec<Member>) -> Result<()> {
+    pub async fn add_members(&self, members: Vec<Member>) -> Result<()> {
         todo!("Add members to self")
     }
-    pub async fn transaction(&self, transaction: Bytes) -> Result<()> {
+    pub async fn transaction(&mut self, transaction: Bytes) -> Result<()> {
         //
         //  INIT
         //
@@ -141,7 +160,7 @@ impl Coordinator {
         let members = self.members.clone();
 
         // Create a new transaction state
-        let mut transaction = Transaction::init(transaction, &self.event_store).await;
+        self.init(transaction).await;
 
         //
         //  PRE ACCEPT STATE
@@ -150,8 +169,8 @@ impl Coordinator {
         // Create the PreAccept msg
         let pre_accept_request = PreAcceptRequest {
             node: self.node.clone(),
-            timestamp_zero: transaction.t_zero.as_byte_array().into(),
-            event: transaction.transaction.clone().into(),
+            timestamp_zero: self.transaction.t_zero.as_byte_array().into(),
+            event: self.transaction.transaction.clone().into(),
         };
 
         // Broadcast message
@@ -161,21 +180,21 @@ impl Coordinator {
 
         // Collect responses
         for response in pre_accept_responses {
-            transaction.pre_accept(response.into_inner()?, &self.event_store).await?;
+            self.pre_accept(response.into_inner()?).await?;
         }
 
-        let mut commit_responses = if transaction.t_zero == transaction.t {
+        let commit_responses = if self.transaction.t_zero == self.transaction.t {
             //
             //   FAST PATH
             //
 
             // Commit
-            transaction.commit(&self.event_store).await?;
+            self.commit().await?;
             let commit_request = CommitRequest {
                 node: self.node.clone(),
-                timestamp_zero: transaction.t_zero.as_byte_array().into(),
-                timestamp: transaction.t.as_byte_array().into(),
-                dependencies: into_dependency(transaction.dependencies.clone()),
+                timestamp_zero: self.transaction.t_zero.as_byte_array().into(),
+                timestamp: self.transaction.t.as_byte_array().into(),
+                dependencies: into_dependency(self.transaction.dependencies.clone()),
             };
             Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request)).await?
         } else {
@@ -186,23 +205,25 @@ impl Coordinator {
             // Accept
             let accept_request = AcceptRequest {
                 node: self.node.clone(),
-                timestamp_zero: transaction.t_zero.as_byte_array().into(),
-                timestamp: transaction.t.as_byte_array().into(),
-                dependencies: into_dependency(transaction.dependencies.clone()),
+                timestamp_zero: self.transaction.t_zero.as_byte_array().into(),
+                timestamp: self.transaction.t.as_byte_array().into(),
+                dependencies: into_dependency(self.transaction.dependencies.clone()),
             };
             let accept_responses =
                 Coordinator::broadcast(&members, ConsensusRequest::Accept(accept_request)).await?;
             for response in accept_responses {
-                transaction.accept(response.into_inner()?, &self.event_store).await?;
+               self
+                    .accept(response.into_inner()?)
+                    .await?;
             }
 
             // Commit
-            transaction.commit(&self.event_store).await?;
+            self.commit().await?;
             let commit_request = CommitRequest {
                 node: self.node.clone(),
-                timestamp_zero: transaction.t_zero.as_byte_array().into(),
-                timestamp: transaction.t.as_byte_array().into(),
-                dependencies: into_dependency(transaction.dependencies.clone()),
+                timestamp_zero: self.transaction.t_zero.as_byte_array().into(),
+                timestamp: self.transaction.t.as_byte_array().into(),
+                dependencies: into_dependency(self.transaction.dependencies.clone()),
             };
             Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request)).await?
         };
@@ -210,29 +231,31 @@ impl Coordinator {
         //
         // Execution
         //
-        transaction
+        self 
             .execute(
                 commit_responses
                     .into_iter()
                     .map(|res| -> Result<CommitResponse> { res.into_inner() })
                     .collect::<Result<Vec<CommitResponse>>>()?,
-                &self.event_store,
             )
             .await?;
-        
-        let apply_request = ApplyRequest{
+
+        let apply_request = ApplyRequest {
             node: self.node.clone(),
-            event: transaction.transaction.to_vec(),
-            timestamp: transaction.t.as_byte_array().into(),
-            dependencies: into_dependency(transaction.dependencies),
+            event: self.transaction.transaction.to_vec(),
+            timestamp: self.transaction.t.as_byte_array().into(),
+            dependencies: into_dependency(self.transaction.dependencies.clone()),
             result: vec![], // This is not needed if we just store updated deps?
         };
         Coordinator::broadcast(&members, ConsensusRequest::Apply(apply_request)).await?;
-            
-        // TODO:
-        // - recovery
+
         
+
         Ok(())
+    }
+    
+    async fn recover() {
+        todo!("Implement recovery protocol and call when failing")
     }
 
     async fn broadcast(

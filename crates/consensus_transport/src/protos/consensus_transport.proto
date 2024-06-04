@@ -12,8 +12,6 @@ service ConsensusTransport {
 
 message Dependency {
   bytes timestamp = 1;
-  bytes event = 2;
-  State state = 3;
 }
 
 message PreAcceptRequest {

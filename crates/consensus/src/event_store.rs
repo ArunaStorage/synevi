@@ -1,37 +1,48 @@
+use crate::coordinator::Transaction;
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use consensus_transport::consensus_transport::{Dependency, State};
 use diesel_ulid::DieselUlid;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashSet};
 
 pub struct EventStore {
-    // TODO:
-    // - Both must store t and t0
-    //   and key should always be the highest t
-    // - Record ballot number for recovery paths
-    persisted: HashMap<DieselUlid, Event>,
-    temporary: BTreeMap<DieselUlid, Event>,
+    persisted: BTreeMap<DieselUlid, Event>,
+    temporary: BTreeMap<DieselUlid, Event>, // key: t, Event has t0
 }
 
 #[derive(Clone, Debug)]
 pub struct Event {
+    pub t_zero: DieselUlid,
     pub state: State,
     pub event: Bytes,
+    pub ballot_number: u32, // Ballot number is used for recovery assignments
+    pub dependencies: HashSet<DieselUlid>,
 }
 
 impl EventStore {
     pub fn insert(&mut self, t: DieselUlid, event: Event) {
         self.temporary.insert(t, event);
     }
-    pub fn persist(&mut self, t: &DieselUlid) -> Result<()> {
-        if let Some(Event { event, .. }) = self.temporary.remove(t) {
-            self.persisted.insert(
-                *t,
+    pub fn update(&mut self, t: DieselUlid, transaction: &Transaction) -> Result<()> {
+        if let Some(event) = self.temporary.remove(&transaction.t) {
+            self.insert(
+                t,
                 Event {
-                    state: State::Applied,
-                    event,
+                    t_zero: transaction.t_zero,
+                    state: transaction.state,
+                    event: transaction.transaction.clone(),
+                    ballot_number: event.ballot_number,
+                    dependencies: transaction.dependencies.clone(),
                 },
             );
+            Ok(())
+        } else {
+            Err(anyhow!("No entry found in temp"))
+        }
+    }
+    pub fn persist(&mut self, t: &DieselUlid) -> Result<()> {
+        if let Some(event) = self.temporary.remove(t) {
+            self.persisted.insert(*t, event);
             Ok(())
         } else {
             Err(anyhow!("Event not found in temp"))
@@ -57,8 +68,6 @@ impl EventStore {
             .range(t_zero..)
             .map(|(k, v)| Dependency {
                 timestamp: k.as_byte_array().into(),
-                event: v.event.to_vec(),
-                state: v.state.into(),
             })
             .collect()
     }
