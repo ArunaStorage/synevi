@@ -1,6 +1,6 @@
-use crate::event_store::{EventStore};
+use crate::event_store::EventStore;
 use crate::utils::{into_dependency, IntoInner};
-use anyhow::{Result};
+use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::consensus_transport_client::ConsensusTransportClient;
 use consensus_transport::consensus_transport::{
@@ -8,11 +8,14 @@ use consensus_transport::consensus_transport::{
     Dependency, PreAcceptRequest, PreAcceptResponse, State,
 };
 use diesel_ulid::DieselUlid;
-use std::collections::{HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tonic::transport::Channel;
+
+pub static MAX_RETRIES: u64 = 10;
 
 pub struct Coordinator {
     pub node: String,
@@ -87,42 +90,49 @@ impl Coordinator {
         self.event_store
             .lock()
             .await
-            .update_state(&self.transaction.t, State::Commited)?; // This should probably be `t` here
+            .update_state(&self.transaction.t, State::Commited)?;
         let mut wait = true;
+        let mut counter: u64 = 0;
         while wait {
             let dependencies = self.transaction.dependencies.clone();
-            for ulid in  dependencies {
+            for ulid in dependencies {
                 match self.event_store.lock().await.search(&ulid) {
                     Some(event) => {
                         if matches!(event.state, State::Applied) {
                             self.transaction.dependencies.remove(&ulid);
-                        }}
+                        }
+                    }
                     None => todo!(),
                 }
             }
             if self.transaction.dependencies.is_empty() {
                 wait = false;
             } else {
-                todo!("timeout counter/start recovery")
+                counter += 1;
+                tokio::time::sleep(Duration::from_millis(counter.pow(2))).await;
+                if counter == MAX_RETRIES {
+                    todo!("Start recovery")
+                } else {
+                    continue;
+                }
             }
         }
         Ok(())
     }
 
     async fn execute(&mut self, _responses: Vec<CommitResponse>) -> Result<()> {
-        
         // TODO: Read commit responses and calc client response
-        
+
         self.event_store
             .lock()
             .await
             .update_state(&self.transaction.t, State::Applied)?; // This should probably be `t` here
         self.transaction.state = State::Applied;
-        
+
         Ok(())
     }
     async fn handle_dependencies(&mut self, dependencies: Vec<Dependency>) -> Result<()> {
-        for Dependency { timestamp, .. } in dependencies {
+        for Dependency { timestamp } in dependencies {
             self.transaction
                 .dependencies
                 .insert(DieselUlid::try_from(timestamp.as_slice())?);
@@ -189,14 +199,18 @@ impl Coordinator {
             //
 
             // Commit
-            self.commit().await?;
             let commit_request = CommitRequest {
                 node: self.node.clone(),
                 timestamp_zero: self.transaction.t_zero.as_byte_array().into(),
                 timestamp: self.transaction.t.as_byte_array().into(),
                 dependencies: into_dependency(self.transaction.dependencies.clone()),
             };
-            Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request)).await?
+            let (commit_result, broadcast_result) = tokio::join!(
+                self.commit(),
+                Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request))
+            );
+            commit_result?;
+            broadcast_result?
         } else {
             //
             //  SLOW PATH
@@ -212,33 +226,35 @@ impl Coordinator {
             let accept_responses =
                 Coordinator::broadcast(&members, ConsensusRequest::Accept(accept_request)).await?;
             for response in accept_responses {
-               self
-                    .accept(response.into_inner()?)
-                    .await?;
+                self.accept(response.into_inner()?).await?;
             }
 
             // Commit
-            self.commit().await?;
             let commit_request = CommitRequest {
                 node: self.node.clone(),
                 timestamp_zero: self.transaction.t_zero.as_byte_array().into(),
                 timestamp: self.transaction.t.as_byte_array().into(),
                 dependencies: into_dependency(self.transaction.dependencies.clone()),
             };
-            Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request)).await?
+
+            let (commit_result, broadcast_result) = tokio::join!(
+                self.commit(),
+                Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request))
+            );
+            commit_result?;
+            broadcast_result?
         };
 
         //
         // Execution
         //
-        self 
-            .execute(
-                commit_responses
-                    .into_iter()
-                    .map(|res| -> Result<CommitResponse> { res.into_inner() })
-                    .collect::<Result<Vec<CommitResponse>>>()?,
-            )
-            .await?;
+        self.execute(
+            commit_responses
+                .into_iter()
+                .map(|res| -> Result<CommitResponse> { res.into_inner() })
+                .collect::<Result<Vec<CommitResponse>>>()?,
+        )
+        .await?;
 
         let apply_request = ApplyRequest {
             node: self.node.clone(),
@@ -249,11 +265,9 @@ impl Coordinator {
         };
         Coordinator::broadcast(&members, ConsensusRequest::Apply(apply_request)).await?;
 
-        
-
         Ok(())
     }
-    
+
     async fn recover() {
         todo!("Implement recovery protocol and call when failing")
     }
