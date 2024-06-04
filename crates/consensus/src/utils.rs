@@ -1,12 +1,8 @@
-use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 use diesel_ulid::DieselUlid;
-use tonic::Status;
 
-use crate::coordinator::MAX_RETRIES;
-use crate::event_store::Event;
 use consensus_transport::consensus_transport::{
     AcceptResponse, ApplyResponse, CommitResponse, Dependency, PreAcceptResponse,
 };

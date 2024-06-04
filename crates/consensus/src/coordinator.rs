@@ -1,19 +1,21 @@
-use crate::event_store::{Event, EventStore};
-use crate::utils::{into_dependency, IntoInner};
-use anyhow::{anyhow, Result};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use anyhow::Result;
 use bytes::Bytes;
-use consensus_transport::consensus_transport::consensus_transport_client::ConsensusTransportClient;
+use diesel_ulid::DieselUlid;
+use tokio::sync::Mutex;
+use tokio::task::JoinSet;
+use tonic::transport::Channel;
+
 use consensus_transport::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
     Dependency, PreAcceptRequest, PreAcceptResponse, State,
 };
-use diesel_ulid::DieselUlid;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::Mutex;
-use tokio::task::JoinSet;
-use tonic::transport::Channel;
+use consensus_transport::consensus_transport::consensus_transport_client::ConsensusTransportClient;
+
+use crate::event_store::EventStore;
+use crate::utils::{into_dependency, IntoInner};
 
 pub static MAX_RETRIES: u64 = 10;
 
