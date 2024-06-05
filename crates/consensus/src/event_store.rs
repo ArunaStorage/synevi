@@ -4,11 +4,14 @@ use bytes::Bytes;
 use consensus_transport::consensus_transport::{Dependency, State};
 use diesel_ulid::DieselUlid;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
+#[derive(Debug)]
 pub struct EventStore {
-    persisted: BTreeMap<DieselUlid, Event>,
-    temporary: BTreeMap<DieselUlid, Event>, // key: t, Event has t0
+    persisted: Arc<Mutex<BTreeMap<DieselUlid, Event>>>,
+    temporary: Arc<Mutex<BTreeMap<DieselUlid, Event>>>, // key: t, Event has t0
 }
 
 #[derive(Clone, Debug)]
@@ -21,11 +24,18 @@ pub struct Event {
 }
 
 impl EventStore {
-    pub fn insert(&mut self, t: DieselUlid, event: Event) {
-        self.temporary.insert(t, event);
+    pub fn init() -> Self {
+        EventStore {
+            persisted: Arc::new(Mutex::new(BTreeMap::new())),
+            temporary: Arc::new(Mutex::new(BTreeMap::new())),
+        } 
     }
-    pub fn upsert(&mut self, t_old: DieselUlid, transaction: &Transaction) {
-        if let Some(event) = self.temporary.remove(&t_old) {
+    pub async fn insert(&self, t: DieselUlid, event: Event) {
+        self.temporary.lock().await.insert(t, event);
+    }
+    pub async fn upsert(&self, t_old: DieselUlid, transaction: &Transaction) {
+        let event = self.temporary.lock().await.remove(&t_old).clone();
+        if let Some(event) =  event {
             self.insert(
                 transaction.t,
                 Event {
@@ -35,7 +45,7 @@ impl EventStore {
                     ballot_number: event.ballot_number,
                     dependencies: transaction.dependencies.clone(),
                 },
-            );
+            ).await;
         } else {
             self.insert(
                 transaction.t,
@@ -46,15 +56,16 @@ impl EventStore {
                     ballot_number: 0,
                     dependencies: transaction.dependencies.clone(),
                 },
-            );
+            ).await;
         }
     }
-    pub fn persist(&mut self, transaction: Transaction) {
-        if let Some(mut event) = self.temporary.remove(&transaction.t) {
+    pub async fn persist(&self, transaction: Transaction) {
+        let event = self.temporary.lock().await.remove(&transaction.t).clone();
+        if let Some(mut event) = event {
             event.state = State::Applied;
-            self.persisted.insert(transaction.t, event);
+            self.persisted.lock().await.insert(transaction.t, event);
         } else {
-            self.persisted.insert(transaction.t, Event {
+            self.persisted.lock().await.insert(transaction.t, Event {
                 t_zero: transaction.t_zero,
                 state: State::Applied,
                 event: transaction.transaction,
@@ -63,14 +74,15 @@ impl EventStore {
             });
         }
     }
-    pub fn search(&self, t: &DieselUlid) -> Option<Event> {
-        match self.temporary.get(t) {
+    pub async fn search(&self, t: &DieselUlid) -> Option<Event> {
+        let event = self.temporary.lock().await.get(t).cloned();
+        match event {
             Some(event) => Some(event.clone()),
-            None => self.persisted.get(t).cloned(),
+            None => self.persisted.lock().await.get(t).cloned(),
         }
     }
-    pub fn update_state(&mut self, t: &DieselUlid, state: State) -> Result<()> {
-        if let Some(event) = self.temporary.get_mut(t) {
+    pub async fn update_state(&self, t: &DieselUlid, state: State) -> Result<()> {
+        if let Some(event) = self.temporary.lock().await.get_mut(t) {
             event.state = state;
             Ok(())
         } else {
@@ -78,12 +90,14 @@ impl EventStore {
         }
     }
 
-    pub fn last(&self) -> Option<(DieselUlid, Event)> {
-        self.temporary.iter().last().map(|(k, v)| (*k, v.clone()))
+    pub async fn last(&self) -> Option<(DieselUlid, Event)> {
+        self.temporary.lock().await.iter().last().map(|(k, v)| (*k, v.clone()))
     }
 
-    pub fn get_dependencies(&mut self, t: DieselUlid) -> Vec<Dependency> {
+    pub async fn get_dependencies(&self, t: DieselUlid) -> Vec<Dependency> {
         self.temporary
+            .lock()
+            .await
             .range(..t)
             .filter_map(|(k, v)| {
                 if v.t_zero.timestamp() < t.timestamp() {
@@ -98,8 +112,8 @@ impl EventStore {
             .collect()
     }
 
-    pub fn get_tmp_by_t_zero(&mut self, t_zero: DieselUlid) -> Option<(DieselUlid, Event)> {
-        self.temporary.iter().find_map(|(k, v)| {
+    pub async fn get_tmp_by_t_zero(&self, t_zero: DieselUlid) -> Option<(DieselUlid, Event)> {
+        self.temporary.lock().await.iter().find_map(|(k, v)| {
             if v.t_zero == t_zero {
                 Some((*k, v.clone()))
             } else {
@@ -107,8 +121,8 @@ impl EventStore {
             }
         })
     }
-    pub fn get_applied_by_t_zero(&mut self, t_zero: DieselUlid) -> Option<(DieselUlid, Event)> {
-        self.persisted.iter().find_map(|(k, v)| {
+    pub async fn get_applied_by_t_zero(&self, t_zero: DieselUlid) -> Option<(DieselUlid, Event)> {
+        self.persisted.lock().await.iter().find_map(|(k, v)| {
             if v.t_zero == t_zero {
                 Some((*k, v.clone()))
             } else {
@@ -117,7 +131,7 @@ impl EventStore {
         })
     }
 
-    pub async fn wait_for_dependencies(&mut self, transaction: &mut Transaction) -> Result<()> {
+    pub async fn wait_for_dependencies(&self, transaction: &mut Transaction) -> Result<()> {
         let mut wait = true;
         let mut counter: u64 = 0;
         while wait {
@@ -125,14 +139,14 @@ impl EventStore {
             for (t, t_zero) in dependencies {
                 if t_zero.timestamp() > transaction.t_zero.timestamp() {
                     // Wait for commit
-                    if let Some((_, Event { state, .. })) = self.get_tmp_by_t_zero(t_zero) {
+                    if let Some((_, Event { state, .. })) = self.get_tmp_by_t_zero(t_zero).await {
                         if matches!(state, State::Commited) {
                             transaction.dependencies.remove(&t);
                         }
                     }
                 } else {
                     // Wait for commit
-                    if let Some(_) = self.get_applied_by_t_zero(t_zero) {
+                    if let Some(_) = self.get_applied_by_t_zero(t_zero).await {
                         // Every entry in event_store.persisted is applied
                         transaction.dependencies.remove(&t);
                     }
