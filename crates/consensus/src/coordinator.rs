@@ -4,7 +4,6 @@ use std::sync::Arc;
 use anyhow::Result;
 use bytes::Bytes;
 use diesel_ulid::DieselUlid;
-use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tonic::transport::Channel;
 
@@ -20,10 +19,18 @@ use crate::utils::{into_dependency, IntoInner};
 pub static MAX_RETRIES: u64 = 10;
 
 pub struct Coordinator {
-    pub node: String,
-    pub members: Vec<Member>,
+    pub node: Arc<String>,
+    pub members: Vec<Arc<Member>>,
     pub event_store: Arc<EventStore>,
-    pub transaction: Transaction,
+    pub transaction: TransactionStateMachine,
+}
+trait StateMachine {
+    async fn init(&mut self, transaction: Bytes);
+    async fn pre_accept(&mut self, response: PreAcceptResponse) -> Result<()>;
+    async fn accept(&mut self, response: AcceptResponse) -> Result<()>;
+    async fn commit(&mut self) -> Result<()>;
+    async fn execute(&mut self, responses: Vec<CommitResponse>) -> Result<()>;
+    fn handle_dependencies(&mut self, dependencies: Vec<Dependency>) -> Result<()>;
 }
 
 #[derive(Clone, Debug)]
@@ -37,9 +44,8 @@ pub struct MemberInfo {
     pub host: String,
     pub node: String,
 }
-
 #[derive(Clone, Debug, Default)]
-pub struct Transaction {
+pub struct TransactionStateMachine {
     pub state: State,
     pub transaction: Bytes,
     pub t_zero: DieselUlid,
@@ -47,13 +53,13 @@ pub struct Transaction {
     pub dependencies: HashMap<DieselUlid, DieselUlid>, // Consists of t and t_zero
 }
 
-impl Coordinator {
+impl StateMachine for Coordinator {
     async fn init(&mut self, transaction: Bytes) {
         // Generate timestamp
         let t_zero = DieselUlid::generate();
 
         // Create struct
-        self.transaction = Transaction {
+        self.transaction = TransactionStateMachine {
             state: State::PreAccepted,
             transaction,
             t_zero,
@@ -166,13 +172,13 @@ pub(crate) enum ConsensusResponse {
 }
 
 impl Coordinator {
-    pub async fn builder(node: String, members: Vec<Member>, event_store: Arc<EventStore>) -> Self {
+    pub fn new(node: Arc<String>, members: Vec<Arc<Member>>, event_store: Arc<EventStore>) -> Self {
 
         Coordinator {
             node,
             members,
             event_store,
-            transaction: Default::default() ,
+            transaction: Default::default(),
         }
     }
     pub async fn add_members(&self, members: Vec<Member>) -> Result<()> {
@@ -194,7 +200,7 @@ impl Coordinator {
         //  PRE ACCEPT STATE
         //
         dbg!("[PRE_ACCEPT]");
-        
+
         // Create the PreAccept msg
         let pre_accept_request = PreAcceptRequest {
             node: self.node.clone(),
@@ -221,7 +227,7 @@ impl Coordinator {
             //   FAST PATH
             //
             dbg!("[FAST_PATH]: Commit");
-            
+
             // Commit
             let commit_request = CommitRequest {
                 node: self.node.clone(),

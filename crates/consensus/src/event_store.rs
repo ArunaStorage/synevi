@@ -1,4 +1,4 @@
-use crate::coordinator::{Transaction, MAX_RETRIES};
+use crate::coordinator::{TransactionStateMachine, MAX_RETRIES};
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use consensus_transport::consensus_transport::{Dependency, State};
@@ -33,7 +33,7 @@ impl EventStore {
     pub async fn insert(&self, t: DieselUlid, event: Event) {
         self.temporary.lock().await.insert(t, event);
     }
-    pub async fn upsert(&self, t_old: DieselUlid, transaction: &Transaction) {
+    pub async fn upsert(&self, t_old: DieselUlid, transaction: &TransactionStateMachine) {
         let event = self.temporary.lock().await.remove(&t_old).clone();
         if let Some(event) =  event {
             self.insert(
@@ -59,7 +59,7 @@ impl EventStore {
             ).await;
         }
     }
-    pub async fn persist(&self, transaction: Transaction) {
+    pub async fn persist(&self, transaction: TransactionStateMachine) {
         let event = self.temporary.lock().await.remove(&transaction.t).clone();
         if let Some(mut event) = event {
             event.state = State::Applied;
@@ -131,7 +131,7 @@ impl EventStore {
         })
     }
 
-    pub async fn wait_for_dependencies(&self, transaction: &mut Transaction) -> Result<()> {
+    pub async fn wait_for_dependencies(&self, transaction: &mut TransactionStateMachine) -> Result<()> {
         let mut wait = true;
         let mut counter: u64 = 0;
         while wait {

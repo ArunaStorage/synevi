@@ -11,8 +11,7 @@ use tonic::{Request, Response, Status};
 pub static MAX_RETRIES: u64 = 10;
 
 pub struct Replica {
-    pub node: String,
-    pub members: Vec<crate::coordinator::MemberInfo>,
+    pub node: Arc<String>,
     pub event_store: Arc<EventStore>,
 }
 
@@ -95,7 +94,7 @@ impl ConsensusTransport for Replica {
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
         self.event_store.upsert(
             t,
-            &crate::coordinator::Transaction {
+            &crate::coordinator::TransactionStateMachine {
                 state: State::Commited,
                 transaction: request.event.clone().into(),
                 t_zero,
@@ -105,7 +104,7 @@ impl ConsensusTransport for Replica {
         ).await;
 
         self.event_store
-            .wait_for_dependencies(&mut crate::coordinator::Transaction {
+            .wait_for_dependencies(&mut crate::coordinator::TransactionStateMachine {
                 state: State::Commited,
                 transaction: request.event.into(),
                 t_zero,
@@ -134,7 +133,7 @@ impl ConsensusTransport for Replica {
         if let Some(entry) = self.event_store.get_tmp_by_t_zero(t_zero).await {
             self.event_store.upsert(
                 entry.0,
-                &crate::coordinator::Transaction {
+                &crate::coordinator::TransactionStateMachine {
                     state: State::Accepted,
                     transaction: request.event.into(),
                     t_zero,
@@ -181,7 +180,7 @@ impl ConsensusTransport for Replica {
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         self.event_store
-            .wait_for_dependencies(&mut crate::coordinator::Transaction {
+            .wait_for_dependencies(&mut crate::coordinator::TransactionStateMachine {
                 state: State::Commited,
                 transaction: transaction.clone(),
                 t_zero,
@@ -191,7 +190,7 @@ impl ConsensusTransport for Replica {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        self.event_store.persist(crate::coordinator::Transaction {
+        self.event_store.persist(crate::coordinator::TransactionStateMachine {
                 state: State::Commited,
                 transaction,
                 t_zero,
