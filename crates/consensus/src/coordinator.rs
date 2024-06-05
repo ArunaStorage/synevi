@@ -68,10 +68,10 @@ impl StateMachine for Coordinator {
         };
     }
     async fn pre_accept(&mut self, response: PreAcceptResponse) -> Result<()> {
-        dbg!("[PRE_ACCEPT]: Transaction pre accept", &self.transaction);
+        //dbg!("[PRE_ACCEPT]: Transaction pre accept", &self.transaction);
         let t_response = DieselUlid::try_from(response.timestamp.as_slice())?;
 
-        dbg!("[PRE_ACCEPT]: t_response", &t_response);
+        //dbg!("[PRE_ACCEPT]: t_response", &t_response);
         if self.transaction.t.timestamp() < t_response.timestamp() {
 
             // Store old t to access map
@@ -79,31 +79,31 @@ impl StateMachine for Coordinator {
             // replace t in state machine
             self.transaction.t = t_response;
 
-            dbg!("[PRE_ACCEPT]: slow path", &self.transaction);
+            //dbg!("[PRE_ACCEPT]: slow path", &self.transaction);
 
             // These deps stem from individually collected replicas and get unified here
             // that in return will be sent via Accept{} so that every participating replica
             // knows of ALL (unified) dependencies
             self.handle_dependencies(response.dependencies)?;
 
-            dbg!("[PRE_ACCEPT]: slow path deps", &self.transaction.dependencies);
+            //dbg!("[PRE_ACCEPT]: slow path deps", &self.transaction.dependencies);
 
             // Update transaction, reorder map with updated t and insert dependencies
             self.event_store
                 .upsert(old_t, &self.transaction).await;
 
-            dbg!("[PRE_ACCEPT]: updated event store");
+            //dbg!("[PRE_ACCEPT]: updated event store");
         } else {
 
-            dbg!("[PRE_ACCEPT]: Fast path");
+            //dbg!("[PRE_ACCEPT]: Fast path");
             // Update transaction with new dependencies
             self.handle_dependencies(response.dependencies)?;
 
-            dbg!("[PRE_ACCEPT]: Fast path deps", &self.transaction.dependencies);
+            //dbg!("[PRE_ACCEPT]: Fast path deps", &self.transaction.dependencies);
             self.event_store
                 .upsert(self.transaction.t, &self.transaction).await;
 
-            dbg!("[PRE_ACCEPT]: updated event store");
+            //dbg!("[PRE_ACCEPT]: updated event store");
         }
 
         Ok(())
@@ -188,7 +188,7 @@ impl Coordinator {
         //
         //  INIT
         //
-        dbg!("[INIT]");
+        //dbg!("[INIT]");
 
         // We need a fixed size of members for each transaction
         let members = self.members.clone();
@@ -199,61 +199,62 @@ impl Coordinator {
         //
         //  PRE ACCEPT STATE
         //
-        dbg!("[PRE_ACCEPT]");
+        //dbg!("[PRE_ACCEPT]");
 
         // Create the PreAccept msg
         let pre_accept_request = PreAcceptRequest {
-            node: self.node.clone(),
+            node: self.node.to_string(),
             timestamp_zero: self.transaction.t_zero.as_byte_array().into(),
             event: self.transaction.transaction.clone().into(),
         };
 
-        dbg!("[PRE_ACCEPT]: broadcast");
+        //dbg!("[PRE_ACCEPT]: broadcast");
         // Broadcast message
         let pre_accept_responses =
             Coordinator::broadcast(&members, ConsensusRequest::PreAccept(pre_accept_request))
                 .await?;
 
 
-        dbg!("[PRE_ACCEPT]: broadcast responses");
+        //dbg!("[PRE_ACCEPT]: broadcast responses");
         // Collect responses
         for response in pre_accept_responses {
             self.pre_accept(response.into_inner()?).await?;
         }
-        dbg!("[PRE_ACCEPT]:", &self.transaction);
+        //dbg!("[PRE_ACCEPT]:", &self.transaction);
 
         let commit_responses = if self.transaction.t_zero == self.transaction.t {
             //
             //   FAST PATH
             //
-            dbg!("[FAST_PATH]: Commit");
+            dbg!("[FAST_PATH]");
 
             // Commit
             let commit_request = CommitRequest {
-                node: self.node.clone(),
+                node: self.node.to_string(),
                 event: self.transaction.transaction.clone().into(),
                 timestamp_zero: self.transaction.t_zero.as_byte_array().into(),
                 timestamp: self.transaction.t.as_byte_array().into(),
                 dependencies: into_dependency(self.transaction.dependencies.clone()),
             };
 
-            dbg!("[FAST_PATH]: Commit broadcast");
+            //dbg!("[FAST_PATH]: Commit broadcast");
             let (commit_result, broadcast_result) = tokio::join!(
                 self.commit(),
                 Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request))
             );
 
-            dbg!("[FAST_PATH]: Commit result");
+            //dbg!("[FAST_PATH]: Commit result");
             commit_result?;
             broadcast_result?
         } else {
             //
             //  SLOW PATH
             //
+            dbg!("[SLOW_PATH]");
 
             // Accept
             let accept_request = AcceptRequest {
-                node: self.node.clone(),
+                node: self.node.to_string(),
                 event: self.transaction.transaction.clone().into(),
                 timestamp_zero: self.transaction.t_zero.as_byte_array().into(),
                 timestamp: self.transaction.t.as_byte_array().into(),
@@ -267,7 +268,7 @@ impl Coordinator {
 
             // Commit
             let commit_request = CommitRequest {
-                node: self.node.clone(),
+                node: self.node.to_string(),
                 event: self.transaction.transaction.clone().into(),
                 timestamp_zero: self.transaction.t_zero.as_byte_array().into(),
                 timestamp: self.transaction.t.as_byte_array().into(),
@@ -294,7 +295,7 @@ impl Coordinator {
         .await?;
 
         let apply_request = ApplyRequest {
-            node: self.node.clone(),
+            node: self.node.to_string(),
             event: self.transaction.transaction.to_vec(),
             timestamp: self.transaction.t.as_byte_array().into(),
             timestamp_zero: self.transaction.t_zero.as_byte_array().into(),
@@ -311,10 +312,10 @@ impl Coordinator {
     }
 
     async fn broadcast(
-        members: &[Member],
+        members: &[Arc<Member>],
         request: ConsensusRequest,
     ) -> Result<Vec<ConsensusResponse>> {
-        dbg!("[broadcast]: Start");
+        //dbg!("[broadcast]: Start");
         let mut responses: JoinSet<Result<ConsensusResponse>> = JoinSet::new();
         let mut result = Vec::new();
 
@@ -322,7 +323,7 @@ impl Coordinator {
         // Call match only once ...
 
 
-        dbg!("[broadcast]: Create clients & requests");
+        //dbg!("[broadcast]: Create clients & requests");
         match &request {
             ConsensusRequest::PreAccept(req) => {
                 // ... and then iterate over every member ...
@@ -376,22 +377,22 @@ impl Coordinator {
             }
         }
 
-        dbg!("[broadcast]: Calc majority");
+        //dbg!("[broadcast]: Calc majority");
         // await JoinSet
         let majority = (members.len() / 2) + 1;
         let mut counter = 0_usize;
 
         // Poll majority
 
-        dbg!("[broadcast]: Poll majority");
+        //dbg!("[broadcast]: Poll majority");
         while let Some(response) = responses.join_next().await {
-            dbg!("[broadcast]: Response: {:?}", &response);
+            // dbg!("[broadcast]: Response: {:?}", &response);
             result.push(response??);
             counter += 1;
-            dbg!(&majority);
-            dbg!(&counter);
+            // dbg!(&majority);
+            // dbg!(&counter);
             if counter >= majority {
-                dbg!("break");
+                // dbg!("break");
                 break;
             }
         }

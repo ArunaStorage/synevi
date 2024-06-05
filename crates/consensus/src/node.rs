@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 use crate::event_store::EventStore;
 use std::sync::Arc;
-use diesel_ulid::DieselUlid;
 use tonic::transport::{Channel, Server};
 use crate::coordinator::{Coordinator, Member, MemberInfo};
 use anyhow::Result;
@@ -19,10 +18,11 @@ pub struct Node {
 
 impl Node {
 
-    pub async fn new_with_config() -> Self {todo!()}
+    pub async fn new_with_config() -> Self {
+        todo!()
+    }
 
     pub async fn new_with_parameters(name: String, socket_addr: SocketAddr) -> Self {
-
 
         let node_name = Arc::new(name);
         let node_name_clone = node_name.clone();
@@ -46,6 +46,15 @@ impl Node {
             event_store,
             join_set
         }
+    }
+
+    pub async fn run(&mut self) -> Result<()> {
+        self.join_set.join_next().await.ok_or(anyhow::anyhow!("Empty joinset"))???;
+        Ok(())
+    }
+
+    pub async fn do_stuff(&self) -> Result<()> {
+        Ok(())
     }
 
     pub async fn add_member(&mut self, member: MemberInfo) -> Result<()> {

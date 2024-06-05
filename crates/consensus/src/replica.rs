@@ -21,12 +21,12 @@ impl ConsensusTransport for Replica {
         &self,
         request: Request<PreAcceptRequest>,
     ) -> Result<Response<PreAcceptResponse>, Status> {
-        dbg!("[PRE_ACCEPT]: ",&request);
+        // dbg!("[PRE_ACCEPT]: ",&request);
         let request = request.into_inner();
         let t_zero = DieselUlid::try_from(request.timestamp_zero.as_slice())
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        dbg!("[PRE_ACCEPT]: ", &t_zero);
+        // dbg!("[PRE_ACCEPT]: ", &t_zero);
         // check for entries in temp
         if let Some(entry) = self.event_store.last().await {
             let (latest, _) = entry;
@@ -59,9 +59,9 @@ impl ConsensusTransport for Replica {
                 dependencies,
             }))
         } else {
-            dbg!("[PRE_ACCEPT]: No entries, insert into empty event_store");
+            //dbg!("[PRE_ACCEPT]: No entries, insert into empty event_store");
             // If no entries are found in temp just insert and PreAccept msg
-            dbg!("[PRE_ACCEPT]:", &self.event_store);
+            //dbg!("[PRE_ACCEPT]:", &self.event_store);
             self.event_store.insert(
                 t_zero,
                 Event {
@@ -73,7 +73,7 @@ impl ConsensusTransport for Replica {
                 },
             ).await;
 
-            dbg!("[PRE_ACCEPT]: Sending response");
+            //dbg!("[PRE_ACCEPT]: Sending response");
             Ok(Response::new(PreAcceptResponse {
                 node: self.node.to_string(),
                 timestamp: t_zero.as_byte_array().into(),

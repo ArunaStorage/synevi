@@ -8,55 +8,38 @@ mod node;
 mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
-    use std::sync::{Arc};
+    use crate::coordinator::MemberInfo;
+    use crate::node::Node;
     use bytes::Bytes;
-    use tonic::transport::{Channel, Server};
-    use consensus_transport::consensus_transport::consensus_transport_server::ConsensusTransportServer;
-    use crate::coordinator::{Coordinator, Member, MemberInfo};
-    use crate::event_store::EventStore;
-    use crate::replica::Replica;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn happy_path() {
-        let nodes = ["first", "second", "third" , "fourth", "fifth"];
-        let mut members = Vec::new();
-        let mut event_stores = Vec::new();
-        for (n,member) in nodes.iter().enumerate() {
-            let host = ["http://localhost:1000".to_string(), n.to_string()].join("");
-            //let channel= Channel::from_shared(host.clone()).unwrap().connect().await.unwrap() ;
-            members.push(MemberInfo {
-                host,
-                node: member.to_string(),
-            });
-            event_stores.push(Arc::new(EventStore::init()));
+        let node_names= ["first", "second", "third" , "fourth", "fifth"];
+        let mut nodes: Vec<Node> = vec![];
+        for (i, m) in node_names.iter().enumerate() {
+            let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000+i)).unwrap();
+            let mut node = Node::new_with_parameters(m.to_string(), socket_addr).await;
+            nodes.push(node);
         }
-        let mut members_with_channel = Vec::new();
-        for (i, m)  in members.clone().iter().enumerate() {
-            dbg!(&m);
-            let members_clone = members.clone();
-            let info = m.clone();
-            let event_store = event_stores[i].clone();
-            tokio::spawn(async move {
-                let builder = Server::builder().add_service(ConsensusTransportServer::new(Replica{
-                    node: info.node.to_string(),
-                    members: members_clone,
-                    event_store,
-                }));
-                let port = info.host.strip_prefix("http://localhost").unwrap();
-                let addr = SocketAddr::from_str(&["0.0.0.0", port].join("")).unwrap() ;
-                builder.serve(addr).await.unwrap();
-            });
-            dbg!("Spawned");
-            members_with_channel.push(Member {
-                info: m.clone(),
-                channel: Channel::from_shared(m.clone().host.clone()).unwrap().connect().await.unwrap()
-            })
+        let mut coordinator = nodes.pop().unwrap();
+        for (i, name) in node_names.iter().enumerate() {
+            coordinator.add_member(MemberInfo {
+                node: name.to_string(),
+                host: format!("http://localhost:{}", 10000+i),
+            }).await.unwrap();
         }
-        
-        dbg!("Start coordinator");
-        let mut coordinator = Coordinator::builder("first".to_string(), members_with_channel, event_stores[0].clone()).await;
-        dbg!("Start transaction");
-        coordinator.transaction(Bytes::from("This is a transaction")).await.unwrap();
-        dbg!("Sent transaction");
+
+
+        let mut joinset = tokio::task::JoinSet::new();
+
+        let arc_coordinator = Arc::new(coordinator);
+
+        for x in 0..1000 {
+            let coordinator = arc_coordinator.clone();
+            joinset.spawn(async move { coordinator.transaction(Bytes::from("This is a transaction")).await });
+        }
+        while let Some(res) = joinset.join_next().await {
+        }
     }
 }
