@@ -1,8 +1,12 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use diesel_ulid::DieselUlid;
+use tokio::sync::Notify;
 
+use crate::coordinator::TransactionStateMachine;
+use crate::event_store::Event;
 use consensus_transport::consensus_transport::{
     AcceptResponse, ApplyResponse, CommitResponse, Dependency, PreAcceptResponse,
 };
@@ -58,16 +62,33 @@ pub fn into_dependency(map: HashMap<DieselUlid, DieselUlid>) -> Vec<Dependency> 
 }
 
 pub fn from_dependency(deps: Vec<Dependency>) -> Result<HashMap<DieselUlid, DieselUlid>> {
-    let mut map = HashMap::new();
-    for Dependency {
-        timestamp,
-        timestamp_zero,
-    } in deps
-    {
-        map.insert(
-            DieselUlid::try_from(timestamp.as_slice())?,
-            DieselUlid::try_from(timestamp_zero.as_slice())?,
-        );
+    deps.iter()
+        .map(
+            |Dependency {
+                 timestamp,
+                 timestamp_zero,
+             }|
+             -> Result<(DieselUlid, DieselUlid)> {
+                Ok((
+                    DieselUlid::try_from(timestamp.as_slice())?,
+                    DieselUlid::try_from(timestamp_zero.as_slice())?,
+                ))
+            },
+        )
+        .collect()
+}
+
+impl From<&TransactionStateMachine> for Event {
+    fn from(value: &TransactionStateMachine) -> Self {
+        Event {
+            t_zero: value.t_zero,
+            t: value.t,
+            state: value.state,
+            event: value.transaction.clone(),
+            dependencies: value.dependencies.clone(),
+            ballot_number: 0,
+            commit_notify: Arc::new(Notify::new()),
+            apply_notify: Arc::new(Notify::new()),
+        }
     }
-    Ok(map)
 }

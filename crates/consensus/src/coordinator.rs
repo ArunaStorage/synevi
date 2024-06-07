@@ -7,11 +7,11 @@ use diesel_ulid::DieselUlid;
 use tokio::task::JoinSet;
 use tonic::transport::Channel;
 
+use consensus_transport::consensus_transport::consensus_transport_client::ConsensusTransportClient;
 use consensus_transport::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
     Dependency, PreAcceptRequest, PreAcceptResponse, State,
 };
-use consensus_transport::consensus_transport::consensus_transport_client::ConsensusTransportClient;
 
 use crate::event_store::EventStore;
 use crate::utils::{into_dependency, IntoInner};
@@ -73,9 +73,6 @@ impl StateMachine for Coordinator {
 
         //dbg!("[PRE_ACCEPT]: t_response", &t_response);
         if self.transaction.t.timestamp() < t_response.timestamp() {
-
-            // Store old t to access map
-            let old_t = self.transaction.t;
             // replace t in state machine
             self.transaction.t = t_response;
 
@@ -89,19 +86,16 @@ impl StateMachine for Coordinator {
             //dbg!("[PRE_ACCEPT]: slow path deps", &self.transaction.dependencies);
 
             // Update transaction, reorder map with updated t and insert dependencies
-            self.event_store
-                .upsert(old_t, &self.transaction).await;
+            self.event_store.upsert((&self.transaction).into()).await;
 
             //dbg!("[PRE_ACCEPT]: updated event store");
         } else {
-
             //dbg!("[PRE_ACCEPT]: Fast path");
             // Update transaction with new dependencies
             self.handle_dependencies(response.dependencies)?;
 
             //dbg!("[PRE_ACCEPT]: Fast path deps", &self.transaction.dependencies);
-            self.event_store
-                .upsert(self.transaction.t, &self.transaction).await;
+            self.event_store.upsert((&self.transaction).into()).await;
 
             //dbg!("[PRE_ACCEPT]: updated event store");
         }
@@ -115,18 +109,19 @@ impl StateMachine for Coordinator {
 
         // Mut state and update entry
         self.transaction.state = State::Accepted;
-        self.event_store
-            .upsert(self.transaction.t, &self.transaction).await;
+        self.event_store.upsert((&self.transaction).into()).await;
 
         Ok(())
     }
     async fn commit(&mut self) -> Result<()> {
         self.transaction.state = State::Commited;
-        self.event_store
-            .upsert(self.transaction.t, &self.transaction).await;
+        self.event_store.upsert((&self.transaction).into()).await;
 
         self.event_store
-            .wait_for_dependencies(&mut self.transaction)
+            .wait_for_dependencies(
+                self.transaction.dependencies.clone(),
+                self.transaction.t_zero,
+            )
             .await?;
         Ok(())
     }
@@ -135,7 +130,7 @@ impl StateMachine for Coordinator {
         // TODO: Read commit responses and calc client response
 
         self.transaction.state = State::Applied;
-        self.event_store.persist(self.transaction.clone()).await;
+        self.event_store.upsert((&self.transaction).into()).await;
 
         Ok(())
     }
@@ -173,7 +168,6 @@ pub(crate) enum ConsensusResponse {
 
 impl Coordinator {
     pub fn new(node: Arc<String>, members: Vec<Arc<Member>>, event_store: Arc<EventStore>) -> Self {
-
         Coordinator {
             node,
             members,
@@ -188,7 +182,7 @@ impl Coordinator {
         //
         //  INIT
         //
-        //dbg!("[INIT]");
+        // dbg!("[INIT]");
 
         // We need a fixed size of members for each transaction
         let members = self.members.clone();
@@ -199,7 +193,7 @@ impl Coordinator {
         //
         //  PRE ACCEPT STATE
         //
-        //dbg!("[PRE_ACCEPT]");
+        // dbg!("[PRE_ACCEPT]");
 
         // Create the PreAccept msg
         let pre_accept_request = PreAcceptRequest {
@@ -208,25 +202,24 @@ impl Coordinator {
             event: self.transaction.transaction.clone().into(),
         };
 
-        //dbg!("[PRE_ACCEPT]: broadcast");
+        // dbg!("[PRE_ACCEPT]: broadcast");
         // Broadcast message
         let pre_accept_responses =
             Coordinator::broadcast(&members, ConsensusRequest::PreAccept(pre_accept_request))
                 .await?;
 
-
-        //dbg!("[PRE_ACCEPT]: broadcast responses");
+        // dbg!("[PRE_ACCEPT]: broadcast responses");
         // Collect responses
         for response in pre_accept_responses {
             self.pre_accept(response.into_inner()?).await?;
         }
-        //dbg!("[PRE_ACCEPT]:", &self.transaction);
+        // dbg!("[PRE_ACCEPT]:", &self.transaction);
 
         let commit_responses = if self.transaction.t_zero == self.transaction.t {
             //
             //   FAST PATH
             //
-            dbg!("[FAST_PATH]");
+            // dbg!("[FAST_PATH]");
 
             // Commit
             let commit_request = CommitRequest {
@@ -237,20 +230,20 @@ impl Coordinator {
                 dependencies: into_dependency(self.transaction.dependencies.clone()),
             };
 
-            //dbg!("[FAST_PATH]: Commit broadcast");
+            // dbg!("[FAST_PATH]: Commit broadcast");
             let (commit_result, broadcast_result) = tokio::join!(
                 self.commit(),
                 Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request))
             );
 
-            //dbg!("[FAST_PATH]: Commit result");
+            // dbg!("[FAST_PATH]: Commit result");
             commit_result?;
             broadcast_result?
         } else {
             //
             //  SLOW PATH
             //
-            dbg!("[SLOW_PATH]");
+            // dbg!("[SLOW_PATH]");
 
             // Accept
             let accept_request = AcceptRequest {
@@ -321,7 +314,6 @@ impl Coordinator {
 
         // Send PreAccept request to every known member
         // Call match only once ...
-
 
         //dbg!("[broadcast]: Create clients & requests");
         match &request {
