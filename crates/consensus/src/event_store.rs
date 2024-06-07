@@ -2,13 +2,13 @@ use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::{Dependency, State};
 use diesel_ulid::DieselUlid;
-use std::collections::btree_map::Range;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Notify, RwLock};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
+use tracing::instrument;
 
 static TIMEOUT: u64 = 10;
 #[derive(Debug)]
@@ -50,6 +50,7 @@ impl PartialEq for Event {
 }
 
 impl EventStore {
+    #[instrument(level = "trace")]
     pub fn init() -> Self {
         EventStore {
             events: Arc::new(RwLock::new(HashMap::default())),
@@ -58,6 +59,8 @@ impl EventStore {
         }
     }
 
+
+    #[instrument(level = "trace")]
     async fn insert(&self, event: Event) {
         self.events
             .write()
@@ -66,6 +69,8 @@ impl EventStore {
         self.mappings.write().await.insert(event.t, event.t_zero);
     }
 
+
+    #[instrument(level = "trace")]
     pub async fn upsert(&self, event: Event) {
         let mut lock = self.events.write().await;
         //if let Some(old_event) = self.events.write().await.get_mut(&event.t_zero) {
@@ -103,10 +108,14 @@ impl EventStore {
         };
     }
 
+
+    #[instrument(level = "trace")]
     pub async fn get(&self, t_zero: &DieselUlid) -> Option<Event> {
         self.events.read().await.get(t_zero).cloned()
     }
 
+
+    #[instrument(level = "trace")]
     pub async fn last(&self) -> Option<Event> {
         if let Some((_, t_zero)) = self.mappings.read().await.last_key_value() {
             self.get(t_zero).await
@@ -115,6 +124,8 @@ impl EventStore {
         }
     }
 
+
+    #[instrument(level = "trace")]
     pub async fn get_dependencies(&self, t: &DieselUlid) -> Vec<Dependency> {
         let last = self.last_applied.read().await;
         if let Some(entry) = self.last().await {
@@ -147,6 +158,8 @@ impl EventStore {
         }
     }
 
+
+    #[instrument(level = "trace")]
     pub async fn wait_for_dependencies(
         &self,
         dependencies: HashMap<DieselUlid, DieselUlid>,

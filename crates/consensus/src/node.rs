@@ -8,6 +8,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 use tonic::transport::{Channel, Server};
+use tracing::instrument;
 
 pub struct Node {
     name: Arc<String>,
@@ -21,6 +22,7 @@ impl Node {
         todo!()
     }
 
+    #[instrument(level = "trace")]
     pub async fn new_with_parameters(name: String, socket_addr: SocketAddr) -> Self {
         let node_name = Arc::new(name);
         let node_name_clone = node_name.clone();
@@ -45,6 +47,7 @@ impl Node {
         }
     }
 
+    #[instrument(level = "trace", skip(self))]
     pub async fn run(&mut self) -> Result<()> {
         self.join_set
             .join_next()
@@ -53,10 +56,14 @@ impl Node {
         Ok(())
     }
 
+
+    #[instrument(level = "trace", skip(self))]
     pub async fn do_stuff(&self) -> Result<()> {
         Ok(())
     }
 
+
+    #[instrument(level = "trace", skip(self))]
     pub async fn add_member(&mut self, member: MemberInfo) -> Result<()> {
         let channel = Channel::from_shared(member.host.clone())?.connect().await?;
         self.members.push(Arc::new(Member {
@@ -67,6 +74,7 @@ impl Node {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(self))]
     pub async fn transaction(&self, transaction: Bytes) -> Result<()> {
         let mut coordinator = Coordinator::new(
             self.name.clone(),

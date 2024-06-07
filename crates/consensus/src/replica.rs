@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Notify;
 use tonic::{Request, Response, Status};
+use tracing::instrument;
 
 pub struct Replica {
     pub node: Arc<String>,
@@ -16,6 +17,8 @@ pub struct Replica {
 
 #[tonic::async_trait]
 impl ConsensusTransport for Replica {
+
+    #[instrument(level = "trace", skip(self))]
     async fn pre_accept(
         &self,
         request: Request<PreAcceptRequest>,
@@ -92,6 +95,7 @@ impl ConsensusTransport for Replica {
             }))
         }
     }
+    #[instrument(level = "trace", skip(self))]
     async fn commit(
         &self,
         request: Request<CommitRequest>,
@@ -126,6 +130,7 @@ impl ConsensusTransport for Replica {
             results: Vec::new(),
         }))
     }
+    #[instrument(level = "trace", skip(self))]
     async fn accept(
         &self,
         request: Request<AcceptRequest>,
@@ -175,6 +180,7 @@ impl ConsensusTransport for Replica {
         }))
     }
 
+    #[instrument(level = "trace", skip(self))]
     async fn apply(
         &self,
         request: Request<ApplyRequest>,
@@ -212,6 +218,7 @@ impl ConsensusTransport for Replica {
         Ok(Response::new(ApplyResponse {}))
     }
 
+    #[instrument(level = "trace", skip(self))]
     async fn recover(
         &self,
         request: Request<RecoverRequest>,

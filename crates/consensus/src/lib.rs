@@ -37,7 +37,7 @@ mod tests {
 
         let arc_coordinator = Arc::new(coordinator);
 
-        for x in 0..1000 {
+        for _ in 0..1000 {
             let coordinator = arc_coordinator.clone();
             joinset.spawn(async move {
                 coordinator

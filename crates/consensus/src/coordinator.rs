@@ -6,6 +6,7 @@ use bytes::Bytes;
 use diesel_ulid::DieselUlid;
 use tokio::task::JoinSet;
 use tonic::transport::Channel;
+use tracing::instrument;
 
 use consensus_transport::consensus_transport::consensus_transport_client::ConsensusTransportClient;
 use consensus_transport::consensus_transport::{
@@ -54,6 +55,8 @@ pub struct TransactionStateMachine {
 }
 
 impl StateMachine for Coordinator {
+
+    #[instrument(level = "trace", skip(self))]
     async fn init(&mut self, transaction: Bytes) {
         // Generate timestamp
         let t_zero = DieselUlid::generate();
@@ -67,6 +70,9 @@ impl StateMachine for Coordinator {
             dependencies: HashMap::new(),
         };
     }
+
+
+    #[instrument(level = "trace", skip(self))]
     async fn pre_accept(&mut self, response: PreAcceptResponse) -> Result<()> {
         //dbg!("[PRE_ACCEPT]: Transaction pre accept", &self.transaction);
         let t_response = DieselUlid::try_from(response.timestamp.as_slice())?;
@@ -103,6 +109,7 @@ impl StateMachine for Coordinator {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(self))]
     async fn accept(&mut self, response: AcceptResponse) -> Result<()> {
         // Handle returned dependencies
         self.handle_dependencies(response.dependencies)?;
@@ -113,6 +120,8 @@ impl StateMachine for Coordinator {
 
         Ok(())
     }
+
+    #[instrument(level = "trace", skip(self))]
     async fn commit(&mut self) -> Result<()> {
         self.transaction.state = State::Commited;
         self.event_store.upsert((&self.transaction).into()).await;
@@ -126,6 +135,7 @@ impl StateMachine for Coordinator {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(self))]
     async fn execute(&mut self, _responses: Vec<CommitResponse>) -> Result<()> {
         // TODO: Read commit responses and calc client response
 
@@ -134,6 +144,8 @@ impl StateMachine for Coordinator {
 
         Ok(())
     }
+
+    #[instrument(level = "trace", skip(self))]
     fn handle_dependencies(&mut self, dependencies: Vec<Dependency>) -> Result<()> {
         for Dependency {
             timestamp,
@@ -149,6 +161,7 @@ impl StateMachine for Coordinator {
     }
 }
 
+#[derive(Debug)]
 enum ConsensusRequest {
     PreAccept(PreAcceptRequest),
     Accept(AcceptRequest),
@@ -167,6 +180,7 @@ pub(crate) enum ConsensusResponse {
 }
 
 impl Coordinator {
+    #[instrument(level = "trace")]
     pub fn new(node: Arc<String>, members: Vec<Arc<Member>>, event_store: Arc<EventStore>) -> Self {
         Coordinator {
             node,
@@ -175,9 +189,12 @@ impl Coordinator {
             transaction: Default::default(),
         }
     }
+    #[instrument(level = "trace", skip(self))]
     pub async fn add_members(&self, members: Vec<Member>) -> Result<()> {
         todo!("Add members to self")
     }
+    
+    #[instrument(level = "trace", skip(self))]
     pub async fn transaction(&mut self, transaction: Bytes) -> Result<()> {
         //
         //  INIT
@@ -300,10 +317,13 @@ impl Coordinator {
         Ok(())
     }
 
+    #[instrument(level = "trace")]
     async fn recover() {
         todo!("Implement recovery protocol and call when failing")
     }
 
+
+    #[instrument(level = "trace")]
     async fn broadcast(
         members: &[Arc<Member>],
         request: ConsensusRequest,
