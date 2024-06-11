@@ -5,7 +5,6 @@ use anyhow::Result;
 use bytes::Bytes;
 use diesel_ulid::DieselUlid;
 use tokio::task::JoinSet;
-use tonic::transport::Channel;
 use tracing::instrument;
 
 use consensus_transport::consensus_transport::consensus_transport_client::ConsensusTransportClient;
@@ -15,9 +14,8 @@ use consensus_transport::consensus_transport::{
 };
 
 use crate::event_store::EventStore;
+use crate::node::Member;
 use crate::utils::{into_dependency, IntoInner};
-
-pub static MAX_RETRIES: u64 = 10;
 
 pub struct Coordinator {
     pub node: Arc<String>,
@@ -34,17 +32,6 @@ trait StateMachine {
     fn handle_dependencies(&mut self, dependencies: Vec<Dependency>) -> Result<()>;
 }
 
-#[derive(Clone, Debug)]
-pub struct Member {
-    pub info: MemberInfo,
-    pub channel: Channel,
-}
-
-#[derive(Clone, Debug)]
-pub struct MemberInfo {
-    pub host: String,
-    pub node: String,
-}
 #[derive(Clone, Debug, Default)]
 pub struct TransactionStateMachine {
     pub state: State,

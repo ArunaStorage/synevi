@@ -1,4 +1,4 @@
-use crate::coordinator::{Coordinator, Member, MemberInfo};
+use crate::coordinator::Coordinator;
 use crate::event_store::EventStore;
 use crate::replica::Replica;
 use anyhow::Result;
@@ -15,6 +15,18 @@ pub struct Node {
     members: Vec<Arc<Member>>,
     event_store: Arc<EventStore>,
     join_set: JoinSet<Result<()>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Member {
+    pub info: MemberInfo,
+    pub channel: Channel,
+}
+
+#[derive(Clone, Debug)]
+pub struct MemberInfo {
+    pub host: String,
+    pub node: String,
 }
 
 impl Node {

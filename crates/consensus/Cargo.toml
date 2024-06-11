@@ -19,3 +19,11 @@ serde_json = {workspace = true}
 tonic = {workspace = true}
 tokio = {workspace = true}
 tracing = {workspace = true}
+
+
+[dev-dependencies]
+criterion = {version = "0.5.1", features = ["async_tokio"] }
+
+[[bench]]
+name = "performance"
+harness = false

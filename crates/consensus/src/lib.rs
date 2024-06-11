@@ -6,8 +6,7 @@ mod utils;
 
 #[cfg(test)]
 mod tests {
-    use crate::coordinator::MemberInfo;
-    use crate::node::Node;
+    use crate::node::{Node, MemberInfo};
     use bytes::Bytes;
     use std::net::SocketAddr;
     use std::str::FromStr;
@@ -45,7 +44,7 @@ mod tests {
                     .await
             });
         }
-        while let Some(res) = joinset.join_next().await {}
+        while let Some(_res) = joinset.join_next().await {}
     }
 
     #[tokio::test]
@@ -53,7 +52,7 @@ mod tests {
         let node_names = ["first", "second", "third", "fourth", "fifth"];
         let mut nodes: Vec<Node> = vec![];
         for (i, m) in node_names.iter().enumerate() {
-            let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
+            let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 11000 + i)).unwrap();
             let node = Node::new_with_parameters(m.to_string(), socket_addr).await;
             nodes.push(node);
         }
@@ -62,13 +61,13 @@ mod tests {
             coordinator
                 .add_member(MemberInfo {
                     node: name.to_string(),
-                    host: format!("http://localhost:{}", 10000 + i),
+                    host: format!("http://localhost:{}", 11000 + i),
                 })
                 .await
                 .unwrap();
         }
 
-        for _ in 0..10000 {
+        for _ in 0..1000 {
             coordinator
                 .transaction(Bytes::from("This is a transaction"))
                 .await

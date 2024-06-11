@@ -34,19 +34,19 @@ impl ConsensusTransport for Replica {
             let latest = entry.t;
 
             // If there is a newer timestamp, propose new
-            let t = if latest.timestamp() > t_zero.timestamp() {
-                if let Some(ulid) = self.event_store.last().await {
-                    if let Some(ulid) = rusty_ulid::Ulid::next_strictly_monotonic(*ulid.t) {
-                        ulid.into()
-                    } else {
-                        DieselUlid::generate()
-                    }
-                } else {
-                    DieselUlid::generate()
+            // Compare the full ULID, not just the timestamp
+            let t = if latest > t_zero {
+                let mut t = DieselUlid::generate();
+                while t < t_zero {
+                    t = DieselUlid::generate();
                 }
+                t
             } else {
                 t_zero
             };
+
+            // Safeguard to ensure that t_zero <= t
+            assert!(t_zero <= t, "{:?} <= {:?}", t_zero, t);
 
             // Get all dependencies in temp
             let dependencies = self.event_store.get_dependencies(&t).await;
@@ -221,7 +221,7 @@ impl ConsensusTransport for Replica {
     #[instrument(level = "trace", skip(self))]
     async fn recover(
         &self,
-        request: Request<RecoverRequest>,
+        _request: Request<RecoverRequest>,
     ) -> Result<Response<RecoverResponse>, Status> {
         todo!()
     }
