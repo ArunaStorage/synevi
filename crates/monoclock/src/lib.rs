@@ -9,6 +9,28 @@ pub struct MonoTime {
     pub node: u16,
 }
 
+pub enum TimeResult {
+    Time(MonoTime),
+    Drift(MonoTime, u128),
+}
+
+impl TimeResult {
+    pub fn unwrap(self) -> MonoTime {
+        match self {
+            TimeResult::Time(time) => time,
+            TimeResult::Drift(time, _) => time,
+        }
+    }
+
+    pub fn get_drift(&self) -> Option<u128> {
+        match self {
+            TimeResult::Time(_) => None,
+            TimeResult::Drift(_, drift) => Some(*drift),
+        }
+    }
+
+}
+
 impl MonoTime {
     pub fn new(seq: u16, node: u16) -> Self {
         let nanos = SystemTime::now()
@@ -18,16 +40,21 @@ impl MonoTime {
         MonoTime { nanos, seq, node }
     }
 
-    pub fn next(self) -> Result<Self> {
+    pub fn next(self) -> TimeResult {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
             .as_nanos();
 
         if self.nanos > nanos {
-            bail!("Time went backwards");
+            let drift = self.nanos - nanos;
+            return TimeResult::Drift(MonoTime {
+                nanos: nanos + 1, // Ensure that the time is always increasing
+                seq: self.seq + 1,
+                node: self.node,
+            }, drift);
         }
-        Ok(MonoTime {
+        TimeResult::Time(MonoTime {
             nanos,
             seq: self.seq + 1,
             node: self.node,
@@ -93,7 +120,7 @@ mod tests {
             seq: time.seq,
             node: time.node,
         };
-        assert!(time2.next().is_err());
+        assert!(time2.next().get_drift().is_some());
     }
 
     #[test]
