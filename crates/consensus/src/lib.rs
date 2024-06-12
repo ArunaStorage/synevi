@@ -38,6 +38,7 @@ mod tests {
 
         for _ in 0..1000 {
             let coordinator = arc_coordinator.clone();
+            //tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
             joinset.spawn(async move {
                 coordinator
                     .transaction(Bytes::from("This is a transaction"))

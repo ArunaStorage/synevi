@@ -4,6 +4,7 @@ use bytes::Bytes;
 use consensus_transport::consensus_transport::consensus_transport_server::ConsensusTransport;
 use consensus_transport::consensus_transport::*;
 use diesel_ulid::DieselUlid;
+use rusty_ulid::Ulid;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -37,8 +38,8 @@ impl ConsensusTransport for Replica {
             // Compare the full ULID, not just the timestamp
             let t = if latest > t_zero {
                 let mut t = DieselUlid::generate();
-                while t < t_zero {
-                    t = DieselUlid::generate();
+                if t < t_zero {
+                    t = DieselUlid::from(Ulid::from_timestamp_with_rng(t.timestamp() + 1, &mut rand::thread_rng()));
                 }
                 t
             } else {

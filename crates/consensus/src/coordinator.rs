@@ -65,7 +65,7 @@ impl StateMachine for Coordinator {
         let t_response = DieselUlid::try_from(response.timestamp.as_slice())?;
 
         //dbg!("[PRE_ACCEPT]: t_response", &t_response);
-        if self.transaction.t.timestamp() < t_response.timestamp() {
+        if self.transaction.t < t_response {
             // replace t in state machine
             self.transaction.t = t_response;
 

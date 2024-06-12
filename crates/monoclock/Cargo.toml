@@ -1,0 +1,14 @@
+[package]
+name = "monoclock"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = {workspace = true}
+anyhow = {workspace = true}
+
+[build-dependencies]
+tonic-build = "0.11.0"
