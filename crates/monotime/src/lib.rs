@@ -2,10 +2,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use anyhow::bail;
 
-
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct MonoTime(u128); // nanos << 48 | seq << 32 | node << 16 | 0*16
+
 
 pub enum TimeResult {
     Time(MonoTime),
@@ -14,6 +13,13 @@ pub enum TimeResult {
 
 impl TimeResult {
     pub fn unwrap(self) -> MonoTime {
+        match self {
+            TimeResult::Time(time) => time,
+            TimeResult::Drift(time, _) => time,
+        }
+    }
+
+    pub fn get_time(&self) -> &MonoTime {
         match self {
             TimeResult::Time(time) => time,
             TimeResult::Drift(time, _) => time,
@@ -69,6 +75,19 @@ impl MonoTime {
         }
         TimeResult::Time(MonoTime(nanos | seq_node)) // And nanos and increased seq
     }
+
+    // Ensures that the time is greater than self and greater than guard 
+    pub fn next_with_guard(self, guard: &MonoTime) -> TimeResult {
+        let time = self.next().unwrap();
+        if &time < guard {
+            let drift = guard.get_nanos() - time.get_nanos();
+            let seq_node = (time.0 << 80 >> 80) + (1 << 32); // Shift out the nanos than add 1 to seq
+            let next_time = MonoTime((guard.get_nanos() + 1) << 48 | seq_node);
+            return TimeResult::Drift(next_time, drift);
+        }else{
+            TimeResult::Time(time)
+        }
+    }
 }
 
 
@@ -77,6 +96,12 @@ impl Into<[u8; 16]> for MonoTime {
         let mut bytes = [0u8; 16];
         bytes.copy_from_slice(&self.0.to_be_bytes());
         bytes
+    }
+}
+
+impl Into<Vec<u8>> for MonoTime {
+    fn into(self) -> Vec<u8> {
+        self.0.to_be_bytes().to_vec()
     }
 }
 

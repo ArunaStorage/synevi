@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 consensus_transport = { path = "../consensus_transport" }
+monotime = { path = "../monotime" }
 anyhow = {workspace = true}
 bytes = "1.6.0"
 chrono = "0.4.38"

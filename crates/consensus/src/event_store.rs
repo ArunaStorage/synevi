@@ -1,7 +1,7 @@
 use anyhow::Result;
 use bytes::Bytes;
-use consensus_transport::consensus_transport::{Dependency, State};
-use diesel_ulid::DieselUlid;
+use consensus_transport::consensus_transport::{Dependency, PreAcceptRequest, State};
+use monotime::MonoTime;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,18 +21,18 @@ pub struct EventStore {
     // cons:
     //  - Updates need to consider both maps (when t is changing)
     //  - Events and mappings need clean up cron jobs and some form of consolidation
-    events: RwLock<HashMap<DieselUlid, Event>>,         // Key: t0, value: Event
-    mappings: RwLock<BTreeMap<DieselUlid, DieselUlid>>, // Key: t, value t0
-    last_applied: RwLock<DieselUlid>,                   // t of last applied entry
+    events: RwLock<HashMap<MonoTime, Event>>,         // Key: t0, value: Event
+    mappings: RwLock<BTreeMap<MonoTime, MonoTime>>,   // Key: t, value t0
+    last_applied: RwLock<MonoTime>,                   // t of last applied entry
 }
 
 #[derive(Clone, Debug)]
 pub struct Event {
-    pub t_zero: DieselUlid,
-    pub t: DieselUlid, // maybe this should be changed to an actual timestamp
+    pub t_zero: MonoTime,
+    pub t: MonoTime, // maybe this should be changed to an actual timestamp
     pub state: State,
     pub event: Bytes,
-    pub dependencies: HashMap<DieselUlid, DieselUlid>, // t and t_zero
+    pub dependencies: HashMap<MonoTime, MonoTime>, // t and t_zero
     pub ballot_number: u32, // Ballot number is used for recovery assignments
     pub commit_notify: Arc<Notify>,
     pub apply_notify: Arc<Notify>,
@@ -55,7 +55,7 @@ impl EventStore {
         EventStore {
             events: RwLock::new(HashMap::default()),
             mappings: RwLock::new(BTreeMap::default()),
-            last_applied: RwLock::new(DieselUlid::default()),
+            last_applied: RwLock::new(MonoTime::default()),
         }
     }
 
@@ -67,6 +67,29 @@ impl EventStore {
             .await
             .insert(event.t_zero, event.clone());
         self.mappings.write().await.insert(event.t, event.t_zero);
+    }
+
+    async fn pre_accept(&self, request: PreAcceptRequest) -> Result<Event> {
+        let t_zero = MonoTime::try_from(request.timestamp_zero.as_slice())?;
+        let t = {
+            let map_lock = self.mappings.write().await;
+
+
+
+            if let Some((last_t0, _)) = map_lock.last_key_value() {
+                if last_t0 > &t_zero {
+                    let t = t_zero.next_with_guard(last_t0).unwrap(); // This unwrap will not panic
+                    t
+                }
+
+            } else {
+                // No entries in the map -> insert the new event
+                map_lock.insert(t_zero, t_zero);
+                t_zero
+            }
+        };
+
+        todo!()
     }
 
 
@@ -110,7 +133,7 @@ impl EventStore {
 
 
     #[instrument(level = "trace")]
-    pub async fn get(&self, t_zero: &DieselUlid) -> Option<Event> {
+    pub async fn get(&self, t_zero: &MonoTime) -> Option<Event> {
         self.events.read().await.get(t_zero).cloned()
     }
 
@@ -126,19 +149,19 @@ impl EventStore {
 
 
     #[instrument(level = "trace")]
-    pub async fn get_dependencies(&self, t: &DieselUlid) -> Vec<Dependency> {
+    pub async fn get_dependencies(&self, t: &MonoTime) -> Vec<Dependency> {
         let last = self.last_applied.read().await;
         if let Some(entry) = self.last().await {
             // Check if we can build a range over t -> If there is a newer timestamp than proposed t
-            if entry.t.timestamp() <= t.timestamp() {
+            if &entry.t <= t {
                 // ... if not, return [last..end]
                 self.mappings
                     .read()
                     .await
                     .range(*last..)
                     .map(|(k, v)| Dependency {
-                        timestamp: k.as_byte_array().into(),
-                        timestamp_zero: v.as_byte_array().into(),
+                        timestamp: (*k).into(),
+                        timestamp_zero: (*v).into(),
                     })
                     .collect()
             } else {
@@ -148,8 +171,8 @@ impl EventStore {
                     .await
                     .range(*last..*t)
                     .map(|(k, v)| Dependency {
-                        timestamp: k.as_byte_array().into(),
-                        timestamp_zero: v.as_byte_array().into(),
+                        timestamp: (*k).into(),
+                        timestamp_zero: (*v).into(),
                     })
                     .collect()
             }
@@ -162,13 +185,13 @@ impl EventStore {
     #[instrument(level = "trace")]
     pub async fn wait_for_dependencies(
         &self,
-        dependencies: HashMap<DieselUlid, DieselUlid>,
-        t_zero: DieselUlid,
+        dependencies: HashMap<MonoTime, MonoTime>,
+        t_zero: MonoTime,
     ) -> Result<()> {
         // Collect notifies
         let mut notifies = JoinSet::new();
         for (dep_t, dep_t_zero) in dependencies.iter() {
-            if dep_t_zero.timestamp() > t_zero.timestamp() {
+            if dep_t_zero > &t_zero {
                 let dep = self.events.read().await.get(dep_t_zero).cloned();
                 if let Some(event) = dep {
                     if matches!(event.state, State::Commited | State::Applied) {

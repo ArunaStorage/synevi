@@ -4,6 +4,7 @@ use bytes::Bytes;
 use consensus_transport::consensus_transport::consensus_transport_server::ConsensusTransport;
 use consensus_transport::consensus_transport::*;
 use diesel_ulid::DieselUlid;
+use monotime::MonoTime;
 use rusty_ulid::Ulid;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -24,12 +25,11 @@ impl ConsensusTransport for Replica {
         &self,
         request: Request<PreAcceptRequest>,
     ) -> Result<Response<PreAcceptResponse>, Status> {
-        // dbg!("[PRE_ACCEPT]: ", &request);
+
         let request = request.into_inner();
-        let t_zero = DieselUlid::try_from(request.timestamp_zero.as_slice())
+        let t_zero = MonoTime::try_from(request.timestamp_zero.as_slice())
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        // dbg!("[PRE_ACCEPT]: ", &t_zero);
         // check for entries in temp
         if let Some(entry) = self.event_store.last().await {
             let latest = entry.t;
@@ -37,7 +37,7 @@ impl ConsensusTransport for Replica {
             // If there is a newer timestamp, propose new
             // Compare the full ULID, not just the timestamp
             let t = if latest > t_zero {
-                let mut t = DieselUlid::generate();
+                let mut t = MonoTime::generate();
                 if t < t_zero {
                     t = DieselUlid::from(Ulid::from_timestamp_with_rng(t.timestamp() + 1, &mut rand::thread_rng()));
                 }

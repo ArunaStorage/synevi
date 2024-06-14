@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-
 use anyhow::{anyhow, Result};
 use diesel_ulid::DieselUlid;
+use monotime::MonoTime;
 use tokio::sync::Notify;
-
 use crate::coordinator::TransactionStateMachine;
 use crate::event_store::Event;
 use consensus_transport::consensus_transport::{
@@ -52,11 +51,11 @@ impl IntoInner<ApplyResponse> for crate::coordinator::ConsensusResponse {
     }
 }
 
-pub fn into_dependency(map: HashMap<DieselUlid, DieselUlid>) -> Vec<Dependency> {
+pub fn into_dependency(map: HashMap<MonoTime, MonoTime>) -> Vec<Dependency> {
     map.iter()
         .map(|(t, t_zero)| Dependency {
-            timestamp: t.as_byte_array().into(),
-            timestamp_zero: t_zero.as_byte_array().into(),
+            timestamp: (*t).into(),
+            timestamp_zero: (*t_zero).into(),
         })
         .collect()
 }

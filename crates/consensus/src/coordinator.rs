@@ -1,28 +1,26 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-
 use anyhow::Result;
 use bytes::Bytes;
-use diesel_ulid::DieselUlid;
+use monotime::MonoTime;
 use tokio::task::JoinSet;
 use tracing::instrument;
-
 use consensus_transport::consensus_transport::consensus_transport_client::ConsensusTransportClient;
 use consensus_transport::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
     Dependency, PreAcceptRequest, PreAcceptResponse, State,
 };
-
 use crate::event_store::EventStore;
-use crate::node::Member;
+use crate::node::{Member, NodeInfo};
 use crate::utils::{into_dependency, IntoInner};
 
 pub struct Coordinator {
-    pub node: Arc<String>,
+    pub node: Arc<NodeInfo>,
     pub members: Vec<Arc<Member>>,
     pub event_store: Arc<EventStore>,
     pub transaction: TransactionStateMachine,
 }
+
 trait StateMachine {
     async fn init(&mut self, transaction: Bytes);
     async fn pre_accept(&mut self, response: PreAcceptResponse) -> Result<()>;
@@ -36,9 +34,9 @@ trait StateMachine {
 pub struct TransactionStateMachine {
     pub state: State,
     pub transaction: Bytes,
-    pub t_zero: DieselUlid,
-    pub t: DieselUlid,
-    pub dependencies: HashMap<DieselUlid, DieselUlid>, // Consists of t and t_zero
+    pub t_zero: MonoTime,
+    pub t: MonoTime,
+    pub dependencies: HashMap<MonoTime, MonoTime>, // Consists of t and t_zero
 }
 
 impl StateMachine for Coordinator {
@@ -46,7 +44,7 @@ impl StateMachine for Coordinator {
     #[instrument(level = "trace", skip(self))]
     async fn init(&mut self, transaction: Bytes) {
         // Generate timestamp
-        let t_zero = DieselUlid::generate();
+        let t_zero = MonoTime::new(0, self.node.serial);
 
         // Create struct
         self.transaction = TransactionStateMachine {
@@ -62,35 +60,25 @@ impl StateMachine for Coordinator {
     #[instrument(level = "trace", skip(self))]
     async fn pre_accept(&mut self, response: PreAcceptResponse) -> Result<()> {
         //dbg!("[PRE_ACCEPT]: Transaction pre accept", &self.transaction);
-        let t_response = DieselUlid::try_from(response.timestamp.as_slice())?;
+        let t_response = MonoTime::try_from(response.timestamp.as_slice())?;
 
         //dbg!("[PRE_ACCEPT]: t_response", &t_response);
         if self.transaction.t < t_response {
             // replace t in state machine
             self.transaction.t = t_response;
 
-            //dbg!("[PRE_ACCEPT]: slow path", &self.transaction);
-
             // These deps stem from individually collected replicas and get unified here
             // that in return will be sent via Accept{} so that every participating replica
             // knows of ALL (unified) dependencies
             self.handle_dependencies(response.dependencies)?;
 
-            //dbg!("[PRE_ACCEPT]: slow path deps", &self.transaction.dependencies);
-
             // Update transaction, reorder map with updated t and insert dependencies
             self.event_store.upsert((&self.transaction).into()).await;
 
-            //dbg!("[PRE_ACCEPT]: updated event store");
         } else {
-            //dbg!("[PRE_ACCEPT]: Fast path");
             // Update transaction with new dependencies
             self.handle_dependencies(response.dependencies)?;
-
-            //dbg!("[PRE_ACCEPT]: Fast path deps", &self.transaction.dependencies);
             self.event_store.upsert((&self.transaction).into()).await;
-
-            //dbg!("[PRE_ACCEPT]: updated event store");
         }
 
         Ok(())
@@ -140,8 +128,8 @@ impl StateMachine for Coordinator {
         } in dependencies
         {
             self.transaction.dependencies.insert(
-                DieselUlid::try_from(timestamp.as_slice())?,
-                DieselUlid::try_from(timestamp_zero.as_slice())?,
+                MonoTime::try_from(timestamp.as_slice())?,
+                MonoTime::try_from(timestamp_zero.as_slice())?,
             );
         }
         Ok(())
@@ -168,7 +156,7 @@ pub(crate) enum ConsensusResponse {
 
 impl Coordinator {
     #[instrument(level = "trace")]
-    pub fn new(node: Arc<String>, members: Vec<Arc<Member>>, event_store: Arc<EventStore>) -> Self {
+    pub fn new(node: Arc<NodeInfo>, members: Vec<Arc<Member>>, event_store: Arc<EventStore>) -> Self {
         Coordinator {
             node,
             members,
@@ -186,7 +174,6 @@ impl Coordinator {
         //
         //  INIT
         //
-        // dbg!("[INIT]");
 
         // We need a fixed size of members for each transaction
         let members = self.members.clone();
@@ -197,64 +184,56 @@ impl Coordinator {
         //
         //  PRE ACCEPT STATE
         //
-        // dbg!("[PRE_ACCEPT]");
 
         // Create the PreAccept msg
         let pre_accept_request = PreAcceptRequest {
-            node: self.node.to_string(),
-            timestamp_zero: self.transaction.t_zero.as_byte_array().into(),
+            node: self.node.id.to_string(),
+            timestamp_zero: self.transaction.t_zero.into(),
             event: self.transaction.transaction.clone().into(),
         };
 
-        // dbg!("[PRE_ACCEPT]: broadcast");
         // Broadcast message
         let pre_accept_responses =
             Coordinator::broadcast(&members, ConsensusRequest::PreAccept(pre_accept_request))
                 .await?;
 
-        // dbg!("[PRE_ACCEPT]: broadcast responses");
         // Collect responses
         for response in pre_accept_responses {
             self.pre_accept(response.into_inner()?).await?;
         }
-        // dbg!("[PRE_ACCEPT]:", &self.transaction);
 
         let commit_responses = if self.transaction.t_zero == self.transaction.t {
             //
             //   FAST PATH
             //
-            // dbg!("[FAST_PATH]");
 
             // Commit
             let commit_request = CommitRequest {
-                node: self.node.to_string(),
+                node: self.node.id.to_string(),
                 event: self.transaction.transaction.clone().into(),
-                timestamp_zero: self.transaction.t_zero.as_byte_array().into(),
-                timestamp: self.transaction.t.as_byte_array().into(),
+                timestamp_zero: self.transaction.t_zero.into(),
+                timestamp: self.transaction.t.into(),
                 dependencies: into_dependency(self.transaction.dependencies.clone()),
             };
 
-            // dbg!("[FAST_PATH]: Commit broadcast");
             let (commit_result, broadcast_result) = tokio::join!(
                 self.commit(),
                 Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request))
             );
 
-            // dbg!("[FAST_PATH]: Commit result");
             commit_result?;
             broadcast_result?
         } else {
             //
             //  SLOW PATH
             //
-            // dbg!("[SLOW_PATH]");
 
             // Accept
             let accept_request = AcceptRequest {
-                node: self.node.to_string(),
+                node: self.node.id.to_string(),
                 event: self.transaction.transaction.clone().into(),
-                timestamp_zero: self.transaction.t_zero.as_byte_array().into(),
-                timestamp: self.transaction.t.as_byte_array().into(),
+                timestamp_zero: self.transaction.t_zero.into(),
+                timestamp: self.transaction.t.into(),
                 dependencies: into_dependency(self.transaction.dependencies.clone()),
             };
             let accept_responses =
@@ -265,10 +244,10 @@ impl Coordinator {
 
             // Commit
             let commit_request = CommitRequest {
-                node: self.node.to_string(),
+                node: self.node.id.to_string(),
                 event: self.transaction.transaction.clone().into(),
-                timestamp_zero: self.transaction.t_zero.as_byte_array().into(),
-                timestamp: self.transaction.t.as_byte_array().into(),
+                timestamp_zero: self.transaction.t_zero.into(),
+                timestamp: self.transaction.t.into(),
                 dependencies: into_dependency(self.transaction.dependencies.clone()),
             };
 
@@ -292,10 +271,10 @@ impl Coordinator {
         .await?;
 
         let apply_request = ApplyRequest {
-            node: self.node.to_string(),
+            node: self.node.id.to_string(),
             event: self.transaction.transaction.to_vec(),
-            timestamp: self.transaction.t.as_byte_array().into(),
-            timestamp_zero: self.transaction.t_zero.as_byte_array().into(),
+            timestamp: self.transaction.t.into(),
+            timestamp_zero: self.transaction.t_zero.into(),
             dependencies: into_dependency(self.transaction.dependencies.clone()),
             result: vec![], // Theoretically not needed right?
         };
