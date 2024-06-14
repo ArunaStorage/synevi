@@ -1,5 +1,6 @@
 [package]
-name = "monoclock"
+name = "monotime"
+description = "A strictly monotonic timestamp handling library, ensures that timestamp.next() > timestamp"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
