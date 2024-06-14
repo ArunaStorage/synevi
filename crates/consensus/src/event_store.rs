@@ -10,6 +10,8 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tracing::instrument;
 
+use crate::utils::from_dependency;
+
 static TIMEOUT: u64 = 10;
 #[derive(Debug)]
 pub struct EventStore {
@@ -21,9 +23,9 @@ pub struct EventStore {
     // cons:
     //  - Updates need to consider both maps (when t is changing)
     //  - Events and mappings need clean up cron jobs and some form of consolidation
-    events: RwLock<HashMap<MonoTime, Event>>,         // Key: t0, value: Event
-    mappings: RwLock<BTreeMap<MonoTime, MonoTime>>,   // Key: t, value t0
-    last_applied: RwLock<MonoTime>,                   // t of last applied entry
+    events: RwLock<HashMap<MonoTime, Event>>, // Key: t0, value: Event
+    mappings: RwLock<BTreeMap<MonoTime, MonoTime>>, // Key: t, value t0
+    last_applied: RwLock<MonoTime>,           // t of last applied entry
 }
 
 #[derive(Clone, Debug)]
@@ -33,7 +35,6 @@ pub struct Event {
     pub state: State,
     pub event: Bytes,
     pub dependencies: HashMap<MonoTime, MonoTime>, // t and t_zero
-    pub ballot_number: u32, // Ballot number is used for recovery assignments
     pub commit_notify: Arc<Notify>,
     pub apply_notify: Arc<Notify>,
 }
@@ -45,7 +46,6 @@ impl PartialEq for Event {
             && self.state == other.state
             && self.event == other.event
             && self.dependencies == other.dependencies
-            && self.ballot_number == other.ballot_number
     }
 }
 
@@ -59,7 +59,6 @@ impl EventStore {
         }
     }
 
-
     #[instrument(level = "trace")]
     async fn insert(&self, event: Event) {
         self.events
@@ -69,29 +68,54 @@ impl EventStore {
         self.mappings.write().await.insert(event.t, event.t_zero);
     }
 
-    async fn pre_accept(&self, request: PreAcceptRequest) -> Result<Event> {
+    #[instrument(level = "trace")]
+    pub async fn pre_accept(
+        &self,
+        request: PreAcceptRequest,
+    ) -> Result<(Vec<Dependency>, MonoTime, MonoTime)> {
+        // Parse t_zero
         let t_zero = MonoTime::try_from(request.timestamp_zero.as_slice())?;
-        let t = {
-            let map_lock = self.mappings.write().await;
-
-
-
-            if let Some((last_t0, _)) = map_lock.last_key_value() {
+        let (t, deps) = {
+            // This lock is required that a t is uniquely decided
+            let mut map_lock = self.mappings.write().await;
+            let t = if let Some((last_t0, _)) = map_lock.last_key_value() {
                 if last_t0 > &t_zero {
                     let t = t_zero.next_with_guard(last_t0).unwrap(); // This unwrap will not panic
                     t
+                } else {
+                    t_zero
                 }
-
             } else {
                 // No entries in the map -> insert the new event
-                map_lock.insert(t_zero, t_zero);
                 t_zero
-            }
+            };
+            map_lock.insert(t, t_zero);
+            let last_applied = self.last_applied.read().await;
+            // This might not be necessary to re-use the write lock here
+            let deps: Vec<Dependency> = map_lock
+                .range(*last_applied..t)
+                .map(|(k, v)| Dependency {
+                    timestamp: (*k).into(),
+                    timestamp_zero: (*v).into(),
+                })
+                .collect();
+            (t, deps)
         };
 
-        todo!()
-    }
+        let mut event_lock = self.events.write().await;
 
+        let event = Event {
+            t_zero,
+            t,
+            state: State::PreAccepted,
+            event: request.event.into(),
+            dependencies: from_dependency(deps.clone())?,
+            commit_notify: Arc::new(Notify::new()),
+            apply_notify: Arc::new(Notify::new()),
+        };
+        event_lock.insert(t_zero, event);
+        Ok((deps, t_zero, t))
+    }
 
     #[instrument(level = "trace")]
     pub async fn upsert(&self, event: Event) {
@@ -131,12 +155,10 @@ impl EventStore {
         };
     }
 
-
     #[instrument(level = "trace")]
     pub async fn get(&self, t_zero: &MonoTime) -> Option<Event> {
         self.events.read().await.get(t_zero).cloned()
     }
-
 
     #[instrument(level = "trace")]
     pub async fn last(&self) -> Option<Event> {
@@ -146,7 +168,6 @@ impl EventStore {
             None
         }
     }
-
 
     #[instrument(level = "trace")]
     pub async fn get_dependencies(&self, t: &MonoTime) -> Vec<Dependency> {
@@ -181,7 +202,6 @@ impl EventStore {
         }
     }
 
-
     #[instrument(level = "trace")]
     pub async fn wait_for_dependencies(
         &self,
@@ -212,7 +232,6 @@ impl EventStore {
                         state: State::Undefined,
                         event: Default::default(),
                         dependencies: HashMap::default(),
-                        ballot_number: 0,
                         commit_notify,
                         apply_notify: Arc::new(Notify::new()),
                     })
@@ -237,7 +256,6 @@ impl EventStore {
                     state: State::Undefined,
                     event: Default::default(),
                     dependencies: HashMap::default(),
-                    ballot_number: 0,
                     commit_notify: Arc::new(Notify::new()),
                     apply_notify,
                 })

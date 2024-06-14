@@ -1,18 +1,18 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use crate::event_store::EventStore;
+use crate::node::{Member, NodeInfo};
+use crate::utils::{into_dependency, IntoInner};
 use anyhow::Result;
 use bytes::Bytes;
-use monotime::MonoTime;
-use tokio::task::JoinSet;
-use tracing::instrument;
 use consensus_transport::consensus_transport::consensus_transport_client::ConsensusTransportClient;
 use consensus_transport::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
     Dependency, PreAcceptRequest, PreAcceptResponse, State,
 };
-use crate::event_store::EventStore;
-use crate::node::{Member, NodeInfo};
-use crate::utils::{into_dependency, IntoInner};
+use monotime::MonoTime;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::task::JoinSet;
+use tracing::instrument;
 
 pub struct Coordinator {
     pub node: Arc<NodeInfo>,
@@ -40,7 +40,6 @@ pub struct TransactionStateMachine {
 }
 
 impl StateMachine for Coordinator {
-
     #[instrument(level = "trace", skip(self))]
     async fn init(&mut self, transaction: Bytes) {
         // Generate timestamp
@@ -55,7 +54,6 @@ impl StateMachine for Coordinator {
             dependencies: HashMap::new(),
         };
     }
-
 
     #[instrument(level = "trace", skip(self))]
     async fn pre_accept(&mut self, response: PreAcceptResponse) -> Result<()> {
@@ -74,7 +72,6 @@ impl StateMachine for Coordinator {
 
             // Update transaction, reorder map with updated t and insert dependencies
             self.event_store.upsert((&self.transaction).into()).await;
-
         } else {
             // Update transaction with new dependencies
             self.handle_dependencies(response.dependencies)?;
@@ -156,7 +153,11 @@ pub(crate) enum ConsensusResponse {
 
 impl Coordinator {
     #[instrument(level = "trace")]
-    pub fn new(node: Arc<NodeInfo>, members: Vec<Arc<Member>>, event_store: Arc<EventStore>) -> Self {
+    pub fn new(
+        node: Arc<NodeInfo>,
+        members: Vec<Arc<Member>>,
+        event_store: Arc<EventStore>,
+    ) -> Self {
         Coordinator {
             node,
             members,
@@ -168,7 +169,7 @@ impl Coordinator {
     pub async fn add_members(&self, members: Vec<Member>) -> Result<()> {
         todo!("Add members to self")
     }
-    
+
     #[instrument(level = "trace", skip(self))]
     pub async fn transaction(&mut self, transaction: Bytes) -> Result<()> {
         //
@@ -287,7 +288,6 @@ impl Coordinator {
     async fn recover() {
         todo!("Implement recovery protocol and call when failing")
     }
-
 
     #[instrument(level = "trace")]
     async fn broadcast(

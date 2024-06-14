@@ -1,14 +1,13 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use anyhow::{anyhow, Result};
-use diesel_ulid::DieselUlid;
-use monotime::MonoTime;
-use tokio::sync::Notify;
 use crate::coordinator::TransactionStateMachine;
 use crate::event_store::Event;
+use anyhow::{anyhow, Result};
 use consensus_transport::consensus_transport::{
     AcceptResponse, ApplyResponse, CommitResponse, Dependency, PreAcceptResponse,
 };
+use monotime::MonoTime;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Notify;
 
 pub trait IntoInner<T> {
     fn into_inner(self) -> anyhow::Result<T>;
@@ -60,17 +59,17 @@ pub fn into_dependency(map: HashMap<MonoTime, MonoTime>) -> Vec<Dependency> {
         .collect()
 }
 
-pub fn from_dependency(deps: Vec<Dependency>) -> Result<HashMap<DieselUlid, DieselUlid>> {
+pub fn from_dependency(deps: Vec<Dependency>) -> Result<HashMap<MonoTime, MonoTime>> {
     deps.iter()
         .map(
             |Dependency {
                  timestamp,
                  timestamp_zero,
              }|
-             -> Result<(DieselUlid, DieselUlid)> {
+             -> Result<(MonoTime, MonoTime)> {
                 Ok((
-                    DieselUlid::try_from(timestamp.as_slice())?,
-                    DieselUlid::try_from(timestamp_zero.as_slice())?,
+                    MonoTime::try_from(timestamp.as_slice())?,
+                    MonoTime::try_from(timestamp_zero.as_slice())?,
                 ))
             },
         )
@@ -85,7 +84,6 @@ impl From<&TransactionStateMachine> for Event {
             state: value.state,
             event: value.transaction.clone(),
             dependencies: value.dependencies.clone(),
-            ballot_number: 0,
             commit_notify: Arc::new(Notify::new()),
             apply_notify: Arc::new(Notify::new()),
         }

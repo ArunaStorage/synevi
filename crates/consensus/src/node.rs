@@ -41,7 +41,7 @@ impl Node {
         let node_name = Arc::new(NodeInfo {
             id,
             serial,
-            host: format!("http://{}", socket_addr),
+            host: format!("{}", socket_addr),
         });
         let node_name_clone = node_name.clone();
         let event_store = Arc::new(EventStore::init());
@@ -74,17 +74,18 @@ impl Node {
         Ok(())
     }
 
-
     #[instrument(level = "trace", skip(self))]
     pub async fn do_stuff(&self) -> Result<()> {
         Ok(())
     }
 
-
     #[instrument(level = "trace", skip(self))]
     pub async fn add_member(&mut self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
         let channel = Channel::from_shared(host.clone())?.connect().await?;
-        self.members.push(Arc::new(Member {channel, info: NodeInfo{id, serial, host} }));
+        self.members.push(Arc::new(Member {
+            channel,
+            info: NodeInfo { id, serial, host },
+        }));
         Ok(())
     }
 

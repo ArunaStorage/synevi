@@ -26,8 +26,10 @@ pub struct PreAcceptResponse {
     #[prost(string, tag = "1")]
     pub node: ::prost::alloc::string::String,
     #[prost(bytes = "vec", tag = "2")]
+    pub timestamp_zero: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "3")]
     pub timestamp: ::prost::alloc::vec::Vec<u8>,
-    #[prost(message, repeated, tag = "3")]
+    #[prost(message, repeated, tag = "4")]
     pub dependencies: ::prost::alloc::vec::Vec<Dependency>,
 }
 #[derive(serde::Deserialize, serde::Serialize)]

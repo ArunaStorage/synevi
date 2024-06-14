@@ -1,10 +1,9 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-use anyhow::Result;
 use anyhow::bail;
+use anyhow::Result;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct MonoTime(u128); // nanos << 48 | seq << 32 | node << 16 | 0*16
-
 
 pub enum TimeResult {
     Time(MonoTime),
@@ -32,7 +31,6 @@ impl TimeResult {
             TimeResult::Drift(_, drift) => Some(*drift),
         }
     }
-
 }
 
 impl MonoTime {
@@ -62,21 +60,22 @@ impl MonoTime {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
-            .as_nanos() << 48;
+            .as_nanos()
+            << 48;
         let seq_node = (self.0 << 80 >> 80) + (1 << 32); // Shift out the nanos than add 1 to seq
         if self.0 > nanos {
             let drift = (self.0 - nanos) >> 48 << 48; // Shift out the seq and node first right than back left
             if drift != 0 {
                 // Shift out the seq and node than add 1 to nanos
                 // shift back and add new seq and node back
-                let next_time = ((self.0 >> 48) + 1) << 48 | seq_node; 
+                let next_time = ((self.0 >> 48) + 1) << 48 | seq_node;
                 return TimeResult::Drift(MonoTime(next_time), drift);
             }
         }
         TimeResult::Time(MonoTime(nanos | seq_node)) // And nanos and increased seq
     }
 
-    // Ensures that the time is greater than self and greater than guard 
+    // Ensures that the time is greater than self and greater than guard
     pub fn next_with_guard(self, guard: &MonoTime) -> TimeResult {
         let time = self.next().unwrap();
         if &time < guard {
@@ -84,12 +83,11 @@ impl MonoTime {
             let seq_node = (time.0 << 80 >> 80) + (1 << 32); // Shift out the nanos than add 1 to seq
             let next_time = MonoTime((guard.get_nanos() + 1) << 48 | seq_node);
             return TimeResult::Drift(next_time, drift);
-        }else{
+        } else {
             TimeResult::Time(time)
         }
     }
 }
-
 
 impl Into<[u8; 16]> for MonoTime {
     fn into(self) -> [u8; 16] {
@@ -116,7 +114,6 @@ impl TryFrom<&[u8]> for MonoTime {
         Ok(MonoTime(ts))
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -145,7 +142,11 @@ mod tests {
     #[test]
     fn test_time_backwards() {
         let time = MonoTime::new(0, 0);
-        let time2 = MonoTime((time.get_nanos() + 100000000) << 48 | (time.get_seq() as u128) << 32 | (time.get_node() as u128) << 16);
+        let time2 = MonoTime(
+            (time.get_nanos() + 100000000) << 48
+                | (time.get_seq() as u128) << 32
+                | (time.get_node() as u128) << 16,
+        );
         assert!(time2.next().get_drift().is_some());
     }
 
@@ -157,9 +158,34 @@ mod tests {
             assert!(time < time2);
         }
         let time = MonoTime::new(0, 0);
-        assert_eq!(time, MonoTime((time.get_nanos()) << 48 | (time.get_seq() as u128) << 32 | (time.get_node() as u128) << 16));
-        assert!(time < MonoTime((time.get_nanos() + 1 ) << 48 | (time.get_seq() as u128) << 32 | (time.get_node() as u128) << 16));
-        assert!(time <  MonoTime(time.get_nanos() << 48 | (time.get_seq() as u128 + 1) << 32 | (time.get_node() as u128) << 16));
-        assert!(time <  MonoTime(time.get_nanos() << 48 | (time.get_seq() as u128 + 1) << 32 | (time.get_node() as u128 + 1 ) << 16));
+        assert_eq!(
+            time,
+            MonoTime(
+                (time.get_nanos()) << 48
+                    | (time.get_seq() as u128) << 32
+                    | (time.get_node() as u128) << 16
+            )
+        );
+        assert!(
+            time < MonoTime(
+                (time.get_nanos() + 1) << 48
+                    | (time.get_seq() as u128) << 32
+                    | (time.get_node() as u128) << 16
+            )
+        );
+        assert!(
+            time < MonoTime(
+                time.get_nanos() << 48
+                    | (time.get_seq() as u128 + 1) << 32
+                    | (time.get_node() as u128) << 16
+            )
+        );
+        assert!(
+            time < MonoTime(
+                time.get_nanos() << 48
+                    | (time.get_seq() as u128 + 1) << 32
+                    | (time.get_node() as u128 + 1) << 16
+            )
+        );
     }
 }
