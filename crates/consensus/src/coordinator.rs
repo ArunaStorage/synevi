@@ -224,9 +224,12 @@ impl Coordinator {
         };
 
         // Broadcast message
-        let pre_accept_responses =
-            Coordinator::broadcast(&members, ConsensusRequest::PreAccept(pre_accept_request))
-                .await?;
+        let pre_accept_responses = Coordinator::broadcast(
+            &members,
+            ConsensusRequest::PreAccept(pre_accept_request),
+            true,
+        )
+        .await?;
 
         // Collect responses
         for response in pre_accept_responses {
@@ -249,7 +252,7 @@ impl Coordinator {
 
             let (commit_result, broadcast_result) = tokio::join!(
                 self.commit(),
-                Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request))
+                Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request), true)
             );
 
             commit_result?;
@@ -268,7 +271,8 @@ impl Coordinator {
                 dependencies: into_dependency(self.transaction.dependencies.clone()),
             };
             let accept_responses =
-                Coordinator::broadcast(&members, ConsensusRequest::Accept(accept_request)).await?;
+                Coordinator::broadcast(&members, ConsensusRequest::Accept(accept_request), true)
+                    .await?;
             for response in accept_responses {
                 self.accept(response.into_inner()?).await?;
             }
@@ -284,7 +288,7 @@ impl Coordinator {
 
             let (commit_result, broadcast_result) = tokio::join!(
                 self.commit(),
-                Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request))
+                Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request), true)
             );
             commit_result?;
             broadcast_result?
@@ -310,7 +314,7 @@ impl Coordinator {
             result: vec![], // Theoretically not needed right?
         };
 
-        Coordinator::broadcast(&members, ConsensusRequest::Apply(apply_request)).await?; // This should not be awaited
+        Coordinator::broadcast(&members, ConsensusRequest::Apply(apply_request), false).await?; // This should not be awaited
         println!(
             "Execute/Apply: {:?} | {:?}",
             start.elapsed(),
@@ -329,6 +333,7 @@ impl Coordinator {
     async fn broadcast(
         members: &[Arc<Member>],
         request: ConsensusRequest,
+        await_majority: bool,
     ) -> Result<Vec<ConsensusResponse>> {
         //dbg!("[broadcast]: Start");
         let mut responses: JoinSet<Result<ConsensusResponse>> = JoinSet::new();
@@ -391,24 +396,20 @@ impl Coordinator {
             }
         }
 
-        //dbg!("[broadcast]: Calc majority");
-        // await JoinSet
         let majority = (members.len() / 2) + 1;
         let mut counter = 0_usize;
 
         // Poll majority
-
-        //dbg!("[broadcast]: Poll majority");
-        while let Some(response) = responses.join_next().await {
-            // dbg!("[broadcast]: Response: {:?}", &response);
-            result.push(response??);
-            counter += 1;
-            // dbg!(&majority);
-            // dbg!(&counter);
-            if counter >= majority {
-                // dbg!("break");
-                break;
+        if await_majority {
+            while let Some(response) = responses.join_next().await {
+                result.push(response??);
+                counter += 1;
+                if counter >= majority {
+                    break;
+                }
             }
+        } else {
+            tokio::spawn(async move { while let Some(_) = responses.join_next().await {} });
         }
         Ok(result)
     }

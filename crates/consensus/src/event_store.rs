@@ -192,50 +192,36 @@ impl EventStore {
         // TODO: Create custom error
         // Collect notifies
         let mut notifies = JoinSet::new();
-        {
-            for (dep_t, dep_t_zero) in dependencies.iter() {
-                if dep_t_zero > &t_zero {
-                    let dep = self.events.get(dep_t_zero).cloned();
-                    if let Some(event) = dep {
-                        if matches!(*event.state.borrow(), State::Commited | State::Applied) {
-                            notifies.spawn(wait_for(event.state, State::Commited));
-                        }
-                    } else {
-                        let (tx, _) = watch::channel(State::Undefined);
-                        notifies.spawn(wait_for(tx.clone(), State::Commited));
-                        self.insert(Event {
-                            t_zero: *dep_t_zero,
-                            t: *dep_t,
-                            state: tx,
-                            event: Default::default(),
-                            dependencies: BTreeMap::default(),
-                        })
-                        .await;
-                    }
-                } else if let Some(event) = self.events.get(dep_t_zero) {
-                    if *event.state.borrow() != State::Applied {
-                        notifies.spawn(wait_for(event.state.clone(), State::Applied));
-                    }
-                } else {
-                    let (tx, _) = watch::channel(State::Undefined);
-                    notifies.spawn(wait_for(tx.clone(), State::Applied));
-                    self.insert(Event {
-                        t_zero: *dep_t_zero,
-                        t: *dep_t,
-                        state: tx,
-                        event: Default::default(),
-                        dependencies: BTreeMap::default(),
-                    })
-                    .await;
+        for (dep_t, dep_t_zero) in dependencies.iter() {
+            let dep = self.events.get(dep_t_zero);
+
+            // Wait for State::Commited if dep_t is larger than t_zero
+            let wait_for_state = if dep_t > &t_zero {
+                State::Commited
+            } else {
+                State::Applied
+            };
+
+            // Check if dep is known
+            if let Some(dep) = dep {
+                // Dependency known
+                if *dep.state.borrow() < wait_for_state {
+                    notifies.spawn(wait_for(dep.state.clone(), wait_for_state));
                 }
+            } else {
+                // Dependency unknown
+                let (tx, _) = watch::channel(State::Undefined);
+                notifies.spawn(wait_for(tx.clone(), wait_for_state));
+                self.insert(Event {
+                    t_zero: *dep_t_zero,
+                    t: *dep_t,
+                    state: tx,
+                    event: Default::default(),
+                    dependencies: BTreeMap::default(),
+                })
+                .await;
             }
         }
-
         Ok(notifies)
-        // while let Some(x) = notifies.join_next().await {
-        //     x??
-        //     // TODO: Recovery when timeout
-        // }
-        // Ok(())
     }
 }

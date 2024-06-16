@@ -7,7 +7,10 @@ use consensus_transport::consensus_transport::consensus_transport_server::Consen
 use diesel_ulid::DieselUlid;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::{sync::Mutex, task::JoinSet};
+use tokio::{
+    sync::{Mutex, Semaphore},
+    task::JoinSet,
+};
 use tonic::transport::{Channel, Server};
 use tracing::instrument;
 
@@ -16,6 +19,7 @@ pub struct Node {
     members: Vec<Arc<Member>>,
     event_store: Arc<Mutex<EventStore>>,
     join_set: JoinSet<Result<()>>,
+    semaphore: Semaphore,
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +66,7 @@ impl Node {
             members: vec![],
             event_store,
             join_set,
+            semaphore: Semaphore::new(5),
         }
     }
 
@@ -91,11 +96,14 @@ impl Node {
 
     #[instrument(level = "trace", skip(self))]
     pub async fn transaction(&self, transaction: Bytes) -> Result<()> {
+        let permit = self.semaphore.acquire().await?;
         let mut coordinator = Coordinator::new(
             self.info.clone(),
             self.members.clone(),
             self.event_store.clone(),
         );
-        coordinator.transaction(transaction).await
+        coordinator.transaction(transaction).await?;
+        drop(permit);
+        Ok(())
     }
 }

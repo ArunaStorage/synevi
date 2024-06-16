@@ -37,9 +37,62 @@ mod tests {
 
         for _ in 0..1000 {
             let coordinator = arc_coordinator.clone();
-            //tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
             joinset.spawn(async move {
                 coordinator
+                    .transaction(Bytes::from("This is a transaction"))
+                    .await
+            });
+        }
+        while let Some(_res) = joinset.join_next().await {}
+    }
+
+    #[tokio::test]
+    async fn contention_execution() {
+        let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
+        let mut nodes: Vec<Node> = vec![];
+        for (i, m) in node_names.iter().enumerate() {
+            let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
+            let node = Node::new_with_parameters(*m, i as u16, socket_addr).await;
+            nodes.push(node);
+        }
+        let coordinator1 = nodes.get_mut(3).unwrap();
+        for (i, name) in node_names.iter().enumerate() {
+            if i != 0 {
+                coordinator1
+                    .add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i))
+                    .await
+                    .unwrap();
+            }
+        }
+        let coordinator2 = nodes.get_mut(4).unwrap();
+
+        for (i, name) in node_names.iter().enumerate() {
+            if i != 3 {
+                coordinator2
+                    .add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i))
+                    .await
+                    .unwrap();
+            }
+        }
+
+        let coordinator1 = nodes.pop().unwrap();
+        let coordinator2 = nodes.pop().unwrap();
+
+        let mut joinset = tokio::task::JoinSet::new();
+
+        let arc_coordinator1 = Arc::new(coordinator1);
+        let arc_coordinator2 = Arc::new(coordinator2);
+
+        for _ in 0..2 {
+            let coordinator1 = arc_coordinator1.clone();
+            let coordinator2 = arc_coordinator2.clone();
+            joinset.spawn(async move {
+                coordinator1
+                    .transaction(Bytes::from("This is a transaction"))
+                    .await
+            });
+            joinset.spawn(async move {
+                coordinator2
                     .transaction(Bytes::from("This is a transaction"))
                     .await
             });
