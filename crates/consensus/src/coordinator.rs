@@ -9,15 +9,17 @@ use consensus_transport::consensus_transport::{
     Dependency, PreAcceptRequest, PreAcceptResponse, State,
 };
 use monotime::MonoTime;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time;
+use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tracing::instrument;
 
 pub struct Coordinator {
     pub node: Arc<NodeInfo>,
     pub members: Vec<Arc<Member>>,
-    pub event_store: Arc<EventStore>,
+    pub event_store: Arc<Mutex<EventStore>>,
     pub transaction: TransactionStateMachine,
 }
 
@@ -36,7 +38,7 @@ pub struct TransactionStateMachine {
     pub transaction: Bytes,
     pub t_zero: MonoTime,
     pub t: MonoTime,
-    pub dependencies: HashMap<MonoTime, MonoTime>, // Consists of t and t_zero
+    pub dependencies: BTreeMap<MonoTime, MonoTime>, // Consists of t and t_zero
 }
 
 impl StateMachine for Coordinator {
@@ -51,16 +53,14 @@ impl StateMachine for Coordinator {
             transaction,
             t_zero,
             t: t_zero,
-            dependencies: HashMap::new(),
+            dependencies: BTreeMap::new(),
         };
     }
 
     #[instrument(level = "trace", skip(self))]
     async fn pre_accept(&mut self, response: PreAcceptResponse) -> Result<()> {
-        //dbg!("[PRE_ACCEPT]: Transaction pre accept", &self.transaction);
         let t_response = MonoTime::try_from(response.timestamp.as_slice())?;
 
-        //dbg!("[PRE_ACCEPT]: t_response", &t_response);
         if self.transaction.t < t_response {
             // replace t in state machine
             self.transaction.t = t_response;
@@ -71,11 +71,19 @@ impl StateMachine for Coordinator {
             self.handle_dependencies(response.dependencies)?;
 
             // Update transaction, reorder map with updated t and insert dependencies
-            self.event_store.upsert((&self.transaction).into()).await;
+            self.event_store
+                .lock()
+                .await
+                .upsert((&self.transaction).into())
+                .await;
         } else {
             // Update transaction with new dependencies
             self.handle_dependencies(response.dependencies)?;
-            self.event_store.upsert((&self.transaction).into()).await;
+            self.event_store
+                .lock()
+                .await
+                .upsert((&self.transaction).into())
+                .await;
         }
 
         Ok(())
@@ -88,7 +96,11 @@ impl StateMachine for Coordinator {
 
         // Mut state and update entry
         self.transaction.state = State::Accepted;
-        self.event_store.upsert((&self.transaction).into()).await;
+        self.event_store
+            .lock()
+            .await
+            .upsert((&self.transaction).into())
+            .await;
 
         Ok(())
     }
@@ -96,14 +108,26 @@ impl StateMachine for Coordinator {
     #[instrument(level = "trace", skip(self))]
     async fn commit(&mut self) -> Result<()> {
         self.transaction.state = State::Commited;
-        self.event_store.upsert((&self.transaction).into()).await;
-
         self.event_store
-            .wait_for_dependencies(
+            .lock()
+            .await
+            .upsert((&self.transaction).into())
+            .await;
+
+        let mut handles = self
+            .event_store
+            .lock()
+            .await
+            .create_wait_handles(
                 self.transaction.dependencies.clone(),
                 self.transaction.t_zero,
             )
             .await?;
+
+        while let Some(x) = handles.join_next().await {
+            x??
+            // TODO: Recovery when timeout
+        }
         Ok(())
     }
 
@@ -112,7 +136,11 @@ impl StateMachine for Coordinator {
         // TODO: Read commit responses and calc client response
 
         self.transaction.state = State::Applied;
-        self.event_store.upsert((&self.transaction).into()).await;
+        self.event_store
+            .lock()
+            .await
+            .upsert((&self.transaction).into())
+            .await;
 
         Ok(())
     }
@@ -156,7 +184,7 @@ impl Coordinator {
     pub fn new(
         node: Arc<NodeInfo>,
         members: Vec<Arc<Member>>,
-        event_store: Arc<EventStore>,
+        event_store: Arc<Mutex<EventStore>>,
     ) -> Self {
         Coordinator {
             node,
@@ -185,6 +213,8 @@ impl Coordinator {
         //
         //  PRE ACCEPT STATE
         //
+
+        let start = time::Instant::now();
 
         // Create the PreAccept msg
         let pre_accept_request = PreAcceptRequest {
@@ -279,7 +309,13 @@ impl Coordinator {
             dependencies: into_dependency(self.transaction.dependencies.clone()),
             result: vec![], // Theoretically not needed right?
         };
+
         Coordinator::broadcast(&members, ConsensusRequest::Apply(apply_request)).await?; // This should not be awaited
+        println!(
+            "Execute/Apply: {:?} | {:?}",
+            start.elapsed(),
+            self.transaction.t_zero
+        );
 
         Ok(())
     }

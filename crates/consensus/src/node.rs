@@ -7,14 +7,14 @@ use consensus_transport::consensus_transport::consensus_transport_server::Consen
 use diesel_ulid::DieselUlid;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::task::JoinSet;
+use tokio::{sync::Mutex, task::JoinSet};
 use tonic::transport::{Channel, Server};
 use tracing::instrument;
 
 pub struct Node {
     info: Arc<NodeInfo>,
     members: Vec<Arc<Member>>,
-    event_store: Arc<EventStore>,
+    event_store: Arc<Mutex<EventStore>>,
     join_set: JoinSet<Result<()>>,
 }
 
@@ -44,7 +44,7 @@ impl Node {
             host: format!("{}", socket_addr),
         });
         let node_name_clone = node_name.clone();
-        let event_store = Arc::new(EventStore::init());
+        let event_store = Arc::new(Mutex::new(EventStore::init()));
         let event_store_clone = event_store.clone();
         let mut join_set = JoinSet::new();
         join_set.spawn(async move {
