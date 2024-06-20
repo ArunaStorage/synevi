@@ -69,10 +69,9 @@ impl EventStore {
         // Parse t_zero
         let t_zero = MonoTime::try_from(request.timestamp_zero.as_slice())?;
         let (t, deps) = {
-            // This lock is required that a t is uniquely decided
             let t = if let Some((last_t0, _)) = self.mappings.last_key_value() {
                 if last_t0 > &t_zero {
-                    let t = t_zero.next_with_guard(last_t0).unwrap(); // This unwrap will not panic
+                    let t = t_zero.next_with_guard(last_t0).into_time(); // This unwrap will not panic
                     t
                 } else {
                     t_zero

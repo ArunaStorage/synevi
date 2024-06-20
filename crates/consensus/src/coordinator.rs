@@ -6,10 +6,10 @@ use bytes::Bytes;
 use consensus_transport::consensus_transport::consensus_transport_client::ConsensusTransportClient;
 use consensus_transport::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
-    Dependency, PreAcceptRequest, PreAcceptResponse, State,
+    PreAcceptRequest, PreAcceptResponse, State,
 };
 use monotime::MonoTime;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time;
 use tokio::sync::Mutex;
@@ -25,11 +25,10 @@ pub struct Coordinator {
 
 trait StateMachine {
     async fn init(&mut self, transaction: Bytes);
-    async fn pre_accept(&mut self, response: PreAcceptResponse) -> Result<()>;
-    async fn accept(&mut self, response: AcceptResponse) -> Result<()>;
+    async fn pre_accept(&mut self, responses: &[PreAcceptResponse]) -> Result<()>;
+    async fn accept(&mut self, responses: &[AcceptResponse]) -> Result<()>;
     async fn commit(&mut self) -> Result<()>;
-    async fn execute(&mut self, responses: Vec<CommitResponse>) -> Result<()>;
-    fn handle_dependencies(&mut self, dependencies: Vec<Dependency>) -> Result<()>;
+    async fn execute(&mut self, responses: &[CommitResponse]) -> Result<()>;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -58,41 +57,63 @@ impl StateMachine for Coordinator {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn pre_accept(&mut self, response: PreAcceptResponse) -> Result<()> {
-        let t_response = MonoTime::try_from(response.timestamp.as_slice())?;
-
-        if self.transaction.t < t_response {
-            // replace t in state machine
-            self.transaction.t = t_response;
-
-            // These deps stem from individually collected replicas and get unified here
-            // that in return will be sent via Accept{} so that every participating replica
-            // knows of ALL (unified) dependencies
-            self.handle_dependencies(response.dependencies)?;
-
-            // Update transaction, reorder map with updated t and insert dependencies
-            self.event_store
-                .lock()
-                .await
-                .upsert((&self.transaction).into())
-                .await;
-        } else {
-            // Update transaction with new dependencies
-            self.handle_dependencies(response.dependencies)?;
-            self.event_store
-                .lock()
-                .await
-                .upsert((&self.transaction).into())
-                .await;
+    async fn pre_accept(&mut self, responses: &[PreAcceptResponse]) -> Result<()> {
+        // Collect deps by t_zero and only keep the max t
+        let mut dependencies_inverted = HashMap::new(); // TZero -> MaxT
+        for response in responses {
+            let t_response = MonoTime::try_from(response.timestamp.as_slice())?;
+            if t_response > self.transaction.t {
+                self.transaction.t = t_response;
+            }
+            for dep in response.dependencies.iter() {
+                let t = MonoTime::try_from(dep.timestamp.as_slice())?;
+                let t_zero = MonoTime::try_from(dep.timestamp_zero.as_slice())?;
+                if t_zero != self.transaction.t_zero {
+                    let entry = dependencies_inverted.entry(t_zero).or_insert(t);
+                    if t > *entry {
+                        *entry = t;
+                    }
+                }
+            }
         }
+        // Invert map to BTreeMap with t -> t_zero
+        self.transaction.dependencies = dependencies_inverted
+            .iter()
+            .map(|(t_zero, t)| (*t, *t_zero))
+            .collect();
+
+        // Upsert store
+        self.event_store
+            .lock()
+            .await
+            .upsert((&self.transaction).into())
+            .await;
 
         Ok(())
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn accept(&mut self, response: AcceptResponse) -> Result<()> {
+    async fn accept(&mut self, responses: &[AcceptResponse]) -> Result<()> {
+        // A little bit redundant but I think the alternative to create a common behavior between responses may be even worse
         // Handle returned dependencies
-        self.handle_dependencies(response.dependencies)?;
+        let mut dependencies_inverted = HashMap::new(); // TZero -> MaxT
+        for response in responses {
+            for dep in response.dependencies.iter() {
+                let t = MonoTime::try_from(dep.timestamp.as_slice())?;
+                let t_zero = MonoTime::try_from(dep.timestamp_zero.as_slice())?;
+                if t_zero != self.transaction.t_zero {
+                    let entry = dependencies_inverted.entry(t_zero).or_insert(t);
+                    if t > *entry {
+                        *entry = t;
+                    }
+                }
+            }
+        }
+        // Invert map to BTreeMap with t -> t_zero
+        self.transaction.dependencies = dependencies_inverted
+            .iter()
+            .map(|(t_zero, t)| (*t, *t_zero))
+            .collect();
 
         // Mut state and update entry
         self.transaction.state = State::Accepted;
@@ -132,7 +153,7 @@ impl StateMachine for Coordinator {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn execute(&mut self, _responses: Vec<CommitResponse>) -> Result<()> {
+    async fn execute(&mut self, _responses: &[CommitResponse]) -> Result<()> {
         // TODO: Read commit responses and calc client response
 
         self.transaction.state = State::Applied;
@@ -142,21 +163,6 @@ impl StateMachine for Coordinator {
             .upsert((&self.transaction).into())
             .await;
 
-        Ok(())
-    }
-
-    #[instrument(level = "trace", skip(self))]
-    fn handle_dependencies(&mut self, dependencies: Vec<Dependency>) -> Result<()> {
-        for Dependency {
-            timestamp,
-            timestamp_zero,
-        } in dependencies
-        {
-            self.transaction.dependencies.insert(
-                MonoTime::try_from(timestamp.as_slice())?,
-                MonoTime::try_from(timestamp_zero.as_slice())?,
-            );
-        }
         Ok(())
     }
 }
@@ -214,7 +220,7 @@ impl Coordinator {
         //  PRE ACCEPT STATE
         //
 
-        let start = time::Instant::now();
+        let _start = time::Instant::now();
 
         // Create the PreAccept msg
         let pre_accept_request = PreAcceptRequest {
@@ -232,9 +238,13 @@ impl Coordinator {
         .await?;
 
         // Collect responses
-        for response in pre_accept_responses {
-            self.pre_accept(response.into_inner()?).await?;
-        }
+        self.pre_accept(
+            &pre_accept_responses
+                .into_iter()
+                .map(|res| res.into_inner())
+                .collect::<Result<Vec<_>>>()?,
+        )
+        .await?;
 
         let commit_responses = if self.transaction.t_zero == self.transaction.t {
             //
@@ -273,9 +283,14 @@ impl Coordinator {
             let accept_responses =
                 Coordinator::broadcast(&members, ConsensusRequest::Accept(accept_request), true)
                     .await?;
-            for response in accept_responses {
-                self.accept(response.into_inner()?).await?;
-            }
+
+            self.accept(
+                &accept_responses
+                    .into_iter()
+                    .map(|res| res.into_inner())
+                    .collect::<Result<Vec<_>>>()?,
+            )
+            .await?;
 
             // Commit
             let commit_request = CommitRequest {
@@ -298,7 +313,7 @@ impl Coordinator {
         // Execution
         //
         self.execute(
-            commit_responses
+            &commit_responses
                 .into_iter()
                 .map(|res| -> Result<CommitResponse> { res.into_inner() })
                 .collect::<Result<Vec<CommitResponse>>>()?,
@@ -315,11 +330,6 @@ impl Coordinator {
         };
 
         Coordinator::broadcast(&members, ConsensusRequest::Apply(apply_request), false).await?; // This should not be awaited
-        println!(
-            "Execute/Apply: {:?} | {:?}",
-            start.elapsed(),
-            self.transaction.t_zero
-        );
 
         Ok(())
     }

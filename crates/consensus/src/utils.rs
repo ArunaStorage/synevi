@@ -92,7 +92,7 @@ impl From<&TransactionStateMachine> for Event {
     }
 }
 
-const TIMEOUT: u64 = 10000;
+const TIMEOUT: u64 = 100;
 
 pub fn wait_for(
     sender: Sender<State>,

@@ -11,7 +11,7 @@ pub enum TimeResult {
 }
 
 impl TimeResult {
-    pub fn unwrap(self) -> MonoTime {
+    pub fn into_time(self) -> MonoTime {
         match self {
             TimeResult::Time(time) => time,
             TimeResult::Drift(time, _) => time,
@@ -77,7 +77,7 @@ impl MonoTime {
 
     // Ensures that the time is greater than self and greater than guard
     pub fn next_with_guard(self, guard: &MonoTime) -> TimeResult {
-        let time = self.next().unwrap();
+        let time = self.next().into_time();
         if &time < guard {
             let drift = guard.get_nanos() - time.get_nanos();
             let seq_node = (time.0 << 80 >> 80) + (1 << 32); // Shift out the nanos than add 1 to seq
@@ -133,7 +133,7 @@ mod tests {
     #[test]
     fn test_next() {
         let time = MonoTime::new(0, 0);
-        let time2 = time.next().unwrap();
+        let time2 = time.next().into_time();
         assert!(time.get_nanos() <= time2.get_nanos());
         assert_eq!(time.get_seq() + 1, time2.get_seq());
         assert_eq!(time.get_node(), time2.get_node());

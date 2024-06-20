@@ -13,7 +13,7 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn parallel_execution() {
         let mut node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
         let mut nodes: Vec<Node> = vec![];
@@ -46,7 +46,7 @@ mod tests {
         while let Some(_res) = joinset.join_next().await {}
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn contention_execution() {
         let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
         let mut nodes: Vec<Node> = vec![];
@@ -100,7 +100,7 @@ mod tests {
         while let Some(_res) = joinset.join_next().await {}
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn consecutive_execution() {
         let mut node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
         let mut nodes: Vec<Node> = vec![];

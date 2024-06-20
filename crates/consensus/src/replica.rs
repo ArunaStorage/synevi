@@ -110,7 +110,6 @@ impl ConsensusTransport for Replica {
         let mut counter = 0;
         while let Some(x) = handles.join_next().await {
             if let Err(_) = x.unwrap() {
-                println!("{:?}, {:?}", t_zero, dependencies);
                 let store = &self.event_store.lock().await.events;
                 //
                 let store = store
@@ -123,9 +122,10 @@ impl ConsensusTransport for Replica {
                         }
                     })
                     .collect::<Vec<_>>();
-                println!("{:?}", store);
-                println!("------------------");
-                println!("{:?} / {}", initial_len, counter);
+                println!(
+                    "TZero: {:?}, T: {:?} deps: {:?}, store: {:?} | {:?} / {}",
+                    t_zero, t, dependencies, store, initial_len, counter
+                );
                 panic!()
             }
             counter += 1;
