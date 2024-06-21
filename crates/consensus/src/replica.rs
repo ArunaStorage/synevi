@@ -86,17 +86,6 @@ impl ConsensusTransport for Replica {
         let dependencies = from_dependency(request.dependencies.clone())
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let (tx, _) = watch::channel(State::Commited);
-        self.event_store
-            .lock()
-            .await
-            .upsert(Event {
-                t_zero,
-                t,
-                state: tx,
-                event: request.event.clone().into(),
-                dependencies: dependencies.clone(),
-            })
-            .await;
 
         let mut handles = self
             .event_store
@@ -123,7 +112,7 @@ impl ConsensusTransport for Replica {
                     })
                     .collect::<Vec<_>>();
                 println!(
-                    "TZero: {:?}, T: {:?} deps: {:?}, store: {:?} | {:?} / {}",
+                    "PANIC: T0: {:?}, T: {:?} deps: {:?}, store: {:?} | {:?} / {}",
                     t_zero, t, dependencies, store, initial_len, counter
                 );
                 panic!()
@@ -131,6 +120,17 @@ impl ConsensusTransport for Replica {
             counter += 1;
             // TODO: Recovery when timeout
         }
+        self.event_store
+            .lock()
+            .await
+            .upsert(Event {
+                t_zero,
+                t,
+                state: tx,
+                event: request.event.clone().into(),
+                dependencies: dependencies.clone(),
+            })
+            .await;
 
         Ok(Response::new(CommitResponse {
             node: self.node.to_string(),

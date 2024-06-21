@@ -88,12 +88,12 @@ mod tests {
             let coordinator2 = arc_coordinator2.clone();
             joinset.spawn(async move {
                 coordinator1
-                    .transaction(Bytes::from("This is a transaction"))
+                    .transaction(Bytes::from("C1"))
                     .await
             });
             joinset.spawn(async move {
                 coordinator2
-                    .transaction(Bytes::from("This is a transaction"))
+                    .transaction(Bytes::from("C2"))
                     .await
             });
         }

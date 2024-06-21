@@ -102,7 +102,7 @@ pub fn wait_for(
     async move {
         let result = timeout(
             Duration::from_millis(TIMEOUT),
-            rx.wait_for(|e| *e == expected_state),
+            rx.wait_for(|e| *e >= expected_state), // Wait for any state greater or equal to expected_state
         )
         .await;
         match result {
