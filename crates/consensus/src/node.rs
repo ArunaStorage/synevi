@@ -7,13 +7,11 @@ use consensus_transport::consensus_transport::consensus_transport_server::Consen
 use diesel_ulid::DieselUlid;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::{
-    sync::Mutex,
-    task::JoinSet,
-};
+use tokio::{sync::Mutex, task::JoinSet};
 use tonic::transport::{Channel, Server};
 use tracing::instrument;
 
+#[derive(Debug)]
 pub struct Node {
     info: Arc<NodeInfo>,
     members: Vec<Arc<Member>>,

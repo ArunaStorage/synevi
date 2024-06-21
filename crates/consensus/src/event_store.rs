@@ -69,9 +69,9 @@ impl EventStore {
         // Parse t_zero
         let t_zero = MonoTime::try_from(request.timestamp_zero.as_slice())?;
         let (t, deps) = {
-            let t = if let Some((last_t0, _)) = self.mappings.last_key_value() {
-                if last_t0 > &t_zero {
-                    let t = t_zero.next_with_guard(last_t0).into_time(); // This unwrap will not panic
+            let t = if let Some((last_t, _)) = self.mappings.last_key_value() {
+                if last_t > &t_zero {
+                    let t = t_zero.next_with_guard(last_t).into_time(); // This unwrap will not panic
                     t
                 } else {
                     t_zero
@@ -82,14 +82,7 @@ impl EventStore {
             };
             self.mappings.insert(t, t_zero);
             // This might not be necessary to re-use the write lock here
-            let deps: Vec<Dependency> = self
-                .mappings
-                .range(self.last_applied..t)
-                .map(|(k, v)| Dependency {
-                    timestamp: (*k).into(),
-                    timestamp_zero: (*v).into(),
-                })
-                .collect();
+            let deps: Vec<Dependency> = self.get_dependencies(&t).await;
             (t, deps)
         };
 
@@ -156,30 +149,17 @@ impl EventStore {
 
     #[instrument(level = "trace")]
     pub async fn get_dependencies(&self, t: &MonoTime) -> Vec<Dependency> {
-        if let Some(entry) = self.last().await {
-            // Check if we can build a range over t -> If there is a newer timestamp than proposed t
-            if &entry.t <= t {
-                // ... if not, return [last..end]
-                self.mappings
-                    .range(self.last_applied..)
-                    .map(|(k, v)| Dependency {
-                        timestamp: (*k).into(),
-                        timestamp_zero: (*v).into(),
-                    })
-                    .collect()
-            } else {
-                // ... if yes, return [last..proposed_t]
-                self.mappings
-                    .range(self.last_applied..*t)
-                    .map(|(k, v)| Dependency {
-                        timestamp: (*k).into(),
-                        timestamp_zero: (*v).into(),
-                    })
-                    .collect()
-            }
-        } else {
-            Vec::new()
+        if t < &self.last_applied {
+            // If t is smaller than the last applied entry, return all dependencies
+            println!("PROBLEM!!!!: T: {:?} < Last: {:?}", t, self.last_applied);
         }
+        self.mappings
+            .range(self.last_applied..*t)
+            .map(|(k, v)| Dependency {
+                timestamp: (*k).into(),
+                timestamp_zero: (*v).into(),
+            })
+            .collect()
     }
 
     #[instrument(level = "trace")]

@@ -41,7 +41,6 @@ pub struct TransactionStateMachine {
 }
 
 impl StateMachine for Coordinator {
-
     #[instrument(level = "trace", skip(self))]
     async fn init(&mut self, transaction: Bytes) {
         // Generate timestamp
@@ -147,7 +146,16 @@ impl StateMachine for Coordinator {
             .await?;
 
         while let Some(x) = handles.join_next().await {
-            x??
+            if let Err(_) = x.unwrap() {
+                println!(
+                    "PANIC COORD: T0: {:?}, T: {:?}, C: {:?} deps: {:?}",
+                    self.transaction.t_zero,
+                    self.transaction.t,
+                    self.transaction.transaction,
+                    self.transaction.dependencies
+                );
+                panic!()
+            }
             // TODO: Recovery when timeout
         }
         Ok(())
@@ -238,7 +246,13 @@ impl Coordinator {
         )
         .await?;
 
-        println!("PA: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}", self.transaction.t_zero, self.transaction.t, self.transaction.transaction, start.elapsed());
+        println!(
+            "PA: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
+            self.transaction.t_zero,
+            self.transaction.t,
+            self.transaction.transaction,
+            start.elapsed()
+        );
 
         // Collect responses
         self.pre_accept(
@@ -254,7 +268,14 @@ impl Coordinator {
             //   FAST PATH
             //
 
-            println!("FP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}, deps: {:?}", self.transaction.t_zero, self.transaction.t, self.transaction.transaction, start.elapsed(), self.transaction.dependencies);
+            println!(
+                "FP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}, deps: {:?}",
+                self.transaction.t_zero,
+                self.transaction.t,
+                self.transaction.transaction,
+                start.elapsed(),
+                self.transaction.dependencies
+            );
             // Commit
             let commit_request = CommitRequest {
                 node: self.node.id.to_string(),
@@ -269,8 +290,13 @@ impl Coordinator {
                 Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request), true)
             );
 
-            println!("C FP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}", self.transaction.t_zero, self.transaction.t, self.transaction.transaction, start.elapsed());
-
+            println!(
+                "C FP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
+                self.transaction.t_zero,
+                self.transaction.t,
+                self.transaction.transaction,
+                start.elapsed()
+            );
 
             commit_result?;
             broadcast_result?
@@ -280,6 +306,14 @@ impl Coordinator {
             //
 
             // Accept
+            println!(
+                "A SP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
+                self.transaction.t_zero,
+                self.transaction.t,
+                self.transaction.transaction,
+                start.elapsed()
+            );
+
             let accept_request = AcceptRequest {
                 node: self.node.id.to_string(),
                 event: self.transaction.transaction.clone().into(),
@@ -299,8 +333,14 @@ impl Coordinator {
             )
             .await?;
 
-            println!("A SP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}", self.transaction.t_zero, self.transaction.t, self.transaction.transaction, start.elapsed());
-
+            println!(
+                "A -> C SP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}, deps: {:?}",
+                self.transaction.t_zero,
+                self.transaction.t,
+                self.transaction.transaction,
+                start.elapsed(),
+                self.transaction.dependencies
+            );
 
             // Commit
             let commit_request = CommitRequest {
@@ -315,7 +355,13 @@ impl Coordinator {
                 self.commit(),
                 Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request), true)
             );
-            println!("C SP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}", self.transaction.t_zero, self.transaction.t, self.transaction.transaction, start.elapsed());
+            println!(
+                "C SP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
+                self.transaction.t_zero,
+                self.transaction.t,
+                self.transaction.transaction,
+                start.elapsed()
+            );
 
             commit_result?;
             broadcast_result?
@@ -324,6 +370,14 @@ impl Coordinator {
         //
         // Execution
         //
+        println!(
+            "E: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
+            self.transaction.t_zero,
+            self.transaction.t,
+            self.transaction.transaction,
+            start.elapsed()
+        );
+
         self.execute(
             &commit_responses
                 .into_iter()
@@ -341,7 +395,13 @@ impl Coordinator {
             result: vec![], // Theoretically not needed right?
         };
 
-        println!("E: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}", self.transaction.t_zero, self.transaction.t, self.transaction.transaction, start.elapsed());
+        println!(
+            "E Broadcast: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
+            self.transaction.t_zero,
+            self.transaction.t,
+            self.transaction.transaction,
+            start.elapsed()
+        );
 
         Coordinator::broadcast(&members, ConsensusRequest::Apply(apply_request), false).await?; // This should not be awaited
 

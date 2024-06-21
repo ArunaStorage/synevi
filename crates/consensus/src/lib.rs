@@ -57,7 +57,7 @@ mod tests {
         }
         let coordinator1 = nodes.get_mut(3).unwrap();
         for (i, name) in node_names.iter().enumerate() {
-            if i != 0 {
+            if i != 3 {
                 coordinator1
                     .add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i))
                     .await
@@ -67,7 +67,7 @@ mod tests {
         let coordinator2 = nodes.get_mut(4).unwrap();
 
         for (i, name) in node_names.iter().enumerate() {
-            if i != 3 {
+            if i != 4 {
                 coordinator2
                     .add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i))
                     .await
@@ -83,24 +83,16 @@ mod tests {
         let arc_coordinator1 = Arc::new(coordinator1);
         let arc_coordinator2 = Arc::new(coordinator2);
 
-        for _ in 0..2 {
+        for _ in 0..1000 {
             let coordinator1 = arc_coordinator1.clone();
             let coordinator2 = arc_coordinator2.clone();
-            joinset.spawn(async move {
-                coordinator1
-                    .transaction(Bytes::from("C1"))
-                    .await
-            });
-            joinset.spawn(async move {
-                coordinator2
-                    .transaction(Bytes::from("C2"))
-                    .await
-            });
+            joinset.spawn(async move { coordinator1.transaction(Bytes::from("C1")).await });
+            joinset.spawn(async move { coordinator2.transaction(Bytes::from("C2")).await });
         }
         while let Some(_res) = joinset.join_next().await {}
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test]
     async fn consecutive_execution() {
         let mut node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
         let mut nodes: Vec<Node> = vec![];
@@ -119,11 +111,16 @@ mod tests {
                 .unwrap();
         }
 
-        for _ in 0..1000 {
+        for i in 0..1000 {
+            println!("{i} INIT");
             coordinator
                 .transaction(Bytes::from("This is a transaction"))
                 .await
                 .unwrap();
+            println!("{i} END");
         }
+
+        println!("DONE");
+
     }
 }

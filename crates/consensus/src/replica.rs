@@ -47,7 +47,7 @@ impl ConsensusTransport for Replica {
         let request = request.into_inner();
         let t_zero = MonoTime::try_from(request.timestamp_zero.as_slice())
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let t = MonoTime::try_from(request.timestamp_zero.as_slice())
+        let t = MonoTime::try_from(request.timestamp.as_slice())
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         let (tx, _) = watch::channel(State::Accepted);
@@ -81,11 +81,23 @@ impl ConsensusTransport for Replica {
         let request = request.into_inner();
         let t_zero = MonoTime::try_from(request.timestamp_zero.as_slice())
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let t = MonoTime::try_from(request.timestamp_zero.as_slice())
+        let t = MonoTime::try_from(request.timestamp.as_slice())
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let dependencies = from_dependency(request.dependencies.clone())
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let (tx, _) = watch::channel(State::Commited);
+
+        self.event_store
+        .lock()
+        .await
+        .upsert(Event {
+            t_zero,
+            t,
+            state: tx,
+            event: request.event.clone().into(),
+            dependencies: dependencies.clone(),
+        })
+        .await;
 
         let mut handles = self
             .event_store
@@ -103,13 +115,7 @@ impl ConsensusTransport for Replica {
                 //
                 let store = store
                     .iter()
-                    .filter_map(|(k, v)| {
-                        if dependencies.contains_key(&v.t) {
-                            Some((k, v.state.borrow().clone()))
-                        } else {
-                            None
-                        }
-                    })
+                    .map(|(k, v)| (k, v.state.borrow().clone()))
                     .collect::<Vec<_>>();
                 println!(
                     "PANIC: T0: {:?}, T: {:?} deps: {:?}, store: {:?} | {:?} / {}",
@@ -120,17 +126,6 @@ impl ConsensusTransport for Replica {
             counter += 1;
             // TODO: Recovery when timeout
         }
-        self.event_store
-            .lock()
-            .await
-            .upsert(Event {
-                t_zero,
-                t,
-                state: tx,
-                event: request.event.clone().into(),
-                dependencies: dependencies.clone(),
-            })
-            .await;
 
         Ok(Response::new(CommitResponse {
             node: self.node.to_string(),
