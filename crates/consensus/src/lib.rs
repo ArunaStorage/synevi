@@ -12,6 +12,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
+    use tokio::runtime::{Builder, Runtime};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn parallel_execution() {
@@ -92,35 +93,37 @@ mod tests {
         while let Some(_res) = joinset.join_next().await {}
     }
 
-    #[tokio::test]
-    async fn consecutive_execution() {
-        let mut node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
-        let mut nodes: Vec<Node> = vec![];
-        for (i, m) in node_names.iter().enumerate() {
-            let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 11000 + i)).unwrap();
-            let node = Node::new_with_parameters(*m, i as u16, socket_addr).await;
-            nodes.push(node);
-        }
-        let mut coordinator = nodes.pop().unwrap();
-        let _ = node_names.pop(); // Do not connect to your self
+    #[test]
+    fn consecutive_execution() {
+        let runtime = Builder::new_multi_thread().enable_all().build().unwrap();
 
-        for (i, name) in node_names.iter().enumerate() {
-            coordinator
-                .add_member(*name, i as u16, format!("http://localhost:{}", 11000 + i))
-                .await
-                .unwrap();
-        }
+        let handle = runtime.handle().clone();
+        handle.block_on(async move {
+            let mut node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
+            let mut nodes: Vec<Node> = vec![];
+            for (i, m) in node_names.iter().enumerate() {
+                let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 11000 + i)).unwrap();
+                let node = Node::new_with_parameters(*m, i as u16, socket_addr).await;
+                nodes.push(node);
+            }
+            let mut coordinator = nodes.pop().unwrap();
+            let _ = node_names.pop(); // Do not connect to your self
 
-        for i in 0..1000 {
-            println!("{i} INIT");
-            coordinator
-                .transaction(Bytes::from("This is a transaction"))
-                .await
-                .unwrap();
-            println!("{i} END");
-        }
+            for (i, name) in node_names.iter().enumerate() {
+                coordinator
+                    .add_member(*name, i as u16, format!("http://localhost:{}", 11000 + i))
+                    .await
+                    .unwrap();
+            }
 
-        println!("DONE");
+            for _ in 0..1000 {
+                coordinator
+                    .transaction(Bytes::from("This is a transaction"))
+                    .await
+                    .unwrap();
+            }
 
+            runtime.shutdown_background();
+        });
     }
 }

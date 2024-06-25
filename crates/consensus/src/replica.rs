@@ -88,16 +88,16 @@ impl ConsensusTransport for Replica {
         let (tx, _) = watch::channel(State::Commited);
 
         self.event_store
-        .lock()
-        .await
-        .upsert(Event {
-            t_zero,
-            t,
-            state: tx,
-            event: request.event.clone().into(),
-            dependencies: dependencies.clone(),
-        })
-        .await;
+            .lock()
+            .await
+            .upsert(Event {
+                t_zero,
+                t,
+                state: tx,
+                event: request.event.clone().into(),
+                dependencies: dependencies.clone(),
+            })
+            .await;
 
         let mut handles = self
             .event_store
