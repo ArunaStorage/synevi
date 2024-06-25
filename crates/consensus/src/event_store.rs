@@ -71,8 +71,8 @@ impl EventStore {
         let (t, deps) = {
             let t = if let Some((last_t, _)) = self.mappings.last_key_value() {
                 if last_t > &t_zero {
-                    let t = t_zero.next_with_guard(last_t).into_time(); // This unwrap will not panic
-                    t
+                     // This unwrap will not panic
+                    t_zero.next_with_guard(last_t).into_time()
                 } else {
                     t_zero
                 }

@@ -44,7 +44,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         .build()
         .unwrap();
     c.bench_function("parallel", |b| {
-        b.to_async(&runtime).iter(|| parallel_execution())
+        b.to_async(&runtime).iter(parallel_execution)
     });
 }
 

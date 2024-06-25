@@ -110,12 +110,12 @@ impl ConsensusTransport for Replica {
         let initial_len = handles.len();
         let mut counter = 0;
         while let Some(x) = handles.join_next().await {
-            if let Err(_) = x.unwrap() {
+            if x.unwrap().is_err() {
                 let store = &self.event_store.lock().await.events;
                 //
                 let store = store
                     .iter()
-                    .map(|(k, v)| (k, v.state.borrow().clone()))
+                    .map(|(k, v)| (k, *v.state.borrow()))
                     .collect::<Vec<_>>();
                 println!(
                     "PANIC: T0: {:?}, T: {:?} deps: {:?}, store: {:?} | {:?} / {}",

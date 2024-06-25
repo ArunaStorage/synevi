@@ -12,7 +12,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
-    use tokio::runtime::{Builder, Runtime};
+    use tokio::runtime::Builder;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn parallel_execution() {

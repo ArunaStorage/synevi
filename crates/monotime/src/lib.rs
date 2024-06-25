@@ -82,24 +82,24 @@ impl MonoTime {
             let drift = guard.get_nanos() - time.get_nanos();
             let seq_node = (time.0 << 80 >> 80) + (1 << 32); // Shift out the nanos than add 1 to seq
             let next_time = MonoTime((guard.get_nanos() + 1) << 48 | seq_node);
-            return TimeResult::Drift(next_time, drift);
+            TimeResult::Drift(next_time, drift)
         } else {
             TimeResult::Time(time)
         }
     }
 }
 
-impl Into<[u8; 16]> for MonoTime {
-    fn into(self) -> [u8; 16] {
+impl From<MonoTime> for [u8; 16] {
+    fn from(val: MonoTime) -> Self {
         let mut bytes = [0u8; 16];
-        bytes.copy_from_slice(&self.0.to_be_bytes());
+        bytes.copy_from_slice(&val.0.to_be_bytes());
         bytes
     }
 }
 
-impl Into<Vec<u8>> for MonoTime {
-    fn into(self) -> Vec<u8> {
-        self.0.to_be_bytes().to_vec()
+impl From<MonoTime> for Vec<u8> {
+    fn from(val: MonoTime) -> Self {
+        val.0.to_be_bytes().to_vec()
     }
 }
 

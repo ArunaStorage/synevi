@@ -146,7 +146,7 @@ impl StateMachine for Coordinator {
             .await?;
 
         while let Some(x) = handles.join_next().await {
-            if let Err(_) = x.unwrap() {
+            if x.unwrap().is_err() {
                 println!(
                     "PANIC COORD: T0: {:?}, T: {:?}, C: {:?} deps: {:?}",
                     self.transaction.t_zero,
@@ -493,7 +493,7 @@ impl Coordinator {
                 }
             }
         } else {
-            tokio::spawn(async move { while let Some(_) = responses.join_next().await {} });
+            tokio::spawn(async move { while responses.join_next().await.is_some() {} });
         }
         Ok(result)
     }

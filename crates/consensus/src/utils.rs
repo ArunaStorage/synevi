@@ -108,7 +108,7 @@ pub fn wait_for(
         match result {
             Ok(e) => match e {
                 Err(_) => Err(anyhow!("receive error")),
-                Ok(_) => return Ok(()),
+                Ok(_) => Ok(()),
             },
             Err(_) => Err(anyhow!("TIMEOUT")),
         }
