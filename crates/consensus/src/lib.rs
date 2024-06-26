@@ -44,53 +44,65 @@ mod tests {
                     .await
             });
         }
-        while let Some(_res) = joinset.join_next().await {}
+        while let Some(res) = joinset.join_next().await {
+            res.unwrap().unwrap();
+        }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn contention_execution() {
-        let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
-        let mut nodes: Vec<Node> = vec![];
-        for (i, m) in node_names.iter().enumerate() {
-            let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
-            let node = Node::new_with_parameters(*m, i as u16, socket_addr).await;
-            nodes.push(node);
-        }
-        let coordinator1 = nodes.get_mut(3).unwrap();
-        for (i, name) in node_names.iter().enumerate() {
-            if i != 3 {
-                coordinator1
-                    .add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i))
-                    .await
-                    .unwrap();
+    #[test]
+    fn contention_execution() {
+        let runtime = Builder::new_multi_thread().enable_all().build().unwrap();
+
+        let handle = runtime.handle().clone();
+        handle.block_on(async move {
+            let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
+            let mut nodes: Vec<Node> = vec![];
+            for (i, m) in node_names.iter().enumerate() {
+                let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
+                let node = Node::new_with_parameters(*m, i as u16, socket_addr).await;
+                nodes.push(node);
             }
-        }
-        let coordinator2 = nodes.get_mut(4).unwrap();
-
-        for (i, name) in node_names.iter().enumerate() {
-            if i != 4 {
-                coordinator2
-                    .add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i))
-                    .await
-                    .unwrap();
+            let coordinator1 = nodes.get_mut(3).unwrap();
+            for (i, name) in node_names.iter().enumerate() {
+                if i != 3 {
+                    coordinator1
+                        .add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i))
+                        .await
+                        .unwrap();
+                }
             }
-        }
+            let coordinator2 = nodes.get_mut(4).unwrap();
 
-        let coordinator1 = nodes.pop().unwrap();
-        let coordinator2 = nodes.pop().unwrap();
+            for (i, name) in node_names.iter().enumerate() {
+                if i != 4 {
+                    coordinator2
+                        .add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i))
+                        .await
+                        .unwrap();
+                }
+            }
 
-        let mut joinset = tokio::task::JoinSet::new();
+            let coordinator1 = nodes.pop().unwrap();
+            let coordinator2 = nodes.pop().unwrap();
 
-        let arc_coordinator1 = Arc::new(coordinator1);
-        let arc_coordinator2 = Arc::new(coordinator2);
+            let mut joinset = tokio::task::JoinSet::new();
 
-        for _ in 0..1000 {
-            let coordinator1 = arc_coordinator1.clone();
-            let coordinator2 = arc_coordinator2.clone();
-            joinset.spawn(async move { coordinator1.transaction(Bytes::from("C1")).await });
-            joinset.spawn(async move { coordinator2.transaction(Bytes::from("C2")).await });
-        }
-        while let Some(_res) = joinset.join_next().await {}
+            let arc_coordinator1 = Arc::new(coordinator1);
+            let arc_coordinator2 = Arc::new(coordinator2);
+
+            for _ in 0..1000 {
+                let coordinator1 = arc_coordinator1.clone();
+                let coordinator2 = arc_coordinator2.clone();
+                joinset.spawn(async move { coordinator1.transaction(Bytes::from("C1")).await });
+                joinset.spawn(async move { coordinator2.transaction(Bytes::from("C2")).await });
+            }
+            while let Some(res) = joinset.join_next().await {
+                res.unwrap().unwrap();
+            }
+
+            println!("Done");
+        });
+        runtime.shutdown_background();
     }
 
     #[test]

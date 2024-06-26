@@ -1,6 +1,6 @@
 use crate::event_store::EventStore;
 use crate::node::{Member, NodeInfo};
-use crate::utils::{into_dependency, IntoInner};
+use crate::utils::{into_dependency, IntoInner, T, T0};
 use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::consensus_transport_client::ConsensusTransportClient;
@@ -35,9 +35,9 @@ trait StateMachine {
 pub struct TransactionStateMachine {
     pub state: State,
     pub transaction: Bytes,
-    pub t_zero: MonoTime,
-    pub t: MonoTime,
-    pub dependencies: BTreeMap<MonoTime, MonoTime>, // Consists of t and t_zero
+    pub t_zero: T0,
+    pub t: T,
+    pub dependencies: BTreeMap<T, T0>, // Consists of t and t_zero
 }
 
 impl StateMachine for Coordinator {
@@ -50,8 +50,8 @@ impl StateMachine for Coordinator {
         self.transaction = TransactionStateMachine {
             state: State::PreAccepted,
             transaction,
-            t_zero,
-            t: t_zero,
+            t_zero: T0(t_zero),
+            t: T(t_zero),
             dependencies: BTreeMap::new(),
         };
     }
@@ -61,13 +61,13 @@ impl StateMachine for Coordinator {
         // Collect deps by t_zero and only keep the max t
         let mut dependencies_inverted = HashMap::new(); // TZero -> MaxT
         for response in responses {
-            let t_response = MonoTime::try_from(response.timestamp.as_slice())?;
+            let t_response = T(MonoTime::try_from(response.timestamp.as_slice())?);
             if t_response > self.transaction.t {
                 self.transaction.t = t_response;
             }
             for dep in response.dependencies.iter() {
-                let t = MonoTime::try_from(dep.timestamp.as_slice())?;
-                let t_zero = MonoTime::try_from(dep.timestamp_zero.as_slice())?;
+                let t = T(MonoTime::try_from(dep.timestamp.as_slice())?);
+                let t_zero = T0(MonoTime::try_from(dep.timestamp_zero.as_slice())?);
                 if t_zero != self.transaction.t_zero {
                     let entry = dependencies_inverted.entry(t_zero).or_insert(t);
                     if t > *entry {
@@ -99,8 +99,8 @@ impl StateMachine for Coordinator {
         let mut dependencies_inverted = HashMap::new(); // TZero -> MaxT
         for response in responses {
             for dep in response.dependencies.iter() {
-                let t = MonoTime::try_from(dep.timestamp.as_slice())?;
-                let t_zero = MonoTime::try_from(dep.timestamp_zero.as_slice())?;
+                let t = T(MonoTime::try_from(dep.timestamp.as_slice())?);
+                let t_zero = T0(MonoTime::try_from(dep.timestamp_zero.as_slice())?);
                 if t_zero != self.transaction.t_zero {
                     let entry = dependencies_inverted.entry(t_zero).or_insert(t);
                     if t > *entry {
@@ -139,23 +139,27 @@ impl StateMachine for Coordinator {
             .event_store
             .lock()
             .await
-            .create_wait_handles(
-                self.transaction.dependencies.clone(),
-                self.transaction.t_zero,
-            )
+            .create_wait_handles(self.transaction.dependencies.clone(), self.transaction.t)
             .await?;
 
-        while let Some(x) = handles.join_next().await {
+        let initial_len = handles.0.len();
+        let mut counter = 0;
+        while let Some(x) = handles.0.join_next().await {
             if x.unwrap().is_err() {
+                let store = &self.event_store.lock().await.events;
+                //
+                let store = store
+                    .iter()
+                    .filter(|(_, v)| v.state.borrow().0 != State::Applied)
+                    .map(|(k, v)| (k, *v.state.borrow()))
+                    .collect::<Vec<_>>();
                 println!(
-                    "PANIC COORD: T0: {:?}, T: {:?}, C: {:?} deps: {:?}",
-                    self.transaction.t_zero,
-                    self.transaction.t,
-                    self.transaction.transaction,
-                    self.transaction.dependencies
+                    "PANIC COORD: T0: {:?}, T: {:?} deps: {:?}, store: {:?} | {:?} / {}",
+                    self.transaction.t_zero, self.transaction.t, handles.1, store, counter, initial_len
                 );
                 panic!()
             }
+            counter += 1;
             // TODO: Recovery when timeout
         }
         Ok(())
@@ -229,12 +233,12 @@ impl Coordinator {
         //  PRE ACCEPT STATE
         //
 
-        let start = time::Instant::now();
+        let _start = time::Instant::now();
 
         // Create the PreAccept msg
         let pre_accept_request = PreAcceptRequest {
             node: self.node.id.to_string(),
-            timestamp_zero: self.transaction.t_zero.into(),
+            timestamp_zero: (*self.transaction.t_zero).into(),
             event: self.transaction.transaction.clone().into(),
         };
 
@@ -246,13 +250,13 @@ impl Coordinator {
         )
         .await?;
 
-        println!(
-            "PA: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
-            self.transaction.t_zero,
-            self.transaction.t,
-            self.transaction.transaction,
-            start.elapsed()
-        );
+        // println!(
+        //     "PA: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
+        //     self.transaction.t_zero,
+        //     self.transaction.t,
+        //     self.transaction.transaction,
+        //     start.elapsed()
+        // );
 
         // Collect responses
         self.pre_accept(
@@ -263,25 +267,25 @@ impl Coordinator {
         )
         .await?;
 
-        let commit_responses = if self.transaction.t_zero == self.transaction.t {
+        let commit_responses = if *self.transaction.t_zero == *self.transaction.t {
             //
             //   FAST PATH
             //
 
-            println!(
-                "FP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}, deps: {:?}",
-                self.transaction.t_zero,
-                self.transaction.t,
-                self.transaction.transaction,
-                start.elapsed(),
-                self.transaction.dependencies
-            );
+            // println!(
+            //     "FP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}, deps: {:?}",
+            //     self.transaction.t_zero,
+            //     self.transaction.t,
+            //     self.transaction.transaction,
+            //     start.elapsed(),
+            //     self.transaction.dependencies
+            // );
             // Commit
             let commit_request = CommitRequest {
                 node: self.node.id.to_string(),
                 event: self.transaction.transaction.clone().into(),
-                timestamp_zero: self.transaction.t_zero.into(),
-                timestamp: self.transaction.t.into(),
+                timestamp_zero: (*self.transaction.t_zero).into(),
+                timestamp: (*self.transaction.t).into(),
                 dependencies: into_dependency(self.transaction.dependencies.clone()),
             };
 
@@ -290,13 +294,13 @@ impl Coordinator {
                 Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request), true)
             );
 
-            println!(
-                "C FP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
-                self.transaction.t_zero,
-                self.transaction.t,
-                self.transaction.transaction,
-                start.elapsed()
-            );
+            // println!(
+            //     "C FP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
+            //     self.transaction.t_zero,
+            //     self.transaction.t,
+            //     self.transaction.transaction,
+            //     start.elapsed()
+            // );
 
             commit_result?;
             broadcast_result?
@@ -306,19 +310,19 @@ impl Coordinator {
             //
 
             // Accept
-            println!(
-                "A SP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
-                self.transaction.t_zero,
-                self.transaction.t,
-                self.transaction.transaction,
-                start.elapsed()
-            );
+            // println!(
+            //     "A SP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
+            //     self.transaction.t_zero,
+            //     self.transaction.t,
+            //     self.transaction.transaction,
+            //     start.elapsed()
+            // );
 
             let accept_request = AcceptRequest {
                 node: self.node.id.to_string(),
                 event: self.transaction.transaction.clone().into(),
-                timestamp_zero: self.transaction.t_zero.into(),
-                timestamp: self.transaction.t.into(),
+                timestamp_zero: (*self.transaction.t_zero).into(),
+                timestamp: (*self.transaction.t).into(),
                 dependencies: into_dependency(self.transaction.dependencies.clone()),
             };
             let accept_responses =
@@ -333,21 +337,21 @@ impl Coordinator {
             )
             .await?;
 
-            println!(
-                "A -> C SP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}, deps: {:?}",
-                self.transaction.t_zero,
-                self.transaction.t,
-                self.transaction.transaction,
-                start.elapsed(),
-                self.transaction.dependencies
-            );
+            // println!(
+            //     "A -> C SP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}, deps: {:?}",
+            //     self.transaction.t_zero,
+            //     self.transaction.t,
+            //     self.transaction.transaction,
+            //     start.elapsed(),
+            //     self.transaction.dependencies
+            // );
 
             // Commit
             let commit_request = CommitRequest {
                 node: self.node.id.to_string(),
                 event: self.transaction.transaction.clone().into(),
-                timestamp_zero: self.transaction.t_zero.into(),
-                timestamp: self.transaction.t.into(),
+                timestamp_zero: (*self.transaction.t_zero).into(),
+                timestamp: (*self.transaction.t).into(),
                 dependencies: into_dependency(self.transaction.dependencies.clone()),
             };
 
@@ -355,13 +359,13 @@ impl Coordinator {
                 self.commit(),
                 Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request), true)
             );
-            println!(
-                "C SP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
-                self.transaction.t_zero,
-                self.transaction.t,
-                self.transaction.transaction,
-                start.elapsed()
-            );
+            // println!(
+            //     "C SP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
+            //     self.transaction.t_zero,
+            //     self.transaction.t,
+            //     self.transaction.transaction,
+            //     start.elapsed()
+            // );
 
             commit_result?;
             broadcast_result?
@@ -370,13 +374,13 @@ impl Coordinator {
         //
         // Execution
         //
-        println!(
-            "E: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
-            self.transaction.t_zero,
-            self.transaction.t,
-            self.transaction.transaction,
-            start.elapsed()
-        );
+        // println!(
+        //     "E: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
+        //     self.transaction.t_zero,
+        //     self.transaction.t,
+        //     self.transaction.transaction,
+        //     start.elapsed()
+        // );
 
         self.execute(
             &commit_responses
@@ -389,19 +393,19 @@ impl Coordinator {
         let apply_request = ApplyRequest {
             node: self.node.id.to_string(),
             event: self.transaction.transaction.to_vec(),
-            timestamp: self.transaction.t.into(),
-            timestamp_zero: self.transaction.t_zero.into(),
+            timestamp: (*self.transaction.t).into(),
+            timestamp_zero: (*self.transaction.t_zero).into(),
             dependencies: into_dependency(self.transaction.dependencies.clone()),
             result: vec![], // Theoretically not needed right?
         };
 
-        println!(
-            "E Broadcast: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
-            self.transaction.t_zero,
-            self.transaction.t,
-            self.transaction.transaction,
-            start.elapsed()
-        );
+        // println!(
+        //     "E Broadcast: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
+        //     self.transaction.t_zero,
+        //     self.transaction.t,
+        //     self.transaction.transaction,
+        //     start.elapsed()
+        // );
 
         Coordinator::broadcast(&members, ConsensusRequest::Apply(apply_request), false).await?; // This should not be awaited
 
@@ -489,7 +493,7 @@ impl Coordinator {
                 result.push(response??);
                 counter += 1;
                 if counter >= majority {
-                    break;
+                    //break;
                 }
             }
         } else {
