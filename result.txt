@@ -1,0 +1,76 @@
+warning: unused import: `Ref`
+ --> crates/consensus/src/event_store.rs:6:32
+  |
+6 | use tokio::sync::watch::{self, Ref};
+  |                                ^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `std::borrow::Borrow`
+  --> crates/consensus/src/coordinator.rs:12:5
+   |
+12 | use std::borrow::Borrow;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `request`
+  --> crates/consensus/src/lib.rs:21:13
+   |
+21 |             request: BroadcastRequest,
+   |             ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_request`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+warning: `consensus` (lib) generated 2 warnings (run `cargo fix --lib -p consensus` to apply 1 suggestion)
+warning: `consensus` (lib test) generated 3 warnings (2 duplicates)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (target/release/deps/consensus-d19c0043a241c15f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/network_mock.rs (target/release/deps/network_mock-54950d3824ff4e31)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/consensus_transport-059e58ef60c3d214)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/monotime-9c9f0f435471b041)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/persistence-0867a9f88980c82d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running consensus_e2e.rs (target/release/deps/consensus_e2e-09c7b44a059b07cc)
+
+running 1 test
+test tests::parallel_execution ... FAILED
+
+failures:
+
+---- tests::parallel_execution stdout ----
+thread 'tests::parallel_execution' panicked at tests/consensus_e2e.rs:61:13:
+assertion `left == right` failed
+  left: {T0(MonoTime(483973261758351566258463956008960)): T(MonoTime(483973261758467701707959160799232)), T0(MonoTime(483973261758353478599455728205824)): T(MonoTime(483973261758482437204464940351488)), T0(MonoTime(483973261758357226720245607301120)): T(MonoTime(483973261758494676862352226516992)), T0(MonoTime(483973261758360272279493616599040)): T(MonoTime(483973261758523425872048522788864)), T0(MonoTime(483973261758366220127226489470976)): T(MonoTime(483973261758563932091522023161856)), T0(MonoTime(483973261758367929243285076574208)): T(MonoTime(483973261758550090841017253363712)), T0(MonoTime(483973261758368648411850572300288)): T(MonoTime(483973261758537873701128104050688)), T0(MonoTime(483973261758373865832018881019904)): T(MonoTime(483973261758564933579489159675904)), T0(MonoTime(483973261758375162868711563722752)): T(MonoTime(483973261758569403402119324893184))}
+ right: {T0(MonoTime(483973261758351566258463956008960)): T(MonoTime(483973261758467701707959160799232)), T0(MonoTime(483973261758353478599455728205824)): T(MonoTime(483973261758482437204464940351488)), T0(MonoTime(483973261758357226720245607301120)): T(MonoTime(483973261758494676862352226516992)), T0(MonoTime(483973261758360272279493616599040)): T(MonoTime(483973261758523425872048522788864)), T0(MonoTime(483973261758366220127226489470976)): T(MonoTime(483973261758563932091522023161856)), T0(MonoTime(483973261758367929243285076574208)): T(MonoTime(483973261758568864659013900697600)), T0(MonoTime(483973261758368648411850572300288)): T(MonoTime(483973261758537873701128104050688)), T0(MonoTime(483973261758373865832018881019904)): T(MonoTime(483973261758564933579489159675904)), T0(MonoTime(483973261758375162868711563722752)): T(MonoTime(483973261758569403402119324893184))}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::parallel_execution
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p synevi_tests --test consensus_e2e`

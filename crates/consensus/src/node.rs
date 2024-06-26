@@ -3,17 +3,11 @@ use crate::event_store::EventStore;
 use crate::replica::ReplicaConfig;
 use anyhow::Result;
 use bytes::Bytes;
-use consensus_transport::network::Network;
+use consensus_transport::network::{Network, NodeInfo};
 use diesel_ulid::DieselUlid;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::instrument;
-
-#[derive(Clone, Debug)]
-pub struct NodeInfo {
-    pub id: DieselUlid,
-    pub serial: u16,
-}
 
 pub struct Node {
     info: Arc<NodeInfo>,
@@ -64,5 +58,10 @@ impl Node {
         );
         coordinator.transaction(transaction).await?;
         Ok(())
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    pub fn get_event_store(&self) -> Arc<Mutex<EventStore>> {
+        self.event_store.clone()
     }
 }

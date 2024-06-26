@@ -87,6 +87,13 @@ impl MonoTime {
             TimeResult::Time(time)
         }
     }
+
+    #[cfg(feature = "unsafe_time")]
+    pub fn new_with_time(nanos: u128, seq: u16, node: u16) -> Self {
+        let time_stamp = nanos << 48 | (seq as u128) << 32 | (node as u128) << 16;
+        assert!(time_stamp.trailing_zeros() >= 16);
+        MonoTime(time_stamp)
+    }
 }
 
 impl From<MonoTime> for [u8; 16] {

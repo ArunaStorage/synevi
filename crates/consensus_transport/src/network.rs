@@ -15,11 +15,7 @@ use tonic::transport::{Channel, Server};
 
 #[async_trait::async_trait]
 pub trait NetworkInterface: std::fmt::Debug + Send + Sync {
-    async fn broadcast(
-        &self,
-        request: BroadcastRequest,
-        await_majority: bool,
-    ) -> Result<Vec<BroadcastResponse>>;
+    async fn broadcast(&self, request: BroadcastRequest) -> Result<Vec<BroadcastResponse>>;
 }
 
 #[async_trait::async_trait]
@@ -125,11 +121,7 @@ impl Network for NetworkConfig {
 
 #[async_trait::async_trait]
 impl NetworkInterface for NetworkSet {
-    async fn broadcast(
-        &self,
-        request: BroadcastRequest,
-        await_majority: bool,
-    ) -> Result<Vec<BroadcastResponse>> {
+    async fn broadcast(&self, request: BroadcastRequest) -> Result<Vec<BroadcastResponse>> {
         //dbg!("[broadcast]: Start");
         let mut responses: JoinSet<Result<BroadcastResponse>> = JoinSet::new();
         let mut result = Vec::new();
@@ -138,6 +130,7 @@ impl NetworkInterface for NetworkSet {
         // Call match only once ...
 
         //dbg!("[broadcast]: Create clients & requests");
+        let mut await_majority = true;
         match &request {
             BroadcastRequest::PreAccept(req) => {
                 // ... and then iterate over every member ...
@@ -178,6 +171,7 @@ impl NetworkInterface for NetworkSet {
                 }
             }
             BroadcastRequest::Apply(req) => {
+                await_majority = false;
                 for replica in &self.members {
                     let channel = replica.channel.clone();
                     let request = req.clone();
@@ -200,11 +194,16 @@ impl NetworkInterface for NetworkSet {
                 result.push(response??);
                 counter += 1;
                 if counter >= majority {
-                    //break;
+                    break;
                 }
             }
+            //tokio::spawn(async move { while responses.join_next().await.is_some() {} });
         } else {
-            tokio::spawn(async move { while responses.join_next().await.is_some() {} });
+            //tokio::spawn(async move {
+            while let Some(r) = responses.join_next().await {
+                r.unwrap().unwrap();
+            }
+            //});
         }
         Ok(result)
     }

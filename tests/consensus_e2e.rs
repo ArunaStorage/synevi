@@ -2,11 +2,13 @@
 mod tests {
     use bytes::Bytes;
     use consensus::node::Node;
+    use consensus::utils::{T, T0};
+    use consensus_transport::consensus_transport::State;
     use diesel_ulid::DieselUlid;
+    use std::collections::BTreeMap;
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
-    
 
     #[tokio::test(flavor = "multi_thread")]
     async fn parallel_execution() {
@@ -36,7 +38,7 @@ mod tests {
 
         let arc_coordinator = Arc::new(coordinator);
 
-        for _ in 0..1000 {
+        for _ in 0..10 {
             let coordinator = arc_coordinator.clone();
             joinset.spawn(async move {
                 coordinator
@@ -46,6 +48,43 @@ mod tests {
         }
         while let Some(res) = joinset.join_next().await {
             res.unwrap().unwrap();
+        }
+
+        //tokio::time::sleep(Duration::from_millis(100)).await;
+        let coordinator_store: BTreeMap<T0, T> = arc_coordinator
+            .get_event_store()
+            .lock()
+            .await
+            .events
+            .clone().into_values().map(|e| (e.t_zero, e.t))
+            .collect();
+        assert!(arc_coordinator
+            .get_event_store()
+            .lock()
+            .await
+            .events
+            .clone()
+            .iter()
+            .all(|(_, e)| (e.state.borrow()).0 == State::Applied));
+
+        for node in nodes {
+            let node_store: BTreeMap<T0, T> = node
+                .get_event_store()
+                .lock()
+                .await
+                .events
+                .clone().into_values().map(|e| (e.t_zero, e.t))
+                .collect();
+            assert!(node
+                .get_event_store()
+                .lock()
+                .await
+                .events
+                .clone()
+                .iter()
+                .all(|(_, e)| (e.state.borrow()).0 == State::Applied));
+            assert_eq!(coordinator_store.len(), node_store.len());
+            assert_eq!(coordinator_store, node_store);
         }
     }
 }

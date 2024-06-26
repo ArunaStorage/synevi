@@ -19,9 +19,9 @@ pub struct EventStore {
     // cons:
     //  - Updates need to consider both maps (when t is changing)
     //  - Events and mappings need clean up cron jobs and some form of consolidation
-    pub events: BTreeMap<T0, Event>, // Key: t0, value: Event
-    mappings: BTreeMap<T, T0>,       // Key: t, value t0
-    last_applied: T,                 // t of last applied entry
+    pub events: BTreeMap<T0, Event>,      // Key: t0, value: Event
+    pub(crate) mappings: BTreeMap<T, T0>, // Key: t, value t0
+    pub(crate) last_applied: T,           // t of last applied entry
 }
 
 #[derive(Clone, Debug)]
@@ -110,50 +110,16 @@ impl EventStore {
         let old_event = self.events.entry(event.t_zero).or_insert(event.clone());
 
         // assert!(&old_event.t <= &event.t ); Can happen if minority is left behind
-
         if old_event != &event {
             self.mappings.remove(&old_event.t);
             old_event.t = event.t;
             old_event.dependencies = event.dependencies;
             old_event.event = event.event;
-            self.mappings.insert(event.t, event.t_zero);
-            match *event.state.borrow() {
-                (State::Commited, _) => {
-                    old_event.state.send_replace((State::Commited, event.t));
-                }
-                (State::Applied, _) => {
-                    self.last_applied = event.t;
-                    old_event.state.send_replace((State::Applied, event.t));
-                }
-                _ => {}
-            }
-        } else {
-            match *event.state.borrow() {
-                (State::Commited, _) => {
-                    old_event.state.send_replace((State::Commited, event.t));
-                }
-                (State::Applied, _) => {
-                    self.last_applied = event.t;
-                    old_event.state.send_replace((State::Applied, event.t));
-                }
-                _ => {}
-            }
-            self.mappings.insert(event.t, event.t_zero);
-        };
-    }
-
-    #[instrument(level = "trace")]
-    pub async fn get(&self, t_zero: &T0) -> Option<Event> {
-        self.events.get(t_zero).cloned()
-    }
-
-    #[instrument(level = "trace")]
-    pub async fn last(&self) -> Option<Event> {
-        if let Some((_, t_zero)) = self.mappings.last_key_value() {
-            self.get(t_zero).await
-        } else {
-            None
         }
+
+        self.mappings.insert(event.t, event.t_zero);
+        let new_state: (State, T) = *event.state.borrow();
+        old_event.state.send_modify(|old| *old = new_state)
     }
 
     #[instrument(level = "trace")]
@@ -198,8 +164,10 @@ impl EventStore {
             // Check if dep is known
             if let Some(dep) = dep {
                 // Dependency known
-                result_vec.push((*dep_t_zero, *dep_t));
-                notifies.spawn(wait_for(t, dep.state.clone()));
+                if dep.state.borrow().0 != State::Applied {
+                    result_vec.push((*dep_t_zero, *dep_t));
+                    notifies.spawn(wait_for(t, dep.state.clone()));
+                }
             } else {
                 // Dependency unknown
                 result_vec.push((*dep_t_zero, *dep_t));

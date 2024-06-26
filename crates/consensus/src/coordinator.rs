@@ -1,5 +1,4 @@
 use crate::event_store::EventStore;
-use crate::node::NodeInfo;
 use crate::utils::{into_dependency, T, T0};
 use anyhow::Result;
 use bytes::Bytes;
@@ -7,7 +6,7 @@ use consensus_transport::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, CommitRequest, CommitResponse, PreAcceptRequest,
     PreAcceptResponse, State,
 };
-use consensus_transport::network::{BroadcastRequest, NetworkInterface};
+use consensus_transport::network::{BroadcastRequest, NetworkInterface, NodeInfo};
 use consensus_transport::utils::IntoInner;
 use monotime::MonoTime;
 use std::collections::{BTreeMap, HashMap};
@@ -31,7 +30,7 @@ trait StateMachine {
     async fn execute(&mut self, responses: &[CommitResponse]) -> Result<()>;
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TransactionStateMachine {
     pub state: State,
     pub transaction: Bytes,
@@ -145,23 +144,61 @@ impl StateMachine for Coordinator {
         let initial_len = handles.0.len();
         let mut counter = 0;
         while let Some(x) = handles.0.join_next().await {
-            if x.unwrap().is_err() {
+            if let Err(e) = x.unwrap() {
                 let store = &self.event_store.lock().await.events;
                 //
-                let store = store
+                let store_filtered = store
                     .iter()
-                    .filter(|(_, v)| v.state.borrow().0 != State::Applied)
                     .map(|(k, v)| (k, *v.state.borrow()))
                     .collect::<Vec<_>>();
+
+                let not_in_vec: Vec<_> = self
+                    .transaction
+                    .dependencies
+                    .iter()
+                    .filter(|(_, b)| store.get(b).is_none())
+                    .collect();
+
+                let smallest_t = store
+                    .iter()
+                    .filter(|(_, b)| b.state.borrow().0 <= State::Commited)
+                    .min_by(|(_, event1), (_, event2)| event1.t.cmp(&event2.t))
+                    .unwrap()
+                    .1;
+
+                let filtered_smallest_t: Vec<_> = smallest_t
+                    .dependencies
+                    .iter()
+                    .filter(|(a, b)| {
+                        store.get(b).unwrap().state.borrow().0 != State::Applied
+                            && *a < &smallest_t.t
+                    })
+                    .collect();
+
+                println!("PANIC COORD");
                 println!(
-                    "PANIC COORD: T0: {:?}, T: {:?} deps: {:?}, store: {:?} | {:?} / {}",
-                    self.transaction.t_zero,
-                    self.transaction.t,
-                    handles.1,
-                    store,
-                    counter,
-                    initial_len
+                    "T0: {:?}, T: {:?}, NOT IN EV: {:?}, {:?} / {}",
+                    self.transaction.t_zero, self.transaction.t, not_in_vec, counter, initial_len
                 );
+                println!("Error: {:?}", e);
+                println!("Dependencies: {:?}", self.transaction.dependencies);
+                println!("Store: {:?}", store_filtered);
+                println!("Hanger: {:?}", smallest_t);
+                println!("Hanger_not_applied: {:?}", filtered_smallest_t);
+
+                let mut handles = self
+                    .event_store
+                    .lock()
+                    .await
+                    .create_wait_handles(smallest_t.dependencies.clone(), smallest_t.t)
+                    .await?;
+
+                while let Some(x) = handles.0.join_next().await {
+                    if let Err(e) = x.unwrap() {
+                        println!("Smallest T hangs on: {:?}", e);
+                    }
+                }
+                println!("No reason to wait!");
                 panic!()
             }
             counter += 1;
@@ -207,12 +244,12 @@ impl Coordinator {
         //
 
         // Create a new transaction state
+        // Question: When should this be persisted?
         self.init(transaction).await;
 
         //
         //  PRE ACCEPT STATE
         //
-
         let network_interface_clone = self.network_interface.clone();
 
         let _start = time::Instant::now();
@@ -228,7 +265,7 @@ impl Coordinator {
 
         let pre_accept_responses = self
             .network_interface
-            .broadcast(BroadcastRequest::PreAccept(pre_accept_request), true)
+            .broadcast(BroadcastRequest::PreAccept(pre_accept_request))
             .await?;
 
         // println!(
@@ -272,7 +309,7 @@ impl Coordinator {
 
             let (commit_result, broadcast_result) = tokio::join!(
                 self.commit(),
-                network_interface_clone.broadcast(BroadcastRequest::Commit(commit_request), true)
+                network_interface_clone.broadcast(BroadcastRequest::Commit(commit_request))
             );
 
             // println!(
@@ -308,7 +345,7 @@ impl Coordinator {
             };
             let accept_responses = self
                 .network_interface
-                .broadcast(BroadcastRequest::Accept(accept_request), true)
+                .broadcast(BroadcastRequest::Accept(accept_request))
                 .await?;
 
             self.accept(
@@ -339,7 +376,7 @@ impl Coordinator {
 
             let (commit_result, broadcast_result) = tokio::join!(
                 self.commit(),
-                network_interface_clone.broadcast(BroadcastRequest::Commit(commit_request), true)
+                network_interface_clone.broadcast(BroadcastRequest::Commit(commit_request))
             );
             // println!(
             //     "C SP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
@@ -390,7 +427,7 @@ impl Coordinator {
         // );
 
         self.network_interface
-            .broadcast(BroadcastRequest::Apply(apply_request), false)
+            .broadcast(BroadcastRequest::Apply(apply_request))
             .await?; // This should not be awaited
 
         Ok(())
@@ -399,5 +436,203 @@ impl Coordinator {
     #[instrument(level = "trace")]
     async fn recover() {
         todo!("Implement recovery protocol and call when failing")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Coordinator;
+    use crate::{
+        coordinator::{StateMachine, TransactionStateMachine},
+        event_store::{Event, EventStore},
+        tests::NetworkMock,
+        utils::{T, T0},
+    };
+    use bytes::Bytes;
+    use consensus_transport::{
+        consensus_transport::{Dependency, PreAcceptResponse, State},
+        network::NodeInfo,
+    };
+    use diesel_ulid::DieselUlid;
+    use monotime::MonoTime;
+    use std::{collections::BTreeMap, sync::Arc, vec};
+    use tokio::sync::Mutex;
+
+    #[tokio::test]
+    async fn init_test() {
+        let event_store = Arc::new(Mutex::new(EventStore::init()));
+        let mut coordinator = Coordinator::new(
+            Arc::new(NodeInfo {
+                id: DieselUlid::generate(),
+                serial: 0,
+            }),
+            Arc::new(NetworkMock {}),
+            event_store,
+        );
+        coordinator.init(Bytes::from("test")).await;
+
+        assert_eq!(coordinator.transaction.state, State::PreAccepted);
+        assert_eq!(coordinator.transaction.transaction, Bytes::from("test"));
+        assert_eq!(*coordinator.transaction.t_zero, *coordinator.transaction.t);
+        assert_eq!(coordinator.transaction.t_zero.0.get_node(), 0);
+        assert_eq!(coordinator.transaction.t_zero.0.get_seq(), 0);
+        assert!(coordinator.transaction.dependencies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pre_accept_fast_path_test() {
+        let event_store = Arc::new(Mutex::new(EventStore::init()));
+
+        let state_machine = TransactionStateMachine {
+            state: State::PreAccepted,
+            transaction: Bytes::new(),
+            t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
+            t: T(MonoTime::new_with_time(10u128, 0, 0)),
+            dependencies: BTreeMap::default(),
+        };
+        let mut coordinator = Coordinator {
+            node: Arc::new(NodeInfo {
+                id: DieselUlid::generate(),
+                serial: 0,
+            }),
+            network_interface: Arc::new(NetworkMock {}),
+            event_store: event_store.clone(),
+            transaction: state_machine.clone(),
+        };
+
+        let preaccept_ok = vec![
+            PreAcceptResponse {
+                node: "a".to_string(),
+                timestamp_zero: MonoTime::new_with_time(10u128, 0, 0).into(),
+                timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
+                dependencies: vec![],
+            };
+            3
+        ];
+
+        coordinator.pre_accept(&preaccept_ok).await.unwrap();
+        assert_eq!(coordinator.transaction, state_machine);
+        assert_eq!(event_store.lock().await.events.len(), 1);
+        assert_eq!(event_store.lock().await.mappings.len(), 1);
+        assert_eq!(event_store.lock().await.last_applied, T::default());
+        assert_eq!(
+            event_store.lock().await.events.iter().next().unwrap().1,
+            &Event {
+                state: tokio::sync::watch::Sender::new((
+                    State::PreAccepted,
+                    T(MonoTime::new_with_time(10u128, 0, 0))
+                )),
+                event: Bytes::new(),
+                t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
+                t: T(MonoTime::new_with_time(10u128, 0, 0)),
+                dependencies: BTreeMap::default(),
+            }
+        );
+
+        // FastPath with dependencies
+
+        let preaccept_ok = vec![
+            PreAcceptResponse {
+                node: "a".to_string(),
+                timestamp_zero: MonoTime::new_with_time(10u128, 0, 0).into(),
+                timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
+                dependencies: vec![Dependency {
+                    timestamp_zero: MonoTime::new_with_time(1u128, 0, 0).into(),
+                    timestamp: MonoTime::new_with_time(1u128, 0, 0).into(),
+                }],
+            },
+            PreAcceptResponse {
+                node: "a".to_string(),
+                timestamp_zero: MonoTime::new_with_time(10u128, 0, 0).into(),
+                timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
+                dependencies: vec![
+                    Dependency {
+                        timestamp_zero: MonoTime::new_with_time(1u128, 0, 0).into(),
+                        timestamp: MonoTime::new_with_time(1u128, 0, 0).into(),
+                    },
+                    Dependency {
+                        timestamp_zero: MonoTime::new_with_time(3u128, 0, 0).into(),
+                        timestamp: MonoTime::new_with_time(3u128, 0, 0).into(),
+                    },
+                ],
+            },
+            PreAcceptResponse {
+                node: "a".to_string(),
+                timestamp_zero: MonoTime::new_with_time(10u128, 0, 0).into(),
+                timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
+                dependencies: vec![
+                    Dependency {
+                        timestamp_zero: MonoTime::new_with_time(1u128, 0, 0).into(),
+                        timestamp: MonoTime::new_with_time(1u128, 0, 0).into(),
+                    },
+                    Dependency {
+                        timestamp_zero: MonoTime::new_with_time(2u128, 0, 0).into(),
+                        timestamp: MonoTime::new_with_time(2u128, 0, 0).into(),
+                    },
+                ],
+            },
+        ];
+
+        coordinator.pre_accept(&preaccept_ok).await.unwrap();
+
+        let state_machine = TransactionStateMachine {
+            state: State::PreAccepted,
+            transaction: Bytes::new(),
+            t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
+            t: T(MonoTime::new_with_time(10u128, 0, 0)),
+            dependencies: BTreeMap::from_iter(
+                [
+                    (
+                        T(MonoTime::new_with_time(1u128, 0, 0)),
+                        T0(MonoTime::new_with_time(1u128, 0, 0)),
+                    ),
+                    (
+                        T(MonoTime::new_with_time(2u128, 0, 0)),
+                        T0(MonoTime::new_with_time(2u128, 0, 0)),
+                    ),
+                    (
+                        T(MonoTime::new_with_time(3u128, 0, 0)),
+                        T0(MonoTime::new_with_time(3u128, 0, 0)),
+                    ),
+                ]
+                .iter()
+                .cloned(),
+            ),
+        };
+
+        assert_eq!(coordinator.transaction, state_machine);
+        assert_eq!(event_store.lock().await.events.len(), 1);
+        assert_eq!(event_store.lock().await.mappings.len(), 1);
+        assert_eq!(event_store.lock().await.last_applied, T::default());
+        assert_eq!(
+            event_store.lock().await.events.iter().next().unwrap().1,
+            &Event {
+                state: tokio::sync::watch::Sender::new((
+                    State::PreAccepted,
+                    T(MonoTime::new_with_time(10u128, 0, 0))
+                )),
+                event: Bytes::new(),
+                t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
+                t: T(MonoTime::new_with_time(10u128, 0, 0)),
+                dependencies: BTreeMap::from_iter(
+                    [
+                        (
+                            T(MonoTime::new_with_time(1u128, 0, 0)),
+                            T0(MonoTime::new_with_time(1u128, 0, 0))
+                        ),
+                        (
+                            T(MonoTime::new_with_time(2u128, 0, 0)),
+                            T0(MonoTime::new_with_time(2u128, 0, 0))
+                        ),
+                        (
+                            T(MonoTime::new_with_time(3u128, 0, 0)),
+                            T0(MonoTime::new_with_time(3u128, 0, 0))
+                        )
+                    ]
+                    .iter()
+                    .cloned()
+                ),
+            }
+        );
     }
 }
