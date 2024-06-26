@@ -155,7 +155,12 @@ impl StateMachine for Coordinator {
                     .collect::<Vec<_>>();
                 println!(
                     "PANIC COORD: T0: {:?}, T: {:?} deps: {:?}, store: {:?} | {:?} / {}",
-                    self.transaction.t_zero, self.transaction.t, handles.1, store, counter, initial_len
+                    self.transaction.t_zero,
+                    self.transaction.t,
+                    handles.1,
+                    store,
+                    counter,
+                    initial_len
                 );
                 panic!()
             }

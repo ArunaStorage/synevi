@@ -45,6 +45,11 @@ impl PartialEq for Event {
     }
 }
 
+type WaitHandleResult = Result<(
+    JoinSet<std::result::Result<(), anyhow::Error>>,
+    Vec<(T0, T)>,
+)>;
+
 impl EventStore {
     #[instrument(level = "trace")]
     pub fn init() -> Self {
@@ -106,7 +111,6 @@ impl EventStore {
 
         // assert!(&old_event.t <= &event.t ); Can happen if minority is left behind
 
-
         if old_event != &event {
             self.mappings.remove(&old_event.t);
             old_event.t = event.t;
@@ -164,8 +168,8 @@ impl EventStore {
                     .range(last_t0..&T0(**t))
                     .filter_map(|(_, v)| {
                         if v.t_zero == *t_zero {
-                            return None;
-                        }else{
+                            None
+                        } else {
                             Some(Dependency {
                                 timestamp: (*v.t).into(),
                                 timestamp_zero: (*v.t_zero).into(),
@@ -178,15 +182,13 @@ impl EventStore {
         vec![]
     }
 
+
     #[instrument(level = "trace")]
     pub async fn create_wait_handles(
         &mut self,
         dependencies: BTreeMap<T, T0>,
         t: T,
-    ) -> Result<(
-        JoinSet<std::result::Result<(), anyhow::Error>>,
-        Vec<(T0, T)>,
-    )> {
+    ) -> WaitHandleResult {
         // TODO: Create custom error
         // Collect notifies
         let mut notifies = JoinSet::new();

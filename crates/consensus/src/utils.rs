@@ -22,9 +22,9 @@ impl Deref for T0 {
     }
 }
 
-impl Into<Vec<u8>> for T0 {
-    fn into(self) -> Vec<u8> {
-        self.0.into()
+impl From<T0> for Vec<u8> {
+    fn from(val: T0) -> Self {
+        val.0.into()
     }
 }
 
@@ -37,9 +37,9 @@ impl Deref for T {
     }
 }
 
-impl Into<Vec<u8>> for T {
-    fn into(self) -> Vec<u8> {
-        self.0.into()
+impl From<T> for Vec<u8> {
+    fn from(val: T) -> Self {
+        val.0.into()
     }
 }
 
@@ -143,14 +143,16 @@ pub fn wait_for(
         .await;
         match result {
             Ok(e) => match e {
-                Err(_) => {
-                    Err(anyhow!("receive error"))
-                }
+                Err(_) => Err(anyhow!("receive error")),
                 Ok(_) => Ok(()),
             },
             Err(_) => {
-                let result = rx_clone.borrow().clone();
-                Err(anyhow!("Timout for T: {:?} with state: {:?}", t_request, result))
+                let result = *rx_clone.borrow();
+                Err(anyhow!(
+                    "Timout for T: {:?} with state: {:?}",
+                    t_request,
+                    result
+                ))
             }
         }
     }

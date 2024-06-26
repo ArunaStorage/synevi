@@ -66,7 +66,12 @@ impl ConsensusTransport for Replica {
 
         // Should this be saved to event_store before it is finalized in commit?
         // TODO: Check if the deps do not need unification
-        let dependencies = self.event_store.lock().await.get_dependencies(&t, &t_zero).await;
+        let dependencies = self
+            .event_store
+            .lock()
+            .await
+            .get_dependencies(&t, &t_zero)
+            .await;
         Ok(Response::new(AcceptResponse {
             node: self.node.to_string(),
             dependencies,
@@ -107,26 +112,26 @@ impl ConsensusTransport for Replica {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-            let initial_len = handles.0.len();
-            let mut counter = 0;
-            while let Some(x) = handles.0.join_next().await {
-                if let Err(e) = x.unwrap() {
-                    let store = &self.event_store.lock().await.events;
-                    //
-                    let store = store
-                        .iter()
-                        .filter(|(_, v)| v.state.borrow().0 != State::Applied)
-                        .map(|(k, v)| (k, *v.state.borrow()))
-                        .collect::<Vec<_>>();
-                    println!(
-                        "PANIC Replica: T0: {:?}, T: {:?} error: {:?}, store: {:?} | {:?} / {}",
-                        t_zero, t, e, store, counter, initial_len
-                    );
-                    panic!()
-                }
-                counter += 1;
-                // TODO: Recovery when timeout
+        let initial_len = handles.0.len();
+        let mut counter = 0;
+        while let Some(x) = handles.0.join_next().await {
+            if let Err(e) = x.unwrap() {
+                let store = &self.event_store.lock().await.events;
+                //
+                let store = store
+                    .iter()
+                    .filter(|(_, v)| v.state.borrow().0 != State::Applied)
+                    .map(|(k, v)| (k, *v.state.borrow()))
+                    .collect::<Vec<_>>();
+                println!(
+                    "PANIC Replica: T0: {:?}, T: {:?} error: {:?}, store: {:?} | {:?} / {}",
+                    t_zero, t, e, store, counter, initial_len
+                );
+                panic!()
             }
+            counter += 1;
+            // TODO: Recovery when timeout
+        }
 
         Ok(Response::new(CommitResponse {
             node: self.node.to_string(),
@@ -159,26 +164,26 @@ impl ConsensusTransport for Replica {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-            let initial_len = handles.0.len();
-            let mut counter = 0;
-            while let Some(x) = handles.0.join_next().await {
-                if x.unwrap().is_err() {
-                    let store = &self.event_store.lock().await.events;
-                    //
-                    let store = store
-                        .iter()
-                        .filter(|(_, v)| v.state.borrow().0 != State::Applied)
-                        .map(|(k, v)| (k, *v.state.borrow()))
-                        .collect::<Vec<_>>();
-                    println!(
-                        "PANIC Replica: T0: {:?}, T: {:?} deps: {:?}, store: {:?} | {:?} / {}",
-                        t_zero, t, handles.1, store, counter, initial_len
-                    );
-                    panic!()
-                }
-                counter += 1;
-                // TODO: Recovery when timeout
+        let initial_len = handles.0.len();
+        let mut counter = 0;
+        while let Some(x) = handles.0.join_next().await {
+            if x.unwrap().is_err() {
+                let store = &self.event_store.lock().await.events;
+                //
+                let store = store
+                    .iter()
+                    .filter(|(_, v)| v.state.borrow().0 != State::Applied)
+                    .map(|(k, v)| (k, *v.state.borrow()))
+                    .collect::<Vec<_>>();
+                println!(
+                    "PANIC Replica: T0: {:?}, T: {:?} deps: {:?}, store: {:?} | {:?} / {}",
+                    t_zero, t, handles.1, store, counter, initial_len
+                );
+                panic!()
             }
+            counter += 1;
+            // TODO: Recovery when timeout
+        }
         let (tx, _) = watch::channel((State::Applied, t));
         self.event_store
             .lock()
