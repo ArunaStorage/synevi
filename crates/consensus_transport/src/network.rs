@@ -197,7 +197,8 @@ impl NetworkInterface for NetworkSet {
                     break;
                 }
             }
-            //tokio::spawn(async move { while responses.join_next().await.is_some() {} });
+            // Try to send the request only to a majority
+            // tokio::spawn(async move { while responses.join_next().await.is_some() {} });
         } else {
             //tokio::spawn(async move {
             while let Some(r) = responses.join_next().await {

@@ -64,4 +64,9 @@ impl Node {
     pub fn get_event_store(&self) -> Arc<Mutex<EventStore>> {
         self.event_store.clone()
     }
+
+    #[instrument(level = "trace", skip(self))]
+    pub fn get_info(&self) -> Arc<NodeInfo> {
+        self.info.clone()
+    }
 }

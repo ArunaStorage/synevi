@@ -7,7 +7,10 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tracing::instrument;
 
-use crate::utils::{from_dependency, wait_for, T, T0};
+use crate::{
+    coordinator::TransactionStateMachine,
+    utils::{from_dependency, wait_for, T, T0},
+};
 
 #[derive(Debug)]
 pub struct EventStore {
@@ -22,6 +25,7 @@ pub struct EventStore {
     pub events: BTreeMap<T0, Event>,      // Key: t0, value: Event
     pub(crate) mappings: BTreeMap<T, T0>, // Key: t, value t0
     pub(crate) last_applied: T,           // t of last applied entry
+    pub(crate) latest_t0: T0,             // last created or recognized t0
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +61,7 @@ impl EventStore {
             events: BTreeMap::default(),
             mappings: BTreeMap::default(),
             last_applied: T::default(),
+            latest_t0: T0::default(),
         }
     }
 
@@ -67,12 +72,25 @@ impl EventStore {
     }
 
     #[instrument(level = "trace")]
+    pub async fn init_transaction(&mut self, body: Bytes) -> TransactionStateMachine {
+        let t0 = self.latest_t0.next().into_time();
+        TransactionStateMachine {
+            state: State::PreAccepted,
+            transaction: body,
+            t_zero: T0(t0),
+            t: T(t0),
+            dependencies: BTreeMap::default(),
+        }
+    }
+
+    #[instrument(level = "trace")]
     pub async fn pre_accept(
         &mut self,
         request: PreAcceptRequest,
     ) -> Result<(Vec<Dependency>, T0, T)> {
         // Parse t_zero
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
+
         let (t, deps) = {
             let t = T(if let Some((last_t, _)) = self.mappings.last_key_value() {
                 if **last_t > *t_zero {
@@ -108,6 +126,9 @@ impl EventStore {
     #[instrument(level = "trace")]
     pub async fn upsert(&mut self, event: Event) {
         let old_event = self.events.entry(event.t_zero).or_insert(event.clone());
+        if self.latest_t0 < event.t_zero {
+            self.latest_t0 = event.t_zero;
+        }
 
         // assert!(&old_event.t <= &event.t ); Can happen if minority is left behind
         if old_event != &event {

@@ -42,17 +42,13 @@ pub struct TransactionStateMachine {
 impl StateMachine for Coordinator {
     #[instrument(level = "trace", skip(self))]
     async fn init(&mut self, transaction: Bytes) {
-        // Generate timestamp
-        let t_zero = MonoTime::new(0, self.node.serial);
-
         // Create struct
-        self.transaction = TransactionStateMachine {
-            state: State::PreAccepted,
-            transaction,
-            t_zero: T0(t_zero),
-            t: T(t_zero),
-            dependencies: BTreeMap::new(),
-        };
+        self.transaction = self
+            .event_store
+            .lock()
+            .await
+            .init_transaction(transaction)
+            .await;
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -313,11 +309,8 @@ impl Coordinator {
             );
 
             // println!(
-            //     "C FP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
-            //     self.transaction.t_zero,
-            //     self.transaction.t,
-            //     self.transaction.transaction,
-            //     start.elapsed()
+            //     "C FP: T0: {:?}, T: {:?}",
+            //     self.transaction.t_zero, self.transaction.t,
             // );
 
             commit_result?;
@@ -379,11 +372,8 @@ impl Coordinator {
                 network_interface_clone.broadcast(BroadcastRequest::Commit(commit_request))
             );
             // println!(
-            //     "C SP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
-            //     self.transaction.t_zero,
-            //     self.transaction.t,
-            //     self.transaction.transaction,
-            //     start.elapsed()
+            //     "C SP: T0: {:?}, T: {:?}",
+            //     self.transaction.t_zero, self.transaction.t,
             // );
 
             commit_result?;
@@ -419,11 +409,8 @@ impl Coordinator {
         };
 
         // println!(
-        //     "E Broadcast: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
-        //     self.transaction.t_zero,
-        //     self.transaction.t,
-        //     self.transaction.transaction,
-        //     start.elapsed()
+        //     "E Broadcast: T0: {:?}, T: {:?}",
+        //     self.transaction.t_zero, self.transaction.t,
         // );
 
         self.network_interface
@@ -475,7 +462,7 @@ mod tests {
         assert_eq!(coordinator.transaction.transaction, Bytes::from("test"));
         assert_eq!(*coordinator.transaction.t_zero, *coordinator.transaction.t);
         assert_eq!(coordinator.transaction.t_zero.0.get_node(), 0);
-        assert_eq!(coordinator.transaction.t_zero.0.get_seq(), 0);
+        assert_eq!(coordinator.transaction.t_zero.0.get_seq(), 1);
         assert!(coordinator.transaction.dependencies.is_empty());
     }
 
