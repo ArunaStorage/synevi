@@ -1,14 +1,15 @@
 [package]
-name = "consensus"
+name = "synevi_tests"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
 repository.workspace = true
 license.workspace = true
 
-[dependencies]
-consensus_transport = { path = "../consensus_transport" }
-monotime = { path = "../monotime" }
+[dev-dependencies]
+consensus = { path = "../crates/consensus" }
+consensus_transport = { path = "../crates/consensus_transport" }
+monotime = { path = "../crates/monotime" }
 anyhow = {workspace = true}
 bytes = "1.6.0"
 chrono = "0.4.38"
@@ -21,12 +22,8 @@ tonic = {workspace = true}
 tokio = {workspace = true}
 tracing = {workspace = true}
 rand = "0.8.5"
-async-trait = {workspace = true}
 
 
-[dev-dependencies]
-criterion = {version = "0.5.1", features = ["async_tokio"] }
-
-[[bench]]
-name = "performance"
-harness = false
+[[test]]
+name = "consensus_e2e"
+path = "consensus_e2e.rs"

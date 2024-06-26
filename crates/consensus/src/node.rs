@@ -1,35 +1,24 @@
 use crate::coordinator::Coordinator;
 use crate::event_store::EventStore;
-use crate::replica::Replica;
+use crate::replica::ReplicaConfig;
 use anyhow::Result;
 use bytes::Bytes;
-use consensus_transport::consensus_transport::consensus_transport_server::ConsensusTransportServer;
+use consensus_transport::network::Network;
 use diesel_ulid::DieselUlid;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::{sync::Mutex, task::JoinSet};
-use tonic::transport::{Channel, Server};
+use tokio::sync::Mutex;
 use tracing::instrument;
-
-#[derive(Debug)]
-pub struct Node {
-    info: Arc<NodeInfo>,
-    members: Vec<Arc<Member>>,
-    event_store: Arc<Mutex<EventStore>>,
-    join_set: JoinSet<Result<()>>,
-}
 
 #[derive(Clone, Debug)]
 pub struct NodeInfo {
     pub id: DieselUlid,
     pub serial: u16,
-    pub host: String,
 }
 
-#[derive(Clone, Debug)]
-pub struct Member {
-    pub info: NodeInfo,
-    pub channel: Channel,
+pub struct Node {
+    info: Arc<NodeInfo>,
+    network: Box<dyn Network + Send + Sync>,
+    event_store: Arc<Mutex<EventStore>>,
 }
 
 impl Node {
@@ -38,63 +27,39 @@ impl Node {
     }
 
     #[instrument(level = "trace")]
-    pub async fn new_with_parameters(id: DieselUlid, serial: u16, socket_addr: SocketAddr) -> Self {
-        let node_name = Arc::new(NodeInfo {
-            id,
-            serial,
-            host: format!("{}", socket_addr),
-        });
-        let node_name_clone = node_name.clone();
+    pub async fn new_with_parameters(
+        id: DieselUlid,
+        serial: u16,
+        mut network: Box<dyn Network + Send + Sync>,
+    ) -> Result<Self> {
+        let node_name = Arc::new(NodeInfo { id, serial });
         let event_store = Arc::new(Mutex::new(EventStore::init()));
-        let event_store_clone = event_store.clone();
-        let mut join_set = JoinSet::new();
-        join_set.spawn(async move {
-            let builder = Server::builder().add_service(ConsensusTransportServer::new(Replica {
-                node: Arc::new(node_name_clone.host.clone()),
-                event_store: event_store_clone,
-            }));
-            builder.serve(socket_addr).await?;
-            Ok(())
+
+        let replica = Arc::new(ReplicaConfig {
+            node: Arc::new(node_name.id.to_string()),
+            event_store: event_store.clone(),
         });
+        // Spawn tonic server
+        network.spawn_server(replica).await?;
 
         // If no config / persistence -> default
-        Node {
+        Ok(Node {
             info: node_name,
-            members: vec![],
             event_store,
-            join_set,
-        }
-    }
-
-    #[instrument(level = "trace", skip(self))]
-    pub async fn run(&mut self) -> Result<()> {
-        self.join_set
-            .join_next()
-            .await
-            .ok_or(anyhow::anyhow!("Empty joinset"))???;
-        Ok(())
-    }
-
-    #[instrument(level = "trace", skip(self))]
-    pub async fn do_stuff(&self) -> Result<()> {
-        Ok(())
+            network,
+        })
     }
 
     #[instrument(level = "trace", skip(self))]
     pub async fn add_member(&mut self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
-        let channel = Channel::from_shared(host.clone())?.connect().await?;
-        self.members.push(Arc::new(Member {
-            channel,
-            info: NodeInfo { id, serial, host },
-        }));
-        Ok(())
+        self.network.add_member(id, serial, host).await
     }
 
     #[instrument(level = "trace", skip(self))]
     pub async fn transaction(&self, transaction: Bytes) -> Result<()> {
         let mut coordinator = Coordinator::new(
             self.info.clone(),
-            self.members.clone(),
+            self.network.get_interface(),
             self.event_store.clone(),
         );
         coordinator.transaction(transaction).await?;

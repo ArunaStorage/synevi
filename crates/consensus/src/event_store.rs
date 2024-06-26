@@ -182,7 +182,6 @@ impl EventStore {
         vec![]
     }
 
-
     #[instrument(level = "trace")]
     pub async fn create_wait_handles(
         &mut self,

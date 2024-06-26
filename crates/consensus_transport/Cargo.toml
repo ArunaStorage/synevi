@@ -12,7 +12,10 @@ serde = {workspace = true}
 serde_json = {workspace = true}
 tokio = {workspace = true}
 tonic = {workspace = true}
+anyhow = {workspace = true}
 tonic-build = "0.11.0"
+diesel-ulid = {workspace = true}
+async-trait = {workspace = true}
 
 
 [build-dependencies]

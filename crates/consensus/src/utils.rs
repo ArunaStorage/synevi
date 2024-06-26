@@ -2,7 +2,7 @@ use crate::coordinator::TransactionStateMachine;
 use crate::event_store::Event;
 use anyhow::{anyhow, Error, Result};
 use consensus_transport::consensus_transport::{
-    AcceptResponse, ApplyResponse, CommitResponse, Dependency, PreAcceptResponse, State,
+    Dependency, State,
 };
 use futures::Future;
 use monotime::MonoTime;
@@ -40,47 +40,6 @@ impl Deref for T {
 impl From<T> for Vec<u8> {
     fn from(val: T) -> Self {
         val.0.into()
-    }
-}
-
-pub trait IntoInner<T> {
-    fn into_inner(self) -> anyhow::Result<T>;
-}
-
-impl IntoInner<PreAcceptResponse> for crate::coordinator::ConsensusResponse {
-    fn into_inner(self) -> anyhow::Result<PreAcceptResponse> {
-        if let crate::coordinator::ConsensusResponse::PreAccept(response) = self {
-            Ok(response)
-        } else {
-            Err(anyhow!("Invalid conversion"))
-        }
-    }
-}
-impl IntoInner<AcceptResponse> for crate::coordinator::ConsensusResponse {
-    fn into_inner(self) -> anyhow::Result<AcceptResponse> {
-        if let crate::coordinator::ConsensusResponse::Accept(response) = self {
-            Ok(response)
-        } else {
-            Err(anyhow!("Invalid conversion"))
-        }
-    }
-}
-impl IntoInner<CommitResponse> for crate::coordinator::ConsensusResponse {
-    fn into_inner(self) -> anyhow::Result<CommitResponse> {
-        if let crate::coordinator::ConsensusResponse::Commit(response) = self {
-            Ok(response)
-        } else {
-            Err(anyhow!("Invalid conversion"))
-        }
-    }
-}
-impl IntoInner<ApplyResponse> for crate::coordinator::ConsensusResponse {
-    fn into_inner(self) -> anyhow::Result<ApplyResponse> {
-        if let crate::coordinator::ConsensusResponse::Apply(response) = self {
-            Ok(response)
-        } else {
-            Err(anyhow!("Invalid conversion"))
-        }
     }
 }
 

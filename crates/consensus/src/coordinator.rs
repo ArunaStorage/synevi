@@ -1,24 +1,24 @@
 use crate::event_store::EventStore;
-use crate::node::{Member, NodeInfo};
-use crate::utils::{into_dependency, IntoInner, T, T0};
+use crate::node::NodeInfo;
+use crate::utils::{into_dependency, T, T0};
 use anyhow::Result;
 use bytes::Bytes;
-use consensus_transport::consensus_transport::consensus_transport_client::ConsensusTransportClient;
 use consensus_transport::consensus_transport::{
-    AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
-    PreAcceptRequest, PreAcceptResponse, State,
+    AcceptRequest, AcceptResponse, ApplyRequest, CommitRequest, CommitResponse, PreAcceptRequest,
+    PreAcceptResponse, State,
 };
+use consensus_transport::network::{BroadcastRequest, NetworkInterface};
+use consensus_transport::utils::IntoInner;
 use monotime::MonoTime;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time;
 use tokio::sync::Mutex;
-use tokio::task::JoinSet;
 use tracing::instrument;
 
 pub struct Coordinator {
     pub node: Arc<NodeInfo>,
-    pub members: Vec<Arc<Member>>,
+    pub network_interface: Arc<dyn NetworkInterface>,
     pub event_store: Arc<Mutex<EventStore>>,
     pub transaction: TransactionStateMachine,
 }
@@ -185,41 +185,19 @@ impl StateMachine for Coordinator {
     }
 }
 
-#[derive(Debug)]
-enum ConsensusRequest {
-    PreAccept(PreAcceptRequest),
-    Accept(AcceptRequest),
-    Commit(CommitRequest),
-    Apply(ApplyRequest),
-    // TODO: Recover
-}
-
-#[derive(Debug)]
-pub(crate) enum ConsensusResponse {
-    PreAccept(PreAcceptResponse),
-    Accept(AcceptResponse),
-    Commit(CommitResponse),
-    Apply(ApplyResponse),
-    // TODO: Recover
-}
-
 impl Coordinator {
     #[instrument(level = "trace")]
     pub fn new(
         node: Arc<NodeInfo>,
-        members: Vec<Arc<Member>>,
+        network_interface: Arc<dyn NetworkInterface>,
         event_store: Arc<Mutex<EventStore>>,
     ) -> Self {
         Coordinator {
             node,
-            members,
+            network_interface,
             event_store,
             transaction: Default::default(),
         }
-    }
-    #[instrument(level = "trace", skip(self))]
-    pub async fn add_members(&self, members: Vec<Member>) -> Result<()> {
-        todo!("Add members to self")
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -228,15 +206,14 @@ impl Coordinator {
         //  INIT
         //
 
-        // We need a fixed size of members for each transaction
-        let members = self.members.clone();
-
         // Create a new transaction state
         self.init(transaction).await;
 
         //
         //  PRE ACCEPT STATE
         //
+
+        let network_interface_clone = self.network_interface.clone();
 
         let _start = time::Instant::now();
 
@@ -248,12 +225,11 @@ impl Coordinator {
         };
 
         // Broadcast message
-        let pre_accept_responses = Coordinator::broadcast(
-            &members,
-            ConsensusRequest::PreAccept(pre_accept_request),
-            true,
-        )
-        .await?;
+
+        let pre_accept_responses = self
+            .network_interface
+            .broadcast(BroadcastRequest::PreAccept(pre_accept_request), true)
+            .await?;
 
         // println!(
         //     "PA: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
@@ -296,7 +272,7 @@ impl Coordinator {
 
             let (commit_result, broadcast_result) = tokio::join!(
                 self.commit(),
-                Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request), true)
+                network_interface_clone.broadcast(BroadcastRequest::Commit(commit_request), true)
             );
 
             // println!(
@@ -330,9 +306,10 @@ impl Coordinator {
                 timestamp: (*self.transaction.t).into(),
                 dependencies: into_dependency(self.transaction.dependencies.clone()),
             };
-            let accept_responses =
-                Coordinator::broadcast(&members, ConsensusRequest::Accept(accept_request), true)
-                    .await?;
+            let accept_responses = self
+                .network_interface
+                .broadcast(BroadcastRequest::Accept(accept_request), true)
+                .await?;
 
             self.accept(
                 &accept_responses
@@ -362,7 +339,8 @@ impl Coordinator {
 
             let (commit_result, broadcast_result) = tokio::join!(
                 self.commit(),
-                Coordinator::broadcast(&members, ConsensusRequest::Commit(commit_request), true)
+                network_interface_clone
+                    .broadcast(BroadcastRequest::Commit(commit_request), true)
             );
             // println!(
             //     "C SP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",
@@ -412,7 +390,9 @@ impl Coordinator {
         //     start.elapsed()
         // );
 
-        Coordinator::broadcast(&members, ConsensusRequest::Apply(apply_request), false).await?; // This should not be awaited
+        self.network_interface
+            .broadcast(BroadcastRequest::Apply(apply_request), false)
+            .await?; // This should not be awaited
 
         Ok(())
     }
@@ -420,90 +400,5 @@ impl Coordinator {
     #[instrument(level = "trace")]
     async fn recover() {
         todo!("Implement recovery protocol and call when failing")
-    }
-
-    #[instrument(level = "trace")]
-    async fn broadcast(
-        members: &[Arc<Member>],
-        request: ConsensusRequest,
-        await_majority: bool,
-    ) -> Result<Vec<ConsensusResponse>> {
-        //dbg!("[broadcast]: Start");
-        let mut responses: JoinSet<Result<ConsensusResponse>> = JoinSet::new();
-        let mut result = Vec::new();
-
-        // Send PreAccept request to every known member
-        // Call match only once ...
-
-        //dbg!("[broadcast]: Create clients & requests");
-        match &request {
-            ConsensusRequest::PreAccept(req) => {
-                // ... and then iterate over every member ...
-                for replica in members {
-                    let channel = replica.channel.clone();
-                    let request = req.clone();
-                    // ... and send a request to member
-                    responses.spawn(async move {
-                        let mut client = ConsensusTransportClient::new(channel);
-                        Ok(ConsensusResponse::PreAccept(
-                            client.pre_accept(request).await?.into_inner(),
-                        ))
-                    });
-                }
-            }
-            ConsensusRequest::Accept(req) => {
-                for replica in members {
-                    let channel = replica.channel.clone();
-                    let request = req.clone();
-                    responses.spawn(async move {
-                        let mut client = ConsensusTransportClient::new(channel);
-                        Ok(ConsensusResponse::Accept(
-                            client.accept(request).await?.into_inner(),
-                        ))
-                    });
-                }
-            }
-            ConsensusRequest::Commit(req) => {
-                for replica in members {
-                    let channel = replica.channel.clone();
-                    let request = req.clone();
-                    responses.spawn(async move {
-                        let mut client = ConsensusTransportClient::new(channel);
-                        Ok(ConsensusResponse::Commit(
-                            client.commit(request).await?.into_inner(),
-                        ))
-                    });
-                }
-            }
-            ConsensusRequest::Apply(req) => {
-                for replica in members {
-                    let channel = replica.channel.clone();
-                    let request = req.clone();
-                    responses.spawn(async move {
-                        let mut client = ConsensusTransportClient::new(channel);
-                        Ok(ConsensusResponse::Apply(
-                            client.apply(request).await?.into_inner(),
-                        ))
-                    });
-                }
-            }
-        }
-
-        let majority = (members.len() / 2) + 1;
-        let mut counter = 0_usize;
-
-        // Poll majority
-        if await_majority {
-            while let Some(response) = responses.join_next().await {
-                result.push(response??);
-                counter += 1;
-                if counter >= majority {
-                    //break;
-                }
-            }
-        } else {
-            tokio::spawn(async move { while responses.join_next().await.is_some() {} });
-        }
-        Ok(result)
     }
 }
