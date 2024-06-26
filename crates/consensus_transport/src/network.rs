@@ -1,6 +1,12 @@
-use crate::{consensus_transport::{
-    consensus_transport_client::ConsensusTransportClient, consensus_transport_server::ConsensusTransportServer, AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse, PreAcceptRequest, PreAcceptResponse
-}, replica::{Replica, ReplicaBox}};
+use crate::{
+    consensus_transport::{
+        consensus_transport_client::ConsensusTransportClient,
+        consensus_transport_server::ConsensusTransportServer, AcceptRequest, AcceptResponse,
+        ApplyRequest, ApplyResponse, CommitRequest, CommitResponse, PreAcceptRequest,
+        PreAcceptResponse,
+    },
+    replica::{Replica, ReplicaBox},
+};
 use anyhow::Result;
 use diesel_ulid::DieselUlid;
 use std::{net::SocketAddr, sync::Arc};
@@ -8,7 +14,7 @@ use tokio::task::JoinSet;
 use tonic::transport::{Channel, Server};
 
 #[async_trait::async_trait]
-pub trait NetworkInterface: std::fmt::Debug {
+pub trait NetworkInterface: std::fmt::Debug + Send + Sync {
     async fn broadcast(
         &self,
         request: BroadcastRequest,
@@ -55,7 +61,6 @@ pub enum BroadcastResponse {
     // TODO: Recover
 }
 
-
 #[derive(Debug)]
 pub struct NetworkConfig {
     pub socket_addr: SocketAddr,
@@ -86,16 +91,12 @@ impl NetworkConfig {
 
 #[async_trait::async_trait]
 impl Network for NetworkConfig {
-    async fn add_members(&mut self, members: Vec<Arc<Member>>){
+    async fn add_members(&mut self, members: Vec<Arc<Member>>) {
         self.members.extend(members);
     }
 
     async fn add_member(&mut self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
-
-
-        let channel = Channel::from_shared(host.clone())?
-            .connect()
-            .await?;
+        let channel = Channel::from_shared(host.clone())?.connect().await?;
         self.members.push(Arc::new(Member {
             info: NodeInfo { id, serial },
             host,
@@ -105,12 +106,12 @@ impl Network for NetworkConfig {
         Ok(())
     }
 
-    async fn spawn_server(&mut self, server: Arc<dyn Replica>) -> Result<()>{
-
+    async fn spawn_server(&mut self, server: Arc<dyn Replica>) -> Result<()> {
         let new_replica_box = ReplicaBox::new(server);
-        let addr = self.socket_addr.clone();
+        let addr = self.socket_addr;
         self.join_set.spawn(async move {
-            let builder = Server::builder().add_service(ConsensusTransportServer::new(new_replica_box));
+            let builder =
+                Server::builder().add_service(ConsensusTransportServer::new(new_replica_box));
             builder.serve(addr).await?;
             Ok(())
         });

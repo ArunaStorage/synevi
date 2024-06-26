@@ -339,8 +339,7 @@ impl Coordinator {
 
             let (commit_result, broadcast_result) = tokio::join!(
                 self.commit(),
-                network_interface_clone
-                    .broadcast(BroadcastRequest::Commit(commit_request), true)
+                network_interface_clone.broadcast(BroadcastRequest::Commit(commit_request), true)
             );
             // println!(
             //     "C SP: T0: {:?}, T: {:?}, C: {:?}, Time: {:?}",

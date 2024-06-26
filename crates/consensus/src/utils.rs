@@ -1,9 +1,7 @@
 use crate::coordinator::TransactionStateMachine;
 use crate::event_store::Event;
 use anyhow::{anyhow, Error, Result};
-use consensus_transport::consensus_transport::{
-    Dependency, State,
-};
+use consensus_transport::consensus_transport::{Dependency, State};
 use futures::Future;
 use monotime::MonoTime;
 use std::{collections::BTreeMap, ops::Deref, time::Duration};

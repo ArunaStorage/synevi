@@ -1,5 +1,6 @@
 use crate::event_store::{Event, EventStore};
 use crate::utils::{from_dependency, T, T0};
+use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::*;
 use consensus_transport::replica::Replica;
@@ -7,7 +8,6 @@ use monotime::MonoTime;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex};
 use tracing::instrument;
-use anyhow::Result;
 
 #[derive(Debug)]
 pub struct ReplicaConfig {
@@ -18,17 +18,8 @@ pub struct ReplicaConfig {
 #[async_trait::async_trait]
 impl Replica for ReplicaConfig {
     #[instrument(level = "trace", skip(self))]
-    async fn pre_accept(
-        &self,
-        request: PreAcceptRequest,
-    ) -> Result<PreAcceptResponse> {
-
-        let (deps, t_zero, t) = self
-            .event_store
-            .lock()
-            .await
-            .pre_accept(request)
-            .await?;
+    async fn pre_accept(&self, request: PreAcceptRequest) -> Result<PreAcceptResponse> {
+        let (deps, t_zero, t) = self.event_store.lock().await.pre_accept(request).await?;
 
         Ok(PreAcceptResponse {
             node: self.node.to_string(),
@@ -39,10 +30,7 @@ impl Replica for ReplicaConfig {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn accept(
-        &self,
-        request: AcceptRequest,
-    ) -> Result<AcceptResponse> {
+    async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse> {
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
         let t = T(MonoTime::try_from(request.timestamp.as_slice())?);
 
@@ -74,10 +62,7 @@ impl Replica for ReplicaConfig {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn commit(
-        &self,
-        request: CommitRequest,
-    ) -> Result<CommitResponse> {
+    async fn commit(&self, request: CommitRequest) -> Result<CommitResponse> {
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
         let t = T(MonoTime::try_from(request.timestamp.as_slice())?);
         let dependencies = from_dependency(request.dependencies.clone())?;
@@ -130,10 +115,7 @@ impl Replica for ReplicaConfig {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn apply(
-        &self,
-        request: ApplyRequest,
-    ) -> Result<ApplyResponse> {
+    async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse> {
         let transaction: Bytes = request.event.into();
 
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
@@ -146,8 +128,7 @@ impl Replica for ReplicaConfig {
             .lock()
             .await
             .create_wait_handles(dependencies.clone(), t)
-            .await
-            ?;
+            .await?;
 
         let initial_len = handles.0.len();
         let mut counter = 0;
@@ -186,10 +167,7 @@ impl Replica for ReplicaConfig {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn recover(
-        &self,
-        _request: RecoverRequest
-    ) -> Result<RecoverResponse> {
+    async fn recover(&self, _request: RecoverRequest) -> Result<RecoverResponse> {
         todo!()
     }
 }

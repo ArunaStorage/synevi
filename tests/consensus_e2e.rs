@@ -1,47 +1,54 @@
-// #[cfg(test)]
-// mod tests {
-//     use bytes::Bytes;
-//     use consensus::node::Node;
-//     use diesel_ulid::DieselUlid;
-//     use std::net::SocketAddr;
-//     use std::str::FromStr;
-//     use std::sync::Arc;
-//     use tokio::runtime::Builder;
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use consensus::node::Node;
+    use diesel_ulid::DieselUlid;
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+    use std::sync::Arc;
+    
 
-//     #[tokio::test(flavor = "multi_thread")]
-//     async fn parallel_execution() {
-//         let mut node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
-//         let mut nodes: Vec<Node> = vec![];
-//         for (i, m) in node_names.iter().enumerate() {
-//             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
-//             let node = Node::new_with_parameters(*m, i as u16, socket_addr).await;
-//             nodes.push(node);
-//         }
-//         let mut coordinator = nodes.pop().unwrap();
-//         let _ = node_names.pop(); // Do not connect to your self
-//         for (i, name) in node_names.iter().enumerate() {
-//             coordinator
-//                 .add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i))
-//                 .await
-//                 .unwrap();
-//         }
+    #[tokio::test(flavor = "multi_thread")]
+    async fn parallel_execution() {
+        let mut node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
+        let mut nodes: Vec<Node> = vec![];
 
-//         let mut joinset = tokio::task::JoinSet::new();
+        for (i, m) in node_names.iter().enumerate() {
+            let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
+            let network = Box::new(consensus_transport::network::NetworkConfig::new(
+                socket_addr,
+            ));
+            let node = Node::new_with_parameters(*m, i as u16, network)
+                .await
+                .unwrap();
+            nodes.push(node);
+        }
+        let mut coordinator = nodes.pop().unwrap();
+        let _ = node_names.pop(); // Do not connect to your self
+        for (i, name) in node_names.iter().enumerate() {
+            coordinator
+                .add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i))
+                .await
+                .unwrap();
+        }
 
-//         let arc_coordinator = Arc::new(coordinator);
+        let mut joinset = tokio::task::JoinSet::new();
 
-//         for _ in 0..1000 {
-//             let coordinator = arc_coordinator.clone();
-//             joinset.spawn(async move {
-//                 coordinator
-//                     .transaction(Bytes::from("This is a transaction"))
-//                     .await
-//             });
-//         }
-//         while let Some(res) = joinset.join_next().await {
-//             res.unwrap().unwrap();
-//         }
-//     }
+        let arc_coordinator = Arc::new(coordinator);
+
+        for _ in 0..1000 {
+            let coordinator = arc_coordinator.clone();
+            joinset.spawn(async move {
+                coordinator
+                    .transaction(Bytes::from("This is a transaction"))
+                    .await
+            });
+        }
+        while let Some(res) = joinset.join_next().await {
+            res.unwrap().unwrap();
+        }
+    }
+}
 
 //     #[test]
 //     fn contention_execution() {
