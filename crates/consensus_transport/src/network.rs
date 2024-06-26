@@ -18,7 +18,7 @@ pub trait NetworkInterface: std::fmt::Debug {
 
 #[async_trait::async_trait]
 pub trait Network: std::fmt::Debug {
-    async fn add_members(&mut self, members: Vec<Arc<Member>>) -> Result<()>;
+    async fn add_members(&mut self, members: Vec<Arc<Member>>);
     async fn add_member(&mut self, id: DieselUlid, serial: u16, host: String) -> Result<()>;
     async fn spawn_server(&mut self, server: Arc<dyn Replica>) -> Result<()>;
     fn get_interface(&self) -> Arc<dyn NetworkInterface>;
@@ -38,20 +38,71 @@ pub struct Member {
 }
 
 #[derive(Debug)]
+pub enum BroadcastRequest {
+    PreAccept(PreAcceptRequest),
+    Accept(AcceptRequest),
+    Commit(CommitRequest),
+    Apply(ApplyRequest),
+    // TODO: Recover
+}
+
+#[derive(Debug)]
+pub enum BroadcastResponse {
+    PreAccept(PreAcceptResponse),
+    Accept(AcceptResponse),
+    Commit(CommitResponse),
+    Apply(ApplyResponse),
+    // TODO: Recover
+}
+
+
+#[derive(Debug)]
 pub struct NetworkConfig {
     pub socket_addr: SocketAddr,
     pub members: Vec<Arc<Member>>,
     join_set: JoinSet<Result<()>>,
 }
 
+#[derive(Debug)]
+pub struct NetworkSet {
+    members: Vec<Arc<Member>>,
+}
+
+impl NetworkConfig {
+    pub fn new(socket_addr: SocketAddr) -> Self {
+        Self {
+            socket_addr,
+            members: Vec::new(),
+            join_set: JoinSet::new(),
+        }
+    }
+
+    pub fn create_network_set(&self) -> Arc<NetworkSet> {
+        Arc::new(NetworkSet {
+            members: self.members.clone(),
+        })
+    }
+}
+
 #[async_trait::async_trait]
 impl Network for NetworkConfig {
-    async fn add_members(&mut self, members: Vec<Arc<Member>>) -> Result<()> {
-        todo!()
+    async fn add_members(&mut self, members: Vec<Arc<Member>>){
+        self.members.extend(members);
     }
 
     async fn add_member(&mut self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
-        todo!()
+
+
+        let channel = Channel::from_shared(host.clone())?
+            .connect()
+            .await?;
+        self.members.push(Arc::new(Member {
+            info: NodeInfo { id, serial },
+            host,
+            channel,
+        }));
+
+        Ok(())
     }
 
     async fn spawn_server(&mut self, server: Arc<dyn Replica>) -> Result<()>{
@@ -67,13 +118,8 @@ impl Network for NetworkConfig {
     }
 
     fn get_interface(&self) -> Arc<dyn NetworkInterface> {
-        todo!()
+        self.create_network_set()
     }
-}
-
-#[derive(Debug)]
-pub struct NetworkSet {
-    members: Vec<Arc<Member>>,
 }
 
 #[async_trait::async_trait]
@@ -161,22 +207,4 @@ impl NetworkInterface for NetworkSet {
         }
         Ok(result)
     }
-}
-
-#[derive(Debug)]
-pub enum BroadcastRequest {
-    PreAccept(PreAcceptRequest),
-    Accept(AcceptRequest),
-    Commit(CommitRequest),
-    Apply(ApplyRequest),
-    // TODO: Recover
-}
-
-#[derive(Debug)]
-pub enum BroadcastResponse {
-    PreAccept(PreAcceptResponse),
-    Accept(AcceptResponse),
-    Commit(CommitResponse),
-    Apply(ApplyResponse),
-    // TODO: Recover
 }
