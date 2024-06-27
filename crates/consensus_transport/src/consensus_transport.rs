@@ -12,34 +12,47 @@ pub struct Dependency {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PreAcceptRequest {
-    #[prost(string, tag = "1")]
-    pub node: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "1")]
+    pub event: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "2")]
     pub timestamp_zero: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", tag = "3")]
-    pub event: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(serde::Deserialize, serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PreAcceptResponse {
-    #[prost(string, tag = "1")]
-    pub node: ::prost::alloc::string::String,
-    /// This field is redundant and will be ignored
-    #[prost(bytes = "vec", tag = "2")]
-    pub timestamp_zero: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", tag = "3")]
+    #[prost(bytes = "vec", tag = "1")]
     pub timestamp: ::prost::alloc::vec::Vec<u8>,
-    #[prost(message, repeated, tag = "4")]
+    #[prost(message, repeated, tag = "2")]
+    pub dependencies: ::prost::alloc::vec::Vec<Dependency>,
+}
+#[derive(serde::Deserialize, serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AcceptRequest {
+    #[prost(uint32, tag = "1")]
+    pub ballot: u32,
+    #[prost(bytes = "vec", tag = "2")]
+    pub event: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "3")]
+    pub timestamp_zero: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "4")]
+    pub timestamp: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, repeated, tag = "5")]
+    pub dependencies: ::prost::alloc::vec::Vec<Dependency>,
+}
+#[derive(serde::Deserialize, serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AcceptResponse {
+    #[prost(message, repeated, tag = "2")]
     pub dependencies: ::prost::alloc::vec::Vec<Dependency>,
 }
 #[derive(serde::Deserialize, serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommitRequest {
-    #[prost(string, tag = "1")]
-    pub node: ::prost::alloc::string::String,
-    #[prost(bytes = "vec", tag = "5")]
+    #[prost(bytes = "vec", tag = "1")]
     pub event: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "2")]
     pub timestamp_zero: ::prost::alloc::vec::Vec<u8>,
@@ -48,33 +61,25 @@ pub struct CommitRequest {
     #[prost(message, repeated, tag = "4")]
     pub dependencies: ::prost::alloc::vec::Vec<Dependency>,
 }
+/// repeated Dependency results = 1; // Theoretically not needed?
 #[derive(serde::Deserialize, serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CommitResponse {
-    #[prost(string, tag = "1")]
-    pub node: ::prost::alloc::string::String,
-    /// Theoretically not needed?
-    #[prost(message, repeated, tag = "2")]
-    pub results: ::prost::alloc::vec::Vec<Dependency>,
-}
+pub struct CommitResponse {}
 #[derive(serde::Deserialize, serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ApplyRequest {
-    #[prost(string, tag = "1")]
-    pub node: ::prost::alloc::string::String,
-    #[prost(bytes = "vec", tag = "2")]
+    #[prost(bytes = "vec", tag = "1")]
     pub event: ::prost::alloc::vec::Vec<u8>,
+    /// This is extra to make it easier to identify the event
+    #[prost(bytes = "vec", tag = "2")]
+    pub timestamp_zero: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "3")]
     pub timestamp: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", tag = "6")]
-    pub timestamp_zero: ::prost::alloc::vec::Vec<u8>,
+    /// bytes result = 5; // Theoretically not needed?
     #[prost(message, repeated, tag = "4")]
     pub dependencies: ::prost::alloc::vec::Vec<Dependency>,
-    /// Theoretically not needed?
-    #[prost(bytes = "vec", tag = "5")]
-    pub result: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(serde::Deserialize, serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -84,51 +89,23 @@ pub struct ApplyResponse {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RecoverRequest {
-    #[prost(string, tag = "1")]
-    pub node: ::prost::alloc::string::String,
-    #[prost(bytes = "vec", tag = "2")]
+    #[prost(bytes = "vec", tag = "1")]
     pub event: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", tag = "3")]
+    #[prost(bytes = "vec", tag = "2")]
     pub timestamp_zero: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(serde::Deserialize, serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RecoverResponse {
-    #[prost(string, tag = "1")]
-    pub node: ::prost::alloc::string::String,
-    #[prost(enumeration = "State", tag = "2")]
+    #[prost(enumeration = "State", tag = "1")]
     pub local_state: i32,
-    #[prost(message, repeated, tag = "3")]
-    pub wait: ::prost::alloc::vec::Vec<Dependency>,
-    #[prost(message, repeated, tag = "4")]
-    pub superseding: ::prost::alloc::vec::Vec<Dependency>,
-    #[prost(bytes = "vec", tag = "5")]
-    pub timestamp: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(serde::Deserialize, serde::Serialize)]
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AcceptRequest {
-    #[prost(string, tag = "1")]
-    pub node: ::prost::alloc::string::String,
-    #[prost(bytes = "vec", tag = "5")]
-    pub event: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", tag = "2")]
-    pub timestamp_zero: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", tag = "3")]
-    pub timestamp: ::prost::alloc::vec::Vec<u8>,
-    #[prost(message, repeated, tag = "4")]
-    pub dependencies: ::prost::alloc::vec::Vec<Dependency>,
-}
-#[derive(serde::Deserialize, serde::Serialize)]
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AcceptResponse {
-    #[prost(string, tag = "1")]
-    pub node: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "2")]
-    pub dependencies: ::prost::alloc::vec::Vec<Dependency>,
+    pub wait: ::prost::alloc::vec::Vec<Dependency>,
+    #[prost(message, repeated, tag = "3")]
+    pub superseding: ::prost::alloc::vec::Vec<Dependency>,
+    #[prost(bytes = "vec", tag = "4")]
+    pub timestamp: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(serde::Deserialize, serde::Serialize)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]

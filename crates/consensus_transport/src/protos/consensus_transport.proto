@@ -3,11 +3,11 @@ syntax = "proto3";
 package consensus_transport;
 
 service ConsensusTransport {
-  rpc PreAccept (PreAcceptRequest) returns (PreAcceptResponse) {}
-  rpc Commit (CommitRequest) returns (CommitResponse) {}
+  rpc PreAccept(PreAcceptRequest) returns (PreAcceptResponse) {}
+  rpc Commit(CommitRequest) returns (CommitResponse) {}
   rpc Accept(AcceptRequest) returns (AcceptResponse) {}
-  rpc Apply (ApplyRequest) returns (ApplyResponse) {}
-  rpc Recover (RecoverRequest) returns (RecoverResponse) {}
+  rpc Apply(ApplyRequest) returns (ApplyResponse) {}
+  rpc Recover(RecoverRequest) returns (RecoverResponse) {}
 }
 
 message Dependency {
@@ -16,46 +16,50 @@ message Dependency {
 }
 
 message PreAcceptRequest {
-  string node = 1;
+  bytes event = 1;
   bytes timestamp_zero = 2;
-  bytes event = 3;
 }
 
 message PreAcceptResponse {
-  string node = 1;
-  bytes timestamp_zero = 2; // This field is redundant and will be ignored
-  bytes timestamp = 3;
-  repeated Dependency dependencies = 4;
+  bytes timestamp = 1;
+  repeated Dependency dependencies = 2;
 }
 
+message AcceptRequest {
+  uint32 ballot = 1;
+  bytes event = 2;
+  bytes timestamp_zero = 3;
+  bytes timestamp = 4;
+  repeated Dependency dependencies = 5;
+}
+
+message AcceptResponse { repeated Dependency dependencies = 2; }
+
 message CommitRequest {
-  string node = 1;
-  bytes event = 5;
+  bytes event = 1;
   bytes timestamp_zero = 2;
   bytes timestamp = 3;
   repeated Dependency dependencies = 4;
 }
 
 message CommitResponse {
-  string node = 1;
-  repeated Dependency results = 2; // Theoretically not needed? 
+  // repeated Dependency results = 1; // Theoretically not needed?
 }
 
 message ApplyRequest {
-  string node = 1;
-  bytes event = 2;
+  bytes event = 1;
+  // This is extra to make it easier to identify the event
+  bytes timestamp_zero = 2;
   bytes timestamp = 3;
-  bytes timestamp_zero = 6;
   repeated Dependency dependencies = 4;
-  bytes result = 5; // Theoretically not needed?
+  // bytes result = 5; // Theoretically not needed?
 }
 
 message ApplyResponse {}
 
 message RecoverRequest {
-  string node = 1;
-  bytes event = 2;
-  bytes timestamp_zero = 3;
+  bytes event = 1;
+  bytes timestamp_zero = 2;
 }
 
 enum State {
@@ -65,25 +69,11 @@ enum State {
   STATE_COMMITED = 3;
   STATE_APPLIED = 4;
   STATE_RECOVER = 5;
-
 }
 
 message RecoverResponse {
-  string node = 1;
-  State local_state = 2;
-  repeated Dependency wait = 3;
-  repeated Dependency superseding = 4;
-  bytes timestamp = 5;
-}
-
-message AcceptRequest {
-  string node = 1;
-  bytes event = 5;
-  bytes timestamp_zero = 2;
-  bytes timestamp = 3;
-  repeated Dependency dependencies = 4;
-}
-message AcceptResponse {
-  string node = 1;
-  repeated Dependency dependencies = 2;
+  State local_state = 1;
+  repeated Dependency wait = 2;
+  repeated Dependency superseding = 3;
+  bytes timestamp = 4;
 }

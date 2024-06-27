@@ -30,7 +30,6 @@ impl Node {
         let event_store = Arc::new(Mutex::new(EventStore::init()));
 
         let replica = Arc::new(ReplicaConfig {
-            node: Arc::new(node_name.id.to_string()),
             event_store: event_store.clone(),
         });
         // Spawn tonic server

@@ -84,14 +84,12 @@ impl EventStore {
             t_zero: T0(t0),
             t: T(t0),
             dependencies: BTreeMap::default(),
+            ballot: 0,
         }
     }
 
     #[instrument(level = "trace")]
-    pub async fn pre_accept(
-        &mut self,
-        request: PreAcceptRequest,
-    ) -> Result<(Vec<Dependency>, T0, T)> {
+    pub async fn pre_accept(&mut self, request: PreAcceptRequest) -> Result<(Vec<Dependency>, T)> {
         // Parse t_zero
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
 
@@ -124,7 +122,7 @@ impl EventStore {
             dependencies: from_dependency(deps.clone())?,
         };
         self.events.insert(t_zero, event);
-        Ok((deps, t_zero, t))
+        Ok((deps, t))
     }
 
     #[instrument(level = "trace")]

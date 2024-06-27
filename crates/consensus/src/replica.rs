@@ -11,7 +11,6 @@ use tracing::instrument;
 
 #[derive(Debug)]
 pub struct ReplicaConfig {
-    pub node: Arc<String>,
     pub event_store: Arc<Mutex<EventStore>>,
 }
 
@@ -19,11 +18,9 @@ pub struct ReplicaConfig {
 impl Replica for ReplicaConfig {
     #[instrument(level = "trace", skip(self))]
     async fn pre_accept(&self, request: PreAcceptRequest) -> Result<PreAcceptResponse> {
-        let (deps, t_zero, t) = self.event_store.lock().await.pre_accept(request).await?;
+        let (deps, t) = self.event_store.lock().await.pre_accept(request).await?;
 
         Ok(PreAcceptResponse {
-            node: self.node.to_string(),
-            timestamp_zero: t_zero.into(),
             timestamp: t.into(),
             dependencies: deps,
         })
@@ -55,10 +52,7 @@ impl Replica for ReplicaConfig {
             .await
             .get_dependencies(&t, &t_zero)
             .await;
-        Ok(AcceptResponse {
-            node: self.node.to_string(),
-            dependencies,
-        })
+        Ok(AcceptResponse { dependencies })
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -108,10 +102,7 @@ impl Replica for ReplicaConfig {
             // TODO: Recovery when timeout
         }
 
-        Ok(CommitResponse {
-            node: self.node.to_string(),
-            results: Vec::new(),
-        })
+        Ok(CommitResponse {})
     }
 
     #[instrument(level = "trace", skip(self))]
