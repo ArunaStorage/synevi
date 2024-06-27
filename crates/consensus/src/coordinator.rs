@@ -1,6 +1,5 @@
-use crate::error::WaitError;
 use crate::event_store::EventStore;
-use crate::utils::{into_dependency, T, T0};
+use crate::utils::{await_dependencies, into_dependency, T, T0};
 use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::{
@@ -9,8 +8,6 @@ use consensus_transport::consensus_transport::{
 };
 use consensus_transport::network::{BroadcastRequest, NetworkInterface, NodeInfo};
 use consensus_transport::utils::IntoInner;
-use futures::future::BoxFuture;
-use futures::FutureExt;
 use monotime::MonoTime;
 use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
@@ -299,42 +296,13 @@ impl Coordinator<Accepted> {
             .await
             .upsert((&self.transaction).into())
             .await;
-        self.await_dependencies().await?;
+        await_dependencies(
+            self.event_store.clone(),
+            &self.transaction.dependencies,
+            self.transaction.t,
+        )
+        .await?;
         Ok(())
-    }
-
-    #[instrument(level = "trace", skip(self))]
-    fn await_dependencies(&mut self) -> BoxFuture<'_, Result<()>> {
-        async {
-            let mut handles = self
-                .event_store
-                .lock()
-                .await
-                .create_wait_handles(self.transaction.dependencies.clone(), self.transaction.t)
-                .await?;
-
-            while let Some(x) = handles.0.join_next().await {
-                match x {
-                    Ok(Ok(_)) => {}
-                    Ok(Err(e)) => match e {
-                        WaitError::Timeout(t0) => {
-                            // Wait for a node specific timeout
-                            // Await recovery for t0
-                            // Retry from handles
-                            self.await_dependencies().await?;
-                        }
-                        WaitError::SenderClosed => {
-                            tracing::error!("Sender of transaction got closed")
-                        }
-                    },
-                    Err(_) => {
-                        tracing::error!("Join error")
-                    }
-                }
-            }
-            Ok(())
-        }
-        .boxed()
     }
 }
 

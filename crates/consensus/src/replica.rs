@@ -1,6 +1,5 @@
-use crate::error::WaitError;
 use crate::event_store::{Event, EventStore};
-use crate::utils::{from_dependency, T, T0};
+use crate::utils::{await_dependencies, from_dependency, T, T0};
 use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::*;
@@ -75,30 +74,7 @@ impl Replica for ReplicaConfig {
             })
             .await;
 
-        let mut handles = self
-            .event_store
-            .lock()
-            .await
-            .create_wait_handles(dependencies.clone(), t)
-            .await?;
-
-        while let Some(x) = handles.0.join_next().await {
-            match x {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => match e {
-                    WaitError::Timeout(t0) => {
-                        // Wait for a node specific timeout
-                        // Spawn recovery to t0
-                    }
-                    WaitError::SenderClosed => {
-                        tracing::error!("Sender of transaction got closed")
-                    }
-                },
-                Err(_) => {
-                    tracing::error!("Join error")
-                }
-            }
-        }
+        await_dependencies(self.event_store.clone(), &dependencies, t).await?;
 
         Ok(CommitResponse {})
     }
@@ -112,30 +88,8 @@ impl Replica for ReplicaConfig {
 
         let dependencies = from_dependency(request.dependencies.clone())?;
 
-        let mut handles = self
-            .event_store
-            .lock()
-            .await
-            .create_wait_handles(dependencies.clone(), t)
-            .await?;
+        await_dependencies(self.event_store.clone(), &dependencies, t).await?;
 
-        while let Some(x) = handles.0.join_next().await {
-            match x {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => match e {
-                    WaitError::Timeout(t0) => {
-                        // Wait for a node specific timeout
-                        // Spawn recovery to t0
-                    }
-                    WaitError::SenderClosed => {
-                        tracing::error!("Sender of transaction got closed")
-                    }
-                },
-                Err(_) => {
-                    tracing::error!("Join error")
-                }
-            }
-        }
         let (tx, _) = watch::channel((State::Applied, t));
         self.event_store
             .lock()

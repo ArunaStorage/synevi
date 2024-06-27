@@ -1,14 +1,17 @@
-use crate::event_store::Event;
+use crate::event_store::{Event, EventStore};
 use crate::{coordinator::TransactionStateMachine, error::WaitError};
 use anyhow::Result;
 use consensus_transport::consensus_transport::{Dependency, State};
 use futures::Future;
 use monotime::MonoTime;
+use std::sync::Arc;
 use std::{collections::BTreeMap, ops::Deref, time::Duration};
+use tokio::sync::Mutex;
 use tokio::{
     sync::watch::{self, Sender},
     time::timeout,
 };
+use tracing::instrument;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
 pub struct T0(pub MonoTime);
@@ -78,6 +81,40 @@ impl From<&TransactionStateMachine> for Event {
             dependencies: value.dependencies.clone(),
         }
     }
+}
+
+#[instrument(level = "trace")]
+pub async fn await_dependencies(
+    store: Arc<Mutex<EventStore>>,
+    dependencies: &BTreeMap<T, T0>,
+    t: T,
+) -> Result<()> {
+    let mut handles = store
+        .lock()
+        .await
+        .create_wait_handles(dependencies, t)
+        .await?;
+
+    while let Some(x) = handles.0.join_next().await {
+        match x {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => match e {
+                WaitError::Timeout(_t0) => {
+                    // Wait for a node specific timeout
+                    // Await recovery for t0
+                    // Retry from handles
+                    Box::pin(await_dependencies(store.clone(), dependencies, t)).await?;
+                }
+                WaitError::SenderClosed => {
+                    tracing::error!("Sender of transaction got closed")
+                }
+            },
+            Err(_) => {
+                tracing::error!("Join error")
+            }
+        }
+    }
+    Ok(())
 }
 
 const TIMEOUT: u64 = 100;

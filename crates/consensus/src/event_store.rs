@@ -172,7 +172,7 @@ impl EventStore {
     #[instrument(level = "trace")]
     pub async fn create_wait_handles(
         &mut self,
-        dependencies: BTreeMap<T, T0>,
+        dependencies: &BTreeMap<T, T0>,
         t: T,
     ) -> WaitHandleResult {
         // TODO: Create custom error
