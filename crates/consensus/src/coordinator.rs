@@ -47,7 +47,7 @@ impl StateMachine for Coordinator {
             .event_store
             .lock()
             .await
-            .init_transaction(transaction)
+            .init_transaction(transaction, self.node.serial)
             .await;
     }
 

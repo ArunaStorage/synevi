@@ -128,8 +128,6 @@ impl NetworkInterface for NetworkSet {
 
         // Send PreAccept request to every known member
         // Call match only once ...
-
-        //dbg!("[broadcast]: Create clients & requests");
         let mut await_majority = true;
         match &request {
             BroadcastRequest::PreAccept(req) => {
@@ -189,6 +187,7 @@ impl NetworkInterface for NetworkSet {
         let mut counter = 0_usize;
 
         // Poll majority
+        // TODO: Electorates for PA ?
         if await_majority {
             while let Some(response) = responses.join_next().await {
                 result.push(response??);
@@ -198,7 +197,7 @@ impl NetworkInterface for NetworkSet {
                 }
             }
             // Try to send the request only to a majority
-            // tokio::spawn(async move { while responses.join_next().await.is_some() {} });
+            tokio::spawn(async move { while responses.join_next().await.is_some() {} });
         } else {
             //tokio::spawn(async move {
             while let Some(r) = responses.join_next().await {

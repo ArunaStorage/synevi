@@ -62,17 +62,41 @@ impl MonoTime {
             .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
             .as_nanos()
             << 48;
-        let seq_node = (self.0 << 80 >> 80) + (1 << 32); // Shift out the nanos than add 1 to seq
+
+        let seq = (self.get_seq().wrapping_add(1) as u128) << 32; // Shift out the nanos than add 1 to seq
+        let node = (self.get_node() as u128) << 16;
         if self.0 > nanos {
             let drift = (self.0 - nanos) >> 48 << 48; // Shift out the seq and node first right than back left
             if drift != 0 {
                 // Shift out the seq and node than add 1 to nanos
                 // shift back and add new seq and node back
-                let next_time = ((self.0 >> 48) + 1) << 48 | seq_node;
+                let next_time = ((self.0 >> 48) + 1) << 48 | seq | node ;
                 return TimeResult::Drift(MonoTime(next_time), drift);
             }
         }
-        TimeResult::Time(MonoTime(nanos | seq_node)) // And nanos and increased seq
+        TimeResult::Time(MonoTime(nanos | seq | node)) // And nanos and increased seq
+    }
+
+
+    pub fn next_with_node(self, node: u16) -> TimeResult {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
+            .as_nanos()
+            << 48;
+
+        let seq = (self.get_seq().wrapping_add(1) as u128) << 32; // Shift out the nanos than add 1 to seq
+        let node = (node as u128) << 16;
+        if self.0 > nanos {
+            let drift = (self.0 - nanos) >> 48 << 48; // Shift out the seq and node first right than back left
+            if drift != 0 {
+                // Shift out the seq and node than add 1 to nanos
+                // shift back and add new seq and node back
+                let next_time = ((self.0 >> 48) + 1) << 48 | seq | node;
+                return TimeResult::Drift(MonoTime(next_time), drift);
+            }
+        }
+        TimeResult::Time(MonoTime(nanos | seq | node)) // And nanos and increased seq
     }
 
     // Ensures that the time is greater than self and greater than guard
