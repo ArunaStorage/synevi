@@ -15,6 +15,66 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::instrument;
 
+pub enum CoordinatorIterator {
+    Initialized(Option<Coordinator<Initialized>>),
+    PreAccepted(Option<Coordinator<PreAccepted>>),
+    Accepted(Option<Coordinator<Accepted>>),
+    Committed(Option<Coordinator<Committed>>),
+    Applied,
+}
+impl CoordinatorIterator {
+    pub async fn new(
+        node: Arc<NodeInfo>,
+        event_store: Arc<Mutex<EventStore>>,
+        network_interface: Arc<dyn NetworkInterface>,
+        transaction: Bytes,
+    ) -> Self {
+        CoordinatorIterator::Initialized(Some(
+            Coordinator::<Initialized>::new(node, event_store, network_interface, transaction)
+                .await,
+        ))
+    }
+
+    pub async fn next(&mut self) -> Result<Option<()>> {
+        match self {
+            CoordinatorIterator::Initialized(coordinator) => {
+                if let Some(c) = coordinator.take() {
+                    *self = CoordinatorIterator::PreAccepted(Some(c.pre_accept().await?));
+                    Ok(Some(()))
+                } else {
+                    Ok(None)
+                }
+            }
+            CoordinatorIterator::PreAccepted(coordinator) => {
+                if let Some(c) = coordinator.take() {
+                    *self = CoordinatorIterator::Accepted(Some(c.accept().await?));
+                    Ok(Some(()))
+                } else {
+                    Ok(None)
+                }
+            }
+            CoordinatorIterator::Accepted(coordinator) => {
+                if let Some(c) = coordinator.take() {
+                    *self = CoordinatorIterator::Committed(Some(c.commit().await?));
+                    Ok(Some(()))
+                } else {
+                    Ok(None)
+                }
+            }
+            CoordinatorIterator::Committed(coordinator) => {
+                if let Some(c) = coordinator.take() {
+                    c.apply().await?;
+                    *self = CoordinatorIterator::Applied;
+                    Ok(Some(()))
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+}
+
 pub struct Initialized;
 pub struct PreAccepted;
 pub struct Accepted;
