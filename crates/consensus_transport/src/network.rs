@@ -1,3 +1,4 @@
+use crate::consensus_transport::{RecoverRequest, RecoverResponse};
 use crate::{
     consensus_transport::{
         consensus_transport_client::ConsensusTransportClient,
@@ -45,6 +46,7 @@ pub enum BroadcastRequest {
     Accept(AcceptRequest),
     Commit(CommitRequest),
     Apply(ApplyRequest),
+    Recover(RecoverRequest),
     // TODO: Recover
 }
 
@@ -54,6 +56,7 @@ pub enum BroadcastResponse {
     Accept(AcceptResponse),
     Commit(CommitResponse),
     Apply(ApplyResponse),
+    Recover(RecoverResponse),
     // TODO: Recover
 }
 
@@ -181,6 +184,19 @@ impl NetworkInterface for NetworkSet {
                     });
                 }
             }
+            BroadcastRequest::Recover(req) => {
+                await_majority = false;
+                for replica in &self.members {
+                    let channel = replica.channel.clone();
+                    let request = req.clone();
+                    responses.spawn(async move {
+                        let mut client = ConsensusTransportClient::new(channel);
+                        Ok(BroadcastResponse::Recover(
+                            client.recover(request).await?.into_inner(),
+                        ))
+                    });
+                }
+            }
         }
 
         let majority = (self.members.len() / 2) + 1;
@@ -199,6 +215,8 @@ impl NetworkInterface for NetworkSet {
             // Try to send the request only to a majority
             tokio::spawn(async move { while responses.join_next().await.is_some() {} });
         } else {
+            // TODO: Differentiate between push and forget and wait for all response
+            // -> Apply vs Recover
             //tokio::spawn(async move {
             while let Some(r) = responses.join_next().await {
                 r.unwrap().unwrap();

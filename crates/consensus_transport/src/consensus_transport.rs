@@ -25,6 +25,7 @@ pub struct PreAcceptRequest {
 pub struct PreAcceptResponse {
     #[prost(string, tag = "1")]
     pub node: ::prost::alloc::string::String,
+    /// This field is redundant and will be ignored
     #[prost(bytes = "vec", tag = "2")]
     pub timestamp_zero: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "3")]
@@ -87,6 +88,8 @@ pub struct RecoverRequest {
     pub node: ::prost::alloc::string::String,
     #[prost(bytes = "vec", tag = "2")]
     pub event: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "3")]
+    pub timestamp_zero: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(serde::Deserialize, serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -100,6 +103,8 @@ pub struct RecoverResponse {
     pub wait: ::prost::alloc::vec::Vec<Dependency>,
     #[prost(message, repeated, tag = "4")]
     pub superseding: ::prost::alloc::vec::Vec<Dependency>,
+    #[prost(bytes = "vec", tag = "5")]
+    pub timestamp: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(serde::Deserialize, serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]

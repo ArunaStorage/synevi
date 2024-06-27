@@ -1,6 +1,4 @@
-use crate::consensus_transport::{
-    AcceptResponse, ApplyResponse, CommitResponse, PreAcceptResponse,
-};
+use crate::consensus_transport::{AcceptResponse, ApplyResponse, CommitResponse, PreAcceptResponse, RecoverResponse};
 use anyhow::anyhow;
 
 pub trait IntoInner<T> {
@@ -36,6 +34,15 @@ impl IntoInner<CommitResponse> for crate::network::BroadcastResponse {
 impl IntoInner<ApplyResponse> for crate::network::BroadcastResponse {
     fn into_inner(self) -> anyhow::Result<ApplyResponse> {
         if let crate::network::BroadcastResponse::Apply(response) = self {
+            Ok(response)
+        } else {
+            Err(anyhow!("Invalid conversion"))
+        }
+    }
+}
+impl IntoInner<RecoverResponse> for crate::network::BroadcastResponse {
+    fn into_inner(self) -> anyhow::Result<RecoverResponse> {
+        if let crate::network::BroadcastResponse::Recover(response) = self {
             Ok(response)
         } else {
             Err(anyhow!("Invalid conversion"))

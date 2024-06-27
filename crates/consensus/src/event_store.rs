@@ -72,7 +72,11 @@ impl EventStore {
     }
 
     #[instrument(level = "trace")]
-    pub async fn init_transaction(&mut self, body: Bytes, node_serial: u16) -> TransactionStateMachine {
+    pub async fn init_transaction(
+        &mut self,
+        body: Bytes,
+        node_serial: u16,
+    ) -> TransactionStateMachine {
         let t0 = self.latest_t0.next_with_node(node_serial).into_time();
         TransactionStateMachine {
             state: State::PreAccepted,

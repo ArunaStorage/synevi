@@ -23,7 +23,7 @@ message PreAcceptRequest {
 
 message PreAcceptResponse {
   string node = 1;
-  bytes timestamp_zero = 2;
+  bytes timestamp_zero = 2; // This field is redundant and will be ignored
   bytes timestamp = 3;
   repeated Dependency dependencies = 4;
 }
@@ -55,6 +55,7 @@ message ApplyResponse {}
 message RecoverRequest {
   string node = 1;
   bytes event = 2;
+  bytes timestamp_zero = 3;
 }
 
 enum State {
@@ -72,6 +73,7 @@ message RecoverResponse {
   State local_state = 2;
   repeated Dependency wait = 3;
   repeated Dependency superseding = 4;
+  bytes timestamp = 5;
 }
 
 message AcceptRequest {

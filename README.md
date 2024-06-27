@@ -1,5 +1,5 @@
 # Synevi
-Synevi (greek: συνέβει - "it happened") is leaderless, strict serializable, embeddable event store for event sourcing. 
+Synevi (greek: συνέβει - "it happened") is a leaderless, strict serializable, embeddable event store for event sourcing. 
 
 It is based on Apache Cassandras [Accord](https://cwiki.apache.org/confluence/download/attachments/188744725/Accord.pdf?version=1&modificationDate=1630847737000&api=v2) consensus algorithm which is a leaderless concurrency optimized variant of EPaxos.
 

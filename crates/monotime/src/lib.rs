@@ -70,13 +70,12 @@ impl MonoTime {
             if drift != 0 {
                 // Shift out the seq and node than add 1 to nanos
                 // shift back and add new seq and node back
-                let next_time = ((self.0 >> 48) + 1) << 48 | seq | node ;
+                let next_time = ((self.0 >> 48) + 1) << 48 | seq | node;
                 return TimeResult::Drift(MonoTime(next_time), drift);
             }
         }
         TimeResult::Time(MonoTime(nanos | seq | node)) // And nanos and increased seq
     }
-
 
     pub fn next_with_node(self, node: u16) -> TimeResult {
         let nanos = SystemTime::now()
