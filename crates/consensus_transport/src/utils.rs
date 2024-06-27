@@ -1,4 +1,6 @@
-use crate::consensus_transport::{AcceptResponse, ApplyResponse, CommitResponse, PreAcceptResponse, RecoverResponse};
+use crate::consensus_transport::{
+    AcceptResponse, ApplyResponse, CommitResponse, PreAcceptResponse, RecoverResponse,
+};
 use anyhow::anyhow;
 
 pub trait IntoInner<T> {

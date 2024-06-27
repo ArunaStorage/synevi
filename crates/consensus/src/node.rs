@@ -1,4 +1,4 @@
-use crate::coordinator::Coordinator;
+use crate::coordinator::{Coordinator, Initialized};
 use crate::event_store::EventStore;
 use crate::replica::ReplicaConfig;
 use anyhow::Result;
@@ -51,12 +51,22 @@ impl Node {
 
     #[instrument(level = "trace", skip(self))]
     pub async fn transaction(&self, transaction: Bytes) -> Result<()> {
-        let mut coordinator = Coordinator::new(
+        Coordinator::<Initialized>::new(
             self.info.clone(),
-            self.network.get_interface(),
             self.event_store.clone(),
-        );
-        coordinator.transaction(transaction).await?;
+            self.network.get_interface(),
+            transaction,
+        )
+        .await
+        .pre_accept()
+        .await?
+        .accept()
+        .await?
+        .commit()
+        .await?
+        .apply()
+        .await?;
+
         Ok(())
     }
 
