@@ -9,6 +9,7 @@ use tracing::instrument;
 
 use crate::{
     coordinator::TransactionStateMachine,
+    error::WaitError,
     utils::{from_dependency, wait_for, T, T0},
 };
 
@@ -49,10 +50,7 @@ impl PartialEq for Event {
     }
 }
 
-type WaitHandleResult = Result<(
-    JoinSet<std::result::Result<(), anyhow::Error>>,
-    Vec<(T0, T)>,
-)>;
+type WaitHandleResult = Result<(JoinSet<std::result::Result<(), WaitError>>, Vec<(T0, T)>)>;
 
 impl EventStore {
     #[instrument(level = "trace")]
@@ -189,14 +187,13 @@ impl EventStore {
                 // Dependency known
                 if dep.state.borrow().0 != State::Applied {
                     result_vec.push((*dep_t_zero, *dep_t));
-                    notifies.spawn(wait_for(t, dep.state.clone()));
+                    notifies.spawn(wait_for(t, dep.t_zero, dep.state.clone()));
                 }
             } else {
                 // Dependency unknown
                 result_vec.push((*dep_t_zero, *dep_t));
-
                 let (tx, _) = watch::channel((State::Undefined, *dep_t));
-                notifies.spawn(wait_for(t, tx.clone()));
+                notifies.spawn(wait_for(t, *dep_t_zero, tx.clone()));
                 self.insert(Event {
                     t_zero: *dep_t_zero,
                     t: *dep_t,

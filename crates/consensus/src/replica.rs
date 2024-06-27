@@ -1,3 +1,4 @@
+use crate::error::WaitError;
 use crate::event_store::{Event, EventStore};
 use crate::utils::{from_dependency, T, T0};
 use anyhow::Result;
@@ -81,25 +82,22 @@ impl Replica for ReplicaConfig {
             .create_wait_handles(dependencies.clone(), t)
             .await?;
 
-        let initial_len = handles.0.len();
-        let mut counter = 0;
         while let Some(x) = handles.0.join_next().await {
-            if let Err(e) = x.unwrap() {
-                let store = &self.event_store.lock().await.events;
-                //
-                let store = store
-                    .iter()
-                    .filter(|(_, v)| v.state.borrow().0 != State::Applied)
-                    .map(|(k, v)| (k, *v.state.borrow()))
-                    .collect::<Vec<_>>();
-                println!(
-                    "PANIC Replica: T0: {:?}, T: {:?} error: {:?}, store: {:?} | {:?} / {}",
-                    t_zero, t, e, store, counter, initial_len
-                );
-                panic!()
+            match x {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => match e {
+                    WaitError::Timeout(t0) => {
+                        // Wait for a node specific timeout
+                        // Spawn recovery to t0
+                    }
+                    WaitError::SenderClosed => {
+                        tracing::error!("Sender of transaction got closed")
+                    }
+                },
+                Err(_) => {
+                    tracing::error!("Join error")
+                }
             }
-            counter += 1;
-            // TODO: Recovery when timeout
         }
 
         Ok(CommitResponse {})
@@ -121,25 +119,22 @@ impl Replica for ReplicaConfig {
             .create_wait_handles(dependencies.clone(), t)
             .await?;
 
-        let initial_len = handles.0.len();
-        let mut counter = 0;
         while let Some(x) = handles.0.join_next().await {
-            if x.unwrap().is_err() {
-                let store = &self.event_store.lock().await.events;
-                //
-                let store = store
-                    .iter()
-                    .filter(|(_, v)| v.state.borrow().0 != State::Applied)
-                    .map(|(k, v)| (k, *v.state.borrow()))
-                    .collect::<Vec<_>>();
-                println!(
-                    "PANIC Replica: T0: {:?}, T: {:?} deps: {:?}, store: {:?} | {:?} / {}",
-                    t_zero, t, handles.1, store, counter, initial_len
-                );
-                panic!()
+            match x {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => match e {
+                    WaitError::Timeout(t0) => {
+                        // Wait for a node specific timeout
+                        // Spawn recovery to t0
+                    }
+                    WaitError::SenderClosed => {
+                        tracing::error!("Sender of transaction got closed")
+                    }
+                },
+                Err(_) => {
+                    tracing::error!("Join error")
+                }
             }
-            counter += 1;
-            // TODO: Recovery when timeout
         }
         let (tx, _) = watch::channel((State::Applied, t));
         self.event_store

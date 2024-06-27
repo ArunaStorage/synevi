@@ -9,24 +9,25 @@ license.workspace = true
 [dependencies]
 consensus_transport = { path = "../consensus_transport" }
 monotime = { path = "../monotime" }
-anyhow = {workspace = true}
+anyhow = { workspace = true }
 bytes = "1.6.0"
 chrono = "0.4.38"
-diesel-ulid = {workspace = true}
+diesel-ulid = { workspace = true }
 futures = "0.3.30"
 rusty_ulid = "2.0.0"
-serde = {workspace = true}
-serde_json = {workspace = true}
-tonic = {workspace = true}
-tokio = {workspace = true}
-tracing = {workspace = true}
+serde = { workspace = true }
+serde_json = { workspace = true }
+tonic = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
 rand = "0.8.5"
-async-trait = {workspace = true}
+async-trait = { workspace = true }
+thiserror = "1.0.61"
 
 
 [dev-dependencies]
-criterion = {version = "0.5.1", features = ["async_tokio"] }
-monotime = { path = "../monotime", features = ["unsafe_time"]}
+criterion = { version = "0.5.1", features = ["async_tokio"] }
+monotime = { path = "../monotime", features = ["unsafe_time"] }
 
 
 [[bench]]

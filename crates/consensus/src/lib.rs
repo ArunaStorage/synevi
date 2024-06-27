@@ -1,4 +1,5 @@
 mod coordinator;
+pub(crate) mod error;
 mod event_store;
 pub mod node;
 mod replica;

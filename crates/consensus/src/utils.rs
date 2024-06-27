@@ -1,6 +1,6 @@
-use crate::coordinator::TransactionStateMachine;
 use crate::event_store::Event;
-use anyhow::{anyhow, Error, Result};
+use crate::{coordinator::TransactionStateMachine, error::WaitError};
+use anyhow::Result;
 use consensus_transport::consensus_transport::{Dependency, State};
 use futures::Future;
 use monotime::MonoTime;
@@ -84,11 +84,11 @@ const TIMEOUT: u64 = 100;
 
 pub fn wait_for(
     t_request: T,
+    dependency_t0: T0,
     sender: Sender<(State, T)>,
-) -> impl Future<Output = Result<(), Error>> {
+) -> impl Future<Output = Result<(), WaitError>> {
     let mut rx = sender.subscribe();
     async move {
-        let rx_clone = rx.clone();
         let result = timeout(
             Duration::from_millis(TIMEOUT),
             rx.wait_for(|(state, dep_t)| match state {
@@ -100,17 +100,10 @@ pub fn wait_for(
         .await;
         match result {
             Ok(e) => match e {
-                Err(_) => Err(anyhow!("receive error")),
+                Err(_) => Err(WaitError::SenderClosed),
                 Ok(_) => Ok(()),
             },
-            Err(_) => {
-                let result = *rx_clone.borrow();
-                Err(anyhow!(
-                    "Timout for T: {:?} with state: {:?}",
-                    t_request,
-                    result
-                ))
-            }
+            Err(_) => Err(WaitError::Timeout(dependency_t0)),
         }
     }
 }
