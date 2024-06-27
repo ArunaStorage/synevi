@@ -57,7 +57,7 @@ impl Node {
             transaction,
         )
         .await;
-        while let Some(_) = coordinator_iter.next().await? {}
+        while coordinator_iter.next().await?.is_some() {}
         Ok(())
     }
 
