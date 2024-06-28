@@ -132,6 +132,7 @@ impl NetworkInterface for NetworkSet {
         // Send PreAccept request to every known member
         // Call match only once ...
         let mut await_majority = true;
+        let mut broadcast_all = false;
         match &request {
             BroadcastRequest::PreAccept(req) => {
                 // ... and then iterate over every member ...
@@ -186,6 +187,7 @@ impl NetworkInterface for NetworkSet {
             }
             BroadcastRequest::Recover(req) => {
                 await_majority = false;
+                broadcast_all = true;
                 for replica in &self.members {
                     let channel = replica.channel.clone();
                     let request = req.clone();
@@ -206,7 +208,18 @@ impl NetworkInterface for NetworkSet {
         // TODO: Electorates for PA ?
         if await_majority {
             while let Some(response) = responses.join_next().await {
-                result.push(response??);
+                // TODO: Resiliency to network errors
+                match response {
+                    Ok(Ok(r)) => {result.push(r)}
+                    Ok(Err(e)) => {
+                        tracing::error!("Error in response: {:?}", e);
+                        continue;
+                    }
+                    Err(_) => {
+                        tracing::error!("Join error");
+                        continue;
+                    }
+                };
                 counter += 1;
                 if counter >= majority {
                     break;
@@ -217,11 +230,28 @@ impl NetworkInterface for NetworkSet {
         } else {
             // TODO: Differentiate between push and forget and wait for all response
             // -> Apply vs Recover
-            //tokio::spawn(async move {
-            while let Some(r) = responses.join_next().await {
-                r.unwrap().unwrap();
+            if broadcast_all {
+                while let Some(response) = responses.join_next().await {
+                    result.push(response??);
+                }
+            }else{
+                //tokio::spawn(async move {
+                while let Some(r) = responses.join_next().await {
+                    match r {
+                        Ok(Err(e)) => {
+                            tracing::error!("Apply: Error in response: {:?}", e);
+                        }
+                        Err(_) => {
+                            tracing::error!("Apply: Join error");
+                        }
+                        _ => {}
+                    };
+                }
             }
-            //});
+        }
+
+        if result.len() < majority {
+            return Err(anyhow::anyhow!("Majority not reached"));
         }
         Ok(result)
     }

@@ -1,10 +1,11 @@
 use crate::event_store::EventStore;
 use crate::utils::{await_dependencies, into_dependency, T, T0};
+use anyhow::anyhow;
 use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, CommitRequest, PreAcceptRequest,
-    PreAcceptResponse, State,
+    PreAcceptResponse, RecoverRequest, State,
 };
 use consensus_transport::network::{BroadcastRequest, NetworkInterface, NodeInfo};
 use consensus_transport::utils::IntoInner;
@@ -12,7 +13,9 @@ use monotime::MonoTime;
 use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::time::timeout;
 use tracing::instrument;
 
 /// An iterator that goes through the different states of the coordinator
@@ -139,6 +142,8 @@ impl<X> Coordinator<X> {
     }
 }
 
+const RECOVER_TIMEOUT: u64 = 1000;
+
 impl Coordinator<Recover> {
     #[instrument(level = "trace")]
     pub async fn recover(
@@ -147,6 +152,24 @@ impl Coordinator<Recover> {
         network_interface: Arc<dyn NetworkInterface>,
         t0_recover: T0,
     ) -> Result<CoordinatorIterator> {
+        let (event, mut watcher) = event_store
+            .lock()
+            .await
+            .get_or_insert_event_with_watcher(t0_recover)
+            .await;
+        timeout(
+            Duration::from_millis(RECOVER_TIMEOUT),
+            watcher.wait_for(|(s, _)| *s != State::Undefined),
+        )
+        .await??;
+
+        let recover_responses = network_interface
+            .broadcast(BroadcastRequest::Recover(RecoverRequest {
+                event: todo!(),
+                timestamp_zero: todo!(),
+            }))
+            .await?;
+
         todo!()
     }
 }

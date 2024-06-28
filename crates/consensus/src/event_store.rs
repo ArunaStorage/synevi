@@ -87,6 +87,27 @@ impl EventStore {
     }
 
     #[instrument(level = "trace")]
+    pub async fn get_event(&self, t_zero: T0) -> Option<Event> {
+        self.events.get(&t_zero).cloned()
+    }
+
+    #[instrument(level = "trace")]
+    pub async fn get_or_insert_event_with_watcher(
+        &mut self,
+        t_zero: T0,
+    ) -> (Event, watch::Receiver<(State, T)>) {
+        let (tx, rx) = watch::channel((State::Undefined, T::default()));
+        let entry = self.events.entry(t_zero).or_insert(Event {
+            t_zero,
+            t: T(*t_zero),
+            state: tx,
+            event: Default::default(),
+            dependencies: BTreeMap::default(),
+        });
+        (entry.clone(), rx)
+    }
+
+    #[instrument(level = "trace")]
     pub async fn pre_accept(
         &mut self,
         request: PreAcceptRequest,
