@@ -58,8 +58,9 @@ message ApplyRequest {
 message ApplyResponse {}
 
 message RecoverRequest {
-  bytes event = 1;
-  bytes timestamp_zero = 2;
+  uint32 ballot = 1;
+  bytes event = 2;
+  bytes timestamp_zero = 3;
 }
 
 enum State {

@@ -89,9 +89,11 @@ pub struct ApplyResponse {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RecoverRequest {
-    #[prost(bytes = "vec", tag = "1")]
-    pub event: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint32, tag = "1")]
+    pub ballot: u32,
     #[prost(bytes = "vec", tag = "2")]
+    pub event: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "3")]
     pub timestamp_zero: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -107,19 +109,8 @@ pub struct RecoverResponse {
     #[prost(bytes = "vec", tag = "4")]
     pub timestamp: ::prost::alloc::vec::Vec<u8>,
 }
-#[derive(
-    serde::Deserialize,
-    serde::Serialize,
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-    ::prost::Enumeration,
-)]
+#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum State {
     Undefined = 0,
@@ -160,8 +151,8 @@ impl State {
 /// Generated client implementations.
 pub mod consensus_transport_client {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
-    use tonic::codegen::http::Uri;
     use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
     #[derive(Debug, Clone)]
     pub struct ConsensusTransportClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -205,8 +196,9 @@ pub mod consensus_transport_client {
                     <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
                 >,
             >,
-            <T as tonic::codegen::Service<http::Request<tonic::body::BoxBody>>>::Error:
-                Into<StdError> + Send + Sync,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+            >>::Error: Into<StdError> + Send + Sync,
         {
             ConsensusTransportClient::new(InterceptedService::new(inner, interceptor))
         }
@@ -244,106 +236,130 @@ pub mod consensus_transport_client {
         pub async fn pre_accept(
             &mut self,
             request: impl tonic::IntoRequest<super::PreAcceptRequest>,
-        ) -> std::result::Result<tonic::Response<super::PreAcceptResponse>, tonic::Status> {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::new(
-                    tonic::Code::Unknown,
-                    format!("Service was not ready: {}", e.into()),
-                )
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::PreAcceptResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/consensus_transport.ConsensusTransport/PreAccept",
             );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "consensus_transport.ConsensusTransport",
-                "PreAccept",
-            ));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "consensus_transport.ConsensusTransport",
+                        "PreAccept",
+                    ),
+                );
             self.inner.unary(req, path, codec).await
         }
         pub async fn commit(
             &mut self,
             request: impl tonic::IntoRequest<super::CommitRequest>,
         ) -> std::result::Result<tonic::Response<super::CommitResponse>, tonic::Status> {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::new(
-                    tonic::Code::Unknown,
-                    format!("Service was not ready: {}", e.into()),
-                )
-            })?;
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/consensus_transport.ConsensusTransport/Commit",
             );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "consensus_transport.ConsensusTransport",
-                "Commit",
-            ));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("consensus_transport.ConsensusTransport", "Commit"),
+                );
             self.inner.unary(req, path, codec).await
         }
         pub async fn accept(
             &mut self,
             request: impl tonic::IntoRequest<super::AcceptRequest>,
         ) -> std::result::Result<tonic::Response<super::AcceptResponse>, tonic::Status> {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::new(
-                    tonic::Code::Unknown,
-                    format!("Service was not ready: {}", e.into()),
-                )
-            })?;
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/consensus_transport.ConsensusTransport/Accept",
             );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "consensus_transport.ConsensusTransport",
-                "Accept",
-            ));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("consensus_transport.ConsensusTransport", "Accept"),
+                );
             self.inner.unary(req, path, codec).await
         }
         pub async fn apply(
             &mut self,
             request: impl tonic::IntoRequest<super::ApplyRequest>,
         ) -> std::result::Result<tonic::Response<super::ApplyResponse>, tonic::Status> {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::new(
-                    tonic::Code::Unknown,
-                    format!("Service was not ready: {}", e.into()),
-                )
-            })?;
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/consensus_transport.ConsensusTransport/Apply",
             );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "consensus_transport.ConsensusTransport",
-                "Apply",
-            ));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("consensus_transport.ConsensusTransport", "Apply"),
+                );
             self.inner.unary(req, path, codec).await
         }
         pub async fn recover(
             &mut self,
             request: impl tonic::IntoRequest<super::RecoverRequest>,
-        ) -> std::result::Result<tonic::Response<super::RecoverResponse>, tonic::Status> {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::new(
-                    tonic::Code::Unknown,
-                    format!("Service was not ready: {}", e.into()),
-                )
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::RecoverResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/consensus_transport.ConsensusTransport/Recover",
             );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "consensus_transport.ConsensusTransport",
-                "Recover",
-            ));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("consensus_transport.ConsensusTransport", "Recover"),
+                );
             self.inner.unary(req, path, codec).await
         }
     }
@@ -358,7 +374,10 @@ pub mod consensus_transport_server {
         async fn pre_accept(
             &self,
             request: tonic::Request<super::PreAcceptRequest>,
-        ) -> std::result::Result<tonic::Response<super::PreAcceptResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::PreAcceptResponse>,
+            tonic::Status,
+        >;
         async fn commit(
             &self,
             request: tonic::Request<super::CommitRequest>,
@@ -399,7 +418,10 @@ pub mod consensus_transport_server {
                 max_encoding_message_size: None,
             }
         }
-        pub fn with_interceptor<F>(inner: T, interceptor: F) -> InterceptedService<Self, F>
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
         where
             F: tonic::service::Interceptor,
         {
@@ -455,11 +477,15 @@ pub mod consensus_transport_server {
                 "/consensus_transport.ConsensusTransport/PreAccept" => {
                     #[allow(non_camel_case_types)]
                     struct PreAcceptSvc<T: ConsensusTransport>(pub Arc<T>);
-                    impl<T: ConsensusTransport> tonic::server::UnaryService<super::PreAcceptRequest>
-                        for PreAcceptSvc<T>
-                    {
+                    impl<
+                        T: ConsensusTransport,
+                    > tonic::server::UnaryService<super::PreAcceptRequest>
+                    for PreAcceptSvc<T> {
                         type Response = super::PreAcceptResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::PreAcceptRequest>,
@@ -497,9 +523,15 @@ pub mod consensus_transport_server {
                 "/consensus_transport.ConsensusTransport/Commit" => {
                     #[allow(non_camel_case_types)]
                     struct CommitSvc<T: ConsensusTransport>(pub Arc<T>);
-                    impl<T: ConsensusTransport> tonic::server::UnaryService<super::CommitRequest> for CommitSvc<T> {
+                    impl<
+                        T: ConsensusTransport,
+                    > tonic::server::UnaryService<super::CommitRequest>
+                    for CommitSvc<T> {
                         type Response = super::CommitResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::CommitRequest>,
@@ -537,9 +569,15 @@ pub mod consensus_transport_server {
                 "/consensus_transport.ConsensusTransport/Accept" => {
                     #[allow(non_camel_case_types)]
                     struct AcceptSvc<T: ConsensusTransport>(pub Arc<T>);
-                    impl<T: ConsensusTransport> tonic::server::UnaryService<super::AcceptRequest> for AcceptSvc<T> {
+                    impl<
+                        T: ConsensusTransport,
+                    > tonic::server::UnaryService<super::AcceptRequest>
+                    for AcceptSvc<T> {
                         type Response = super::AcceptResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::AcceptRequest>,
@@ -577,9 +615,14 @@ pub mod consensus_transport_server {
                 "/consensus_transport.ConsensusTransport/Apply" => {
                     #[allow(non_camel_case_types)]
                     struct ApplySvc<T: ConsensusTransport>(pub Arc<T>);
-                    impl<T: ConsensusTransport> tonic::server::UnaryService<super::ApplyRequest> for ApplySvc<T> {
+                    impl<
+                        T: ConsensusTransport,
+                    > tonic::server::UnaryService<super::ApplyRequest> for ApplySvc<T> {
                         type Response = super::ApplyResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::ApplyRequest>,
@@ -617,9 +660,15 @@ pub mod consensus_transport_server {
                 "/consensus_transport.ConsensusTransport/Recover" => {
                     #[allow(non_camel_case_types)]
                     struct RecoverSvc<T: ConsensusTransport>(pub Arc<T>);
-                    impl<T: ConsensusTransport> tonic::server::UnaryService<super::RecoverRequest> for RecoverSvc<T> {
+                    impl<
+                        T: ConsensusTransport,
+                    > tonic::server::UnaryService<super::RecoverRequest>
+                    for RecoverSvc<T> {
                         type Response = super::RecoverResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::RecoverRequest>,
@@ -654,14 +703,18 @@ pub mod consensus_transport_server {
                     };
                     Box::pin(fut)
                 }
-                _ => Box::pin(async move {
-                    Ok(http::Response::builder()
-                        .status(200)
-                        .header("grpc-status", "12")
-                        .header("content-type", "application/grpc")
-                        .body(empty_body())
-                        .unwrap())
-                }),
+                _ => {
+                    Box::pin(async move {
+                        Ok(
+                            http::Response::builder()
+                                .status(200)
+                                .header("grpc-status", "12")
+                                .header("content-type", "application/grpc")
+                                .body(empty_body())
+                                .unwrap(),
+                        )
+                    })
+                }
             }
         }
     }
@@ -687,7 +740,8 @@ pub mod consensus_transport_server {
             write!(f, "{:?}", self.0)
         }
     }
-    impl<T: ConsensusTransport> tonic::server::NamedService for ConsensusTransportServer<T> {
+    impl<T: ConsensusTransport> tonic::server::NamedService
+    for ConsensusTransportServer<T> {
         const NAME: &'static str = "consensus_transport.ConsensusTransport";
     }
 }

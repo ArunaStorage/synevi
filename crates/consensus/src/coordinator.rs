@@ -5,7 +5,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, CommitRequest, PreAcceptRequest,
-    PreAcceptResponse, RecoverRequest, State,
+    PreAcceptResponse, RecoverRequest, RecoverResponse, State,
 };
 use consensus_transport::network::{BroadcastRequest, NetworkInterface, NodeInfo};
 use consensus_transport::utils::IntoInner;
@@ -163,12 +163,50 @@ impl Coordinator<Recover> {
         )
         .await??;
 
+        // Just for sanity purposes
+        assert_eq!(event.t_zero, t0_recover);
+
         let recover_responses = network_interface
             .broadcast(BroadcastRequest::Recover(RecoverRequest {
-                event: todo!(),
-                timestamp_zero: todo!(),
+                ballot: 1,
+                event: event.event.to_vec(),
+                timestamp_zero: t0_recover.into(),
             }))
             .await?;
+
+        Self::recover_consensus(
+            node,
+            event_store,
+            network_interface,
+            &recover_responses
+                .into_iter()
+                .map(|res| res.into_inner())
+                .collect::<Result<Vec<_>>>()?,
+        )
+        .await
+    }
+
+    #[instrument(level = "trace")]
+    async fn recover_consensus(
+        node: Arc<NodeInfo>,
+        event_store: Arc<Mutex<EventStore>>,
+        network_interface: Arc<dyn NetworkInterface>,
+        responses: &[RecoverResponse],
+    ) -> Result<CoordinatorIterator> {
+
+        let mut transaction_state = TransactionStateMachine {
+            state: State::PreAccepted,
+            transaction: Bytes::new(),
+            t_zero: T0::default(),
+            t: T::default(),
+            dependencies: BTreeMap::default(),
+            ballot: 0,
+        };
+
+        for response in responses {
+
+        }
+
 
         todo!()
     }
@@ -489,6 +527,7 @@ mod tests {
                 t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
                 t: T(MonoTime::new_with_time(10u128, 0, 0)),
                 dependencies: BTreeMap::default(),
+                ballot: 0,
             }
         );
 
@@ -593,6 +632,7 @@ mod tests {
                     .iter()
                     .cloned()
                 ),
+                ballot: 0,
             }
         );
     }
@@ -659,6 +699,7 @@ mod tests {
                     T(MonoTime::new_with_time(13u128, 0, 1)),
                     T0(MonoTime::new_with_time(11u128, 0, 1))
                 ),]),
+                ballot: 0,
             }
         );
     }

@@ -38,6 +38,7 @@ pub struct Event {
     pub state: tokio::sync::watch::Sender<(State, T)>,
     pub event: Bytes,
     pub dependencies: BTreeMap<T, T0>, // t and t_zero
+    pub ballot: u32,
 }
 
 impl PartialEq for Event {
@@ -103,6 +104,7 @@ impl EventStore {
             state: tx,
             event: Default::default(),
             dependencies: BTreeMap::default(),
+            ballot: 0,
         });
         (entry.clone(), rx)
     }
@@ -145,6 +147,7 @@ impl EventStore {
             state: tx,
             event: request.event.into(),
             dependencies: from_dependency(deps.clone())?,
+            ballot: 0,
         };
         self.events.insert(t_zero, event);
         Ok((deps, t))
@@ -163,6 +166,9 @@ impl EventStore {
             old_event.t = event.t;
             old_event.dependencies = event.dependencies;
             old_event.event = event.event;
+            if event.ballot > old_event.ballot {
+                old_event.ballot = event.ballot;
+            }
         }
 
         self.mappings.insert(event.t, event.t_zero);
@@ -227,6 +233,7 @@ impl EventStore {
                     state: tx,
                     event: Default::default(),
                     dependencies: BTreeMap::default(),
+                    ballot: 0,
                 })
                 .await;
             }

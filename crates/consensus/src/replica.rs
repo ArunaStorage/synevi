@@ -49,6 +49,7 @@ impl Replica for ReplicaConfig {
                 state: tx,
                 event: request.event.into(),
                 dependencies: from_dependency(request.dependencies.clone())?,
+                ballot: request.ballot,
             })
             .await;
 
@@ -79,6 +80,7 @@ impl Replica for ReplicaConfig {
                 state: tx,
                 event: request.event.clone().into(),
                 dependencies: dependencies.clone(),
+                ballot: 0, // Will keep the highest ballot
             })
             .await;
         await_dependencies(
@@ -121,6 +123,7 @@ impl Replica for ReplicaConfig {
                 state: tx,
                 event: transaction,
                 dependencies,
+                ballot: 0,
             })
             .await;
 

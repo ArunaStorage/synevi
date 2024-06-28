@@ -210,7 +210,7 @@ impl NetworkInterface for NetworkSet {
             while let Some(response) = responses.join_next().await {
                 // TODO: Resiliency to network errors
                 match response {
-                    Ok(Ok(r)) => {result.push(r)}
+                    Ok(Ok(r)) => result.push(r),
                     Ok(Err(e)) => {
                         tracing::error!("Error in response: {:?}", e);
                         continue;
@@ -234,7 +234,7 @@ impl NetworkInterface for NetworkSet {
                 while let Some(response) = responses.join_next().await {
                     result.push(response??);
                 }
-            }else{
+            } else {
                 //tokio::spawn(async move {
                 while let Some(r) = responses.join_next().await {
                     match r {

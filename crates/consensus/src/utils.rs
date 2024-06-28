@@ -81,6 +81,7 @@ impl From<&TransactionStateMachine> for Event {
             state: tx,
             event: value.transaction.clone(),
             dependencies: value.dependencies.clone(),
+            ballot: value.ballot,
         }
     }
 }
