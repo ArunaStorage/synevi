@@ -247,11 +247,16 @@ impl NetworkInterface for NetworkSet {
                         _ => {}
                     };
                 }
+                return Ok(result); // No majority needed -> return early
             }
         }
 
         if result.len() < majority {
-            return Err(anyhow::anyhow!("Majority not reached"));
+            return Err(anyhow::anyhow!(
+                "Majority not reached len: {} / majority:{}",
+                result.len(),
+                majority
+            ));
         }
         Ok(result)
     }
