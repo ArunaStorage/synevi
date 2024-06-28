@@ -33,7 +33,10 @@ message AcceptRequest {
   repeated Dependency dependencies = 5;
 }
 
-message AcceptResponse { repeated Dependency dependencies = 2; }
+message AcceptResponse { 
+  repeated Dependency dependencies = 1;
+  bool nack = 2;
+}
 
 message CommitRequest {
   bytes event = 1;
@@ -77,4 +80,5 @@ message RecoverResponse {
   repeated Dependency wait = 2;
   repeated Dependency superseding = 3;
   bytes timestamp = 4;
+  bool nack = 5;
 }

@@ -166,9 +166,12 @@ impl Coordinator<Recover> {
         // Just for sanity purposes
         assert_eq!(event.t_zero, t0_recover);
 
+        let ballot = event.ballot + 1;
+
+        // TODO: NACK ?
         let recover_responses = network_interface
             .broadcast(BroadcastRequest::Recover(RecoverRequest {
-                ballot: 1,
+                ballot,
                 event: event.event.to_vec(),
                 timestamp_zero: t0_recover.into(),
             }))
@@ -182,6 +185,8 @@ impl Coordinator<Recover> {
                 .into_iter()
                 .map(|res| res.into_inner())
                 .collect::<Result<Vec<_>>>()?,
+            ballot,
+            t0_recover,
         )
         .await
     }
@@ -192,8 +197,9 @@ impl Coordinator<Recover> {
         event_store: Arc<Mutex<EventStore>>,
         network_interface: Arc<dyn NetworkInterface>,
         responses: &[RecoverResponse],
+        ballot: u32,
+        t_zero: T0,
     ) -> Result<CoordinatorIterator> {
-
         let mut transaction_state = TransactionStateMachine {
             state: State::PreAccepted,
             transaction: Bytes::new(),
@@ -203,10 +209,7 @@ impl Coordinator<Recover> {
             ballot: 0,
         };
 
-        for response in responses {
-
-        }
-
+        for response in responses {}
 
         todo!()
     }

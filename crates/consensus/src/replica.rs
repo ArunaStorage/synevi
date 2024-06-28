@@ -40,28 +40,32 @@ impl Replica for ReplicaConfig {
         let t = T(MonoTime::try_from(request.timestamp.as_slice())?);
 
         let (tx, _) = watch::channel((State::Accepted, t));
-        self.event_store
-            .lock()
-            .await
-            .upsert(Event {
-                t_zero,
-                t,
-                state: tx,
-                event: request.event.into(),
-                dependencies: from_dependency(request.dependencies.clone())?,
-                ballot: request.ballot,
-            })
-            .await;
 
-        // Should this be saved to event_store before it is finalized in commit?
-        // TODO: Check if the deps do not need unification
-        let dependencies = self
-            .event_store
-            .lock()
-            .await
-            .get_dependencies(&t, &t_zero)
-            .await;
-        Ok(AcceptResponse { dependencies })
+        let dependencies = {
+            let mut store = self.event_store.lock().await;
+            if request.ballot < store.get_ballot(&t_zero) {
+                return Ok(AcceptResponse {
+                    dependencies: vec![],
+                    nack: true,
+                });
+            }
+            store
+                .upsert(Event {
+                    t_zero,
+                    t,
+                    state: tx,
+                    event: request.event.into(),
+                    dependencies: from_dependency(request.dependencies.clone())?,
+                    ballot: request.ballot,
+                })
+                .await;
+
+            store.get_dependencies(&t, &t_zero).await
+        };
+        Ok(AcceptResponse {
+            dependencies,
+            nack: false,
+        })
     }
 
     #[instrument(level = "trace", skip(self))]

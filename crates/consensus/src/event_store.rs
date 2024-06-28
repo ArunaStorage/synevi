@@ -154,6 +154,14 @@ impl EventStore {
     }
 
     #[instrument(level = "trace")]
+    pub fn get_ballot(&self, t_zero: &T0) -> u32 {
+        self.events
+            .get(t_zero)
+            .map(|event| event.ballot)
+            .unwrap_or(0)
+    }
+
+    #[instrument(level = "trace")]
     pub async fn upsert(&mut self, event: Event) {
         let old_event = self.events.entry(event.t_zero).or_insert(event.clone());
         if self.latest_t0 < event.t_zero {
