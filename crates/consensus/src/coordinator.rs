@@ -142,7 +142,7 @@ impl<X> Coordinator<X> {
     }
 }
 
-const RECOVER_TIMEOUT: u64 = 1000;
+const RECOVER_TIMEOUT: u64 = 10000;
 
 impl Coordinator<Recover> {
     #[instrument(level = "trace")]
@@ -206,7 +206,7 @@ impl Coordinator<Recover> {
             t_zero: T0::default(),
             t: T::default(),
             dependencies: BTreeMap::default(),
-            ballot: 0,
+            ballot,
         };
 
         for response in responses {}
