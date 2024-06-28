@@ -6,6 +6,7 @@ use consensus_transport::consensus_transport::*;
 use consensus_transport::network::{Network, NodeInfo};
 use consensus_transport::replica::Replica;
 use monotime::MonoTime;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex};
 use tracing::instrument;
@@ -15,18 +16,38 @@ pub struct ReplicaConfig {
     pub node_info: Arc<NodeInfo>,
     pub network: Arc<Mutex<dyn Network + Send + Sync>>,
     pub event_store: Arc<Mutex<EventStore>>,
+    //pub reorder_buffer: Arc<Mutex<BTreeMap<T0, (Bytes, watch::Sender<Option<T0>>)>>>,
 }
 
 #[async_trait::async_trait]
 impl Replica for ReplicaConfig {
     #[instrument(level = "trace", skip(self))]
     async fn pre_accept(&self, request: PreAcceptRequest) -> Result<PreAcceptResponse> {
+
+
+        //self.reorder_buffer.lock().await.pop_first()
+
+        // Put request into_reorder buffer
+        // Wait (max latency of majority + skew) - (latency from node)/2
+        // Calculate deps -> all from event_store + deps that would result from the reorder buffer
+
+        // t0-2, t0-4, t-06, t-01, t-03, t-05, t-07
+        // 
+
+        // timeout || wait_for(|inner| inner.is_some())
+        // ? timeout oder aufgeweckt..
+        // Wenn timeout -> Wecke buffer[0] und sag dem ich wars (T0)
+        // wait_for(|inner| inner.is_some())
+
         let (deps, t) = self
             .event_store
             .lock()
             .await
             .pre_accept(request, self.node_info.serial)
             .await?;
+
+        // Remove mich aus buffer
+        // wenn ich geweckt wurde && T0 != Ich -> buffer[0].awake
 
         Ok(PreAcceptResponse {
             timestamp: t.into(),
