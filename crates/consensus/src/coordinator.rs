@@ -15,7 +15,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::instrument;
 
-
 /// An iterator that goes through the different states of the coordinator
 pub enum CoordinatorIterator {
     Initialized(Option<Coordinator<Initialized>>),
@@ -83,7 +82,9 @@ impl CoordinatorIterator {
         network_interface: Arc<dyn NetworkInterface>,
         t0_recover: T0,
     ) -> Result<()> {
-        let mut coordinator_iter = Coordinator::<Recover>::recover(node, event_store, network_interface, t0_recover).await?;
+        let mut coordinator_iter =
+            Coordinator::<Recover>::recover(node, event_store, network_interface, t0_recover)
+                .await?;
         while coordinator_iter.next().await?.is_some() {}
         Ok(())
     }

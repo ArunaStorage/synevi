@@ -21,7 +21,12 @@ pub struct ReplicaConfig {
 impl Replica for ReplicaConfig {
     #[instrument(level = "trace", skip(self))]
     async fn pre_accept(&self, request: PreAcceptRequest) -> Result<PreAcceptResponse> {
-        let (deps, t) = self.event_store.lock().await.pre_accept(request).await?;
+        let (deps, t) = self
+            .event_store
+            .lock()
+            .await
+            .pre_accept(request, self.node_info.serial)
+            .await?;
 
         Ok(PreAcceptResponse {
             timestamp: t.into(),
@@ -82,7 +87,8 @@ impl Replica for ReplicaConfig {
             &dependencies,
             self.network.lock().await.get_interface(),
             t,
-        ).await?;
+        )
+        .await?;
 
         Ok(CommitResponse {})
     }
@@ -102,7 +108,8 @@ impl Replica for ReplicaConfig {
             &dependencies,
             self.network.lock().await.get_interface(),
             t,
-        ).await?;
+        )
+        .await?;
 
         let (tx, _) = watch::channel((State::Applied, t));
         self.event_store

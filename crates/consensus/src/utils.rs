@@ -114,7 +114,13 @@ pub async fn await_dependencies(
                     WaitError::Timeout(t0) => {
                         // Wait for a node specific timeout
                         // Await recovery for t0
-                        CoordinatorIterator::recover(node.clone(), store.clone(), network_interface.clone(), t0).await?;
+                        CoordinatorIterator::recover(
+                            node.clone(),
+                            store.clone(),
+                            network_interface.clone(),
+                            t0,
+                        )
+                        .await?;
                         // Retry from handles
                         continue 'outer;
                     }

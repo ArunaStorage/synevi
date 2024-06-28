@@ -87,7 +87,11 @@ impl EventStore {
     }
 
     #[instrument(level = "trace")]
-    pub async fn pre_accept(&mut self, request: PreAcceptRequest) -> Result<(Vec<Dependency>, T)> {
+    pub async fn pre_accept(
+        &mut self,
+        request: PreAcceptRequest,
+        node_serial: u16,
+    ) -> Result<(Vec<Dependency>, T)> {
         // Parse t_zero
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
 
@@ -95,7 +99,9 @@ impl EventStore {
             let t = T(if let Some((last_t, _)) = self.mappings.last_key_value() {
                 if **last_t > *t_zero {
                     // This unwrap will not panic
-                    t_zero.next_with_guard(last_t).into_time()
+                    t_zero
+                        .next_with_guard_and_node(last_t, node_serial)
+                        .into_time()
                 } else {
                     *t_zero
                 }

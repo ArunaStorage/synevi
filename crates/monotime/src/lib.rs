@@ -111,6 +111,19 @@ impl MonoTime {
         }
     }
 
+    pub fn next_with_guard_and_node(self, guard: &MonoTime, node: u16) -> TimeResult {
+        let time = self.next_with_node(node).into_time();
+        if &time < guard {
+            let drift = guard.get_nanos() - time.get_nanos();
+            let seq = (time.get_seq() as u128) << 32;
+            let node = (time.get_node() as u128) << 16;
+            let next_time = MonoTime((guard.get_nanos() + 1) << 48 | seq | node);
+            TimeResult::Drift(next_time, drift)
+        } else {
+            TimeResult::Time(time)
+        }
+    }
+
     #[cfg(feature = "unsafe_time")]
     pub fn new_with_time(nanos: u128, seq: u16, node: u16) -> Self {
         let time_stamp = nanos << 48 | (seq as u128) << 32 | (node as u128) << 16;
