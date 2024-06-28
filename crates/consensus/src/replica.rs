@@ -6,7 +6,6 @@ use consensus_transport::consensus_transport::*;
 use consensus_transport::network::{Network, NodeInfo};
 use consensus_transport::replica::Replica;
 use monotime::MonoTime;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex};
 use tracing::instrument;
@@ -23,8 +22,6 @@ pub struct ReplicaConfig {
 impl Replica for ReplicaConfig {
     #[instrument(level = "trace", skip(self))]
     async fn pre_accept(&self, request: PreAcceptRequest) -> Result<PreAcceptResponse> {
-
-
         //self.reorder_buffer.lock().await.pop_first()
 
         // Put request into_reorder buffer
@@ -32,7 +29,7 @@ impl Replica for ReplicaConfig {
         // Calculate deps -> all from event_store + deps that would result from the reorder buffer
 
         // t0-2, t0-4, t-06, t-01, t-03, t-05, t-07
-        // 
+        //
 
         // timeout || wait_for(|inner| inner.is_some())
         // ? timeout oder aufgeweckt..

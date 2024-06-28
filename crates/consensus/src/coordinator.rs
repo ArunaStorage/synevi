@@ -2,7 +2,10 @@ use crate::event_store::EventStore;
 use crate::utils::{await_dependencies, from_dependency, into_dependency, T, T0};
 use anyhow::Result;
 use bytes::Bytes;
-use consensus_transport::consensus_transport::{AcceptRequest, AcceptResponse, ApplyRequest, CommitRequest, Dependency, PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse, State};
+use consensus_transport::consensus_transport::{
+    AcceptRequest, AcceptResponse, ApplyRequest, CommitRequest, Dependency, PreAcceptRequest,
+    PreAcceptResponse, RecoverRequest, RecoverResponse, State,
+};
 use consensus_transport::network::{BroadcastRequest, NetworkInterface, NodeInfo};
 use consensus_transport::utils::IntoInner;
 use monotime::MonoTime;
@@ -12,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
-use tracing::{instrument, trace};
+use tracing::instrument;
 
 /// An iterator that goes through the different states of the coordinator
 
@@ -84,12 +87,15 @@ impl CoordinatorIterator {
         network_interface: Arc<dyn NetworkInterface>,
         t0_recover: T0,
     ) -> Result<()> {
-
         let mut backoff_counter: u8 = 0;
         while backoff_counter <= MAX_RETRIES {
-            let mut coordinator_iter =
-                Coordinator::<Recover>::recover(node.clone(), event_store.clone(), network_interface.clone(), t0_recover)
-                    .await?;
+            let mut coordinator_iter = Coordinator::<Recover>::recover(
+                node.clone(),
+                event_store.clone(),
+                network_interface.clone(),
+                t0_recover,
+            )
+            .await?;
             if let CoordinatorIterator::RestartRecovery = coordinator_iter {
                 backoff_counter += 1;
                 continue;
@@ -219,7 +225,7 @@ impl Coordinator<Recover> {
         let mut highest_ballot: Option<u32> = None;
         let mut superseding = false;
         let mut waiting: Vec<Dependency> = Vec::new();
-        
+
         for response in responses.iter_mut() {
             if response.nack > 0 || highest_ballot.is_some() {
                 match highest_ballot.as_mut() {
@@ -241,23 +247,26 @@ impl Coordinator<Recover> {
             }
             waiting.extend(std::mem::take(&mut response.wait));
 
-
             // Update state
             let replica_state = response.local_state();
 
             match replica_state {
-                State::PreAccepted  if state_machine.state <= State::PreAccepted => {
+                State::PreAccepted if state_machine.state <= State::PreAccepted => {
                     if replica_t > state_machine.t {
                         state_machine.t = replica_t;
                     }
-                    state_machine.dependencies.extend(from_dependency(response.dependencies.clone())?);
-                },
+                    state_machine
+                        .dependencies
+                        .extend(from_dependency(response.dependencies.clone())?);
+                }
                 State::Accepted if state_machine.state < State::Accepted => {
                     state_machine.t = replica_t;
                     state_machine.state = State::Accepted;
                     state_machine.dependencies = from_dependency(response.dependencies.clone())?;
                 }
-                State::Accepted if state_machine.state == State::Accepted && replica_t > state_machine.t => {
+                State::Accepted
+                    if state_machine.state == State::Accepted && replica_t > state_machine.t =>
+                {
                     state_machine.t = replica_t;
                     state_machine.dependencies = from_dependency(response.dependencies.clone())?;
                 }
@@ -265,7 +274,8 @@ impl Coordinator<Recover> {
                     state_machine.state = any_state;
                     state_machine.t = replica_t;
                     if state_machine.state >= State::Accepted {
-                        state_machine.dependencies = from_dependency(response.dependencies.clone())?;
+                        state_machine.dependencies =
+                            from_dependency(response.dependencies.clone())?;
                     }
                 }
                 _ => {}
@@ -289,37 +299,31 @@ impl Coordinator<Recover> {
         // Wait for deps
 
         Ok(match state_machine.state {
-            State::Applied => {
-                CoordinatorIterator::Committed(Some(Coordinator::<Committed>{
-                    node,
-                    network_interface,
-                    event_store,
-                    transaction: state_machine,
-                    phantom: Default::default(),
-                }))
-            }
-            State::Commited => {
-                CoordinatorIterator::Accepted(Some(Coordinator::<Accepted> {
-                    node,
-                    network_interface,
-                    event_store,
-                    transaction: state_machine,
-                    phantom: Default::default(),
-                }))
-            }
-            State::Accepted  => {
-                CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted>{
-                    node,
-                    network_interface,
-                    event_store,
-                    transaction: state_machine,
-                    phantom: Default::default(),
-                }))
-            }
+            State::Applied => CoordinatorIterator::Committed(Some(Coordinator::<Committed> {
+                node,
+                network_interface,
+                event_store,
+                transaction: state_machine,
+                phantom: Default::default(),
+            })),
+            State::Commited => CoordinatorIterator::Accepted(Some(Coordinator::<Accepted> {
+                node,
+                network_interface,
+                event_store,
+                transaction: state_machine,
+                phantom: Default::default(),
+            })),
+            State::Accepted => CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted> {
+                node,
+                network_interface,
+                event_store,
+                transaction: state_machine,
+                phantom: Default::default(),
+            })),
 
             State::PreAccepted => {
                 if superseding {
-                    CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted>{
+                    CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted> {
                         node,
                         network_interface,
                         event_store,
@@ -336,7 +340,7 @@ impl Coordinator<Recover> {
                     return Ok(CoordinatorIterator::RestartRecovery);
                 } else {
                     state_machine.t = T(*state_machine.t_zero);
-                    CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted>{
+                    CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted> {
                         node,
                         network_interface,
                         event_store,

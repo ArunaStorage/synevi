@@ -1,20 +1,21 @@
 [workspace]
-members = [
-    "crates/*",
-    "tests"
-]
+members = ["crates/*", "tests", "benches"]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["Sebastian Beyvers <sb@pus.de>", "Jannis Hochmuth <jannis.hochmuth@cb.jlug.de>", "Lukas Brehm <lukas.brehm@cb.jlug.de>"]
+authors = [
+    "Sebastian Beyvers <sb@pus.de>",
+    "Jannis Hochmuth <jannis.hochmuth@cb.jlug.de>",
+    "Lukas Brehm <lukas.brehm@cb.jlug.de>",
+]
 repository = "https://github.com/ArunaStorage/synevi"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 anyhow = "1.0.86"
-serde = { version= "1.0.203", features = ["derive"] }
+serde = { version = "1.0.203", features = ["derive"] }
 serde_json = "1.0.117"
 tokio = { version = "1.38.0", features = ["full"] }
 tonic = "0.11.0"

@@ -1,5 +1,5 @@
 [package]
-name = "synevi_tests"
+name = "synevi_benches"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -22,8 +22,9 @@ tonic = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 rand = "0.8.5"
+criterion = { version = "0.5.1", features = ["async_tokio"] }
 
-
-[[test]]
-name = "consensus_e2e"
-path = "consensus_e2e.rs"
+[[bench]]
+name = "performance"
+path = "./performance.rs" # The source file of the target.
+harness = false

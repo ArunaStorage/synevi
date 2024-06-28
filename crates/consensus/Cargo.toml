@@ -26,10 +26,4 @@ thiserror = "1.0.61"
 
 
 [dev-dependencies]
-criterion = { version = "0.5.1", features = ["async_tokio"] }
 monotime = { path = "../monotime", features = ["unsafe_time"] }
-
-
-[[bench]]
-name = "performance"
-harness = false
