@@ -15,6 +15,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::instrument;
 
+
+/// An iterator that goes through the different states of the coordinator
 pub enum CoordinatorIterator {
     Initialized(Option<Coordinator<Initialized>>),
     PreAccepted(Option<Coordinator<PreAccepted>>),
@@ -22,6 +24,7 @@ pub enum CoordinatorIterator {
     Committed(Option<Coordinator<Committed>>),
     Applied,
 }
+
 impl CoordinatorIterator {
     pub async fn new(
         node: Arc<NodeInfo>,
@@ -73,6 +76,17 @@ impl CoordinatorIterator {
             _ => Ok(None),
         }
     }
+
+    pub async fn recover(
+        node: Arc<NodeInfo>,
+        event_store: Arc<Mutex<EventStore>>,
+        network_interface: Arc<dyn NetworkInterface>,
+        t0_recover: T0,
+    ) -> Result<()> {
+        let mut coordinator_iter = Coordinator::<Recover>::recover(node, event_store, network_interface, t0_recover).await?;
+        while coordinator_iter.next().await?.is_some() {}
+        Ok(())
+    }
 }
 
 pub struct Initialized;
@@ -80,6 +94,7 @@ pub struct PreAccepted;
 pub struct Accepted;
 pub struct Committed;
 pub struct Applied;
+pub struct Recover;
 
 pub struct Coordinator<X> {
     pub node: Arc<NodeInfo>,
@@ -120,6 +135,18 @@ impl<X> Coordinator<X> {
             transaction,
             phantom: PhantomData,
         }
+    }
+}
+
+impl Coordinator<Recover> {
+    #[instrument(level = "trace")]
+    pub async fn recover(
+        node: Arc<NodeInfo>,
+        event_store: Arc<Mutex<EventStore>>,
+        network_interface: Arc<dyn NetworkInterface>,
+        t0_recover: T0,
+    ) -> Result<CoordinatorIterator> {
+        todo!()
     }
 }
 
@@ -296,11 +323,13 @@ impl Coordinator<Accepted> {
             .await
             .upsert((&self.transaction).into())
             .await;
-        await_dependencies(
+        Box::pin(await_dependencies(
+            self.node.clone(),
             self.event_store.clone(),
             &self.transaction.dependencies,
+            self.network_interface.clone(),
             self.transaction.t,
-        )
+        ))
         .await?;
         Ok(())
     }

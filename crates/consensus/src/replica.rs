@@ -3,6 +3,7 @@ use crate::utils::{await_dependencies, from_dependency, T, T0};
 use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::*;
+use consensus_transport::network::{Network, NodeInfo};
 use consensus_transport::replica::Replica;
 use monotime::MonoTime;
 use std::sync::Arc;
@@ -11,6 +12,8 @@ use tracing::instrument;
 
 #[derive(Debug)]
 pub struct ReplicaConfig {
+    pub node_info: Arc<NodeInfo>,
+    pub network: Arc<Mutex<dyn Network + Send + Sync>>,
     pub event_store: Arc<Mutex<EventStore>>,
 }
 
@@ -73,8 +76,13 @@ impl Replica for ReplicaConfig {
                 dependencies: dependencies.clone(),
             })
             .await;
-
-        await_dependencies(self.event_store.clone(), &dependencies, t).await?;
+        await_dependencies(
+            self.node_info.clone(),
+            self.event_store.clone(),
+            &dependencies,
+            self.network.lock().await.get_interface(),
+            t,
+        ).await?;
 
         Ok(CommitResponse {})
     }
@@ -88,7 +96,13 @@ impl Replica for ReplicaConfig {
 
         let dependencies = from_dependency(request.dependencies.clone())?;
 
-        await_dependencies(self.event_store.clone(), &dependencies, t).await?;
+        await_dependencies(
+            self.node_info.clone(),
+            self.event_store.clone(),
+            &dependencies,
+            self.network.lock().await.get_interface(),
+            t,
+        ).await?;
 
         let (tx, _) = watch::channel((State::Applied, t));
         self.event_store

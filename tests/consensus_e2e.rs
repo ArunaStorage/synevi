@@ -5,6 +5,7 @@ mod tests {
     use consensus::utils::{T, T0};
     use consensus_transport::consensus_transport::State;
     use diesel_ulid::DieselUlid;
+    use tokio::sync::Mutex;
     use std::collections::BTreeMap;
     use std::net::SocketAddr;
     use std::str::FromStr;
@@ -18,9 +19,9 @@ mod tests {
 
         for (i, m) in node_names.iter().enumerate() {
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
-            let network = Box::new(consensus_transport::network::NetworkConfig::new(
+            let network = Arc::new(Mutex::new(consensus_transport::network::NetworkConfig::new(
                 socket_addr,
-            ));
+            )));
             let node = Node::new_with_parameters(*m, i as u16, network)
                 .await
                 .unwrap();
@@ -51,7 +52,6 @@ mod tests {
             res.unwrap().unwrap();
         }
 
-        //tokio::time::sleep(Duration::from_millis(100)).await;
         let coordinator_store: BTreeMap<T0, T> = arc_coordinator
             .get_event_store()
             .lock()
@@ -118,9 +118,9 @@ mod tests {
             let mut nodes: Vec<Node> = vec![];
             for (i, m) in node_names.iter().enumerate() {
                 let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 11000 + i)).unwrap();
-                let network = Box::new(consensus_transport::network::NetworkConfig::new(
+                let network = Arc::new(Mutex::new(consensus_transport::network::NetworkConfig::new(
                     socket_addr,
-                ));
+                )));
                 let node = Node::new_with_parameters(*m, i as u16, network)
                     .await
                     .unwrap();
@@ -179,9 +179,9 @@ mod tests {
             let mut nodes: Vec<Node> = vec![];
             for (i, m) in node_names.iter().enumerate() {
                 let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 12000 + i)).unwrap();
-                let network = Box::new(consensus_transport::network::NetworkConfig::new(
+                let network = Arc::new(Mutex::new(consensus_transport::network::NetworkConfig::new(
                     socket_addr,
-                ));
+                )));
                 let node = Node::new_with_parameters(*m, i as u16, network)
                     .await
                     .unwrap();

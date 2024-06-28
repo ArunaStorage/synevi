@@ -11,7 +11,7 @@ use tracing::instrument;
 
 pub struct Node {
     info: Arc<NodeInfo>,
-    network: Box<dyn Network + Send + Sync>,
+    network: Arc<Mutex<dyn Network + Send + Sync>>,
     event_store: Arc<Mutex<EventStore>>,
 }
 
@@ -24,16 +24,18 @@ impl Node {
     pub async fn new_with_parameters(
         id: DieselUlid,
         serial: u16,
-        mut network: Box<dyn Network + Send + Sync>,
+        network: Arc<Mutex<dyn Network + Send + Sync>>,
     ) -> Result<Self> {
         let node_name = Arc::new(NodeInfo { id, serial });
         let event_store = Arc::new(Mutex::new(EventStore::init()));
 
         let replica = Arc::new(ReplicaConfig {
+            node_info: node_name.clone(),
             event_store: event_store.clone(),
+            network: network.clone(),
         });
         // Spawn tonic server
-        network.spawn_server(replica).await?;
+        network.lock().await.spawn_server(replica).await?;
 
         // If no config / persistence -> default
         Ok(Node {
@@ -45,7 +47,7 @@ impl Node {
 
     #[instrument(level = "trace", skip(self))]
     pub async fn add_member(&mut self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
-        self.network.add_member(id, serial, host).await
+        self.network.lock().await.add_member(id, serial, host).await
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -53,10 +55,11 @@ impl Node {
         let mut coordinator_iter = CoordinatorIterator::new(
             self.info.clone(),
             self.event_store.clone(),
-            self.network.get_interface(),
+            self.network.lock().await.get_interface(),
             transaction,
         )
         .await;
+
         while coordinator_iter.next().await?.is_some() {}
         Ok(())
     }

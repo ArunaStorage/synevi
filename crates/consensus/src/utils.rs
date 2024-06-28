@@ -1,7 +1,9 @@
+use crate::coordinator::CoordinatorIterator;
 use crate::event_store::{Event, EventStore};
 use crate::{coordinator::TransactionStateMachine, error::WaitError};
 use anyhow::Result;
 use consensus_transport::consensus_transport::{Dependency, State};
+use consensus_transport::network::NodeInfo;
 use futures::Future;
 use monotime::MonoTime;
 use std::sync::Arc;
@@ -83,38 +85,52 @@ impl From<&TransactionStateMachine> for Event {
     }
 }
 
+const MAX_RETRIES: u8 = 5;
+
 #[instrument(level = "trace")]
 pub async fn await_dependencies(
+    node: Arc<NodeInfo>,
     store: Arc<Mutex<EventStore>>,
     dependencies: &BTreeMap<T, T0>,
+    network_interface: Arc<dyn consensus_transport::network::NetworkInterface>,
     t: T,
 ) -> Result<()> {
-    let mut handles = store
-        .lock()
-        .await
-        .create_wait_handles(dependencies, t)
-        .await?;
+    let mut backoff_counter = 0;
+    'outer: loop {
+        if backoff_counter > MAX_RETRIES {
+            return Err(anyhow::anyhow!("Max retries reached"));
+        }
+        backoff_counter += 1;
+        let mut handles = store
+            .lock()
+            .await
+            .create_wait_handles(dependencies, t)
+            .await?;
 
-    while let Some(x) = handles.0.join_next().await {
-        match x {
-            Ok(Ok(_)) => {}
-            Ok(Err(e)) => match e {
-                WaitError::Timeout(_t0) => {
-                    // Wait for a node specific timeout
-                    // Await recovery for t0
-                    // Retry from handles
-                    Box::pin(await_dependencies(store.clone(), dependencies, t)).await?;
+        while let Some(x) = handles.0.join_next().await {
+            match x {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => match e {
+                    WaitError::Timeout(t0) => {
+                        // Wait for a node specific timeout
+                        // Await recovery for t0
+                        CoordinatorIterator::recover(node.clone(), store.clone(), network_interface.clone(), t0).await?;
+                        // Retry from handles
+                        continue 'outer;
+                    }
+                    WaitError::SenderClosed => {
+                        tracing::error!("Sender of transaction got closed");
+                        continue 'outer;
+                    }
+                },
+                Err(_) => {
+                    tracing::error!("Join error");
+                    continue 'outer;
                 }
-                WaitError::SenderClosed => {
-                    tracing::error!("Sender of transaction got closed")
-                }
-            },
-            Err(_) => {
-                tracing::error!("Join error")
             }
         }
+        return Ok(());
     }
-    Ok(())
 }
 
 const TIMEOUT: u64 = 100;
