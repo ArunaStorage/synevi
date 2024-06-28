@@ -1,12 +1,8 @@
 use crate::event_store::EventStore;
-use crate::utils::{await_dependencies, into_dependency, T, T0};
-use anyhow::anyhow;
+use crate::utils::{await_dependencies, from_dependency, into_dependency, T, T0};
 use anyhow::Result;
 use bytes::Bytes;
-use consensus_transport::consensus_transport::{
-    AcceptRequest, AcceptResponse, ApplyRequest, CommitRequest, PreAcceptRequest,
-    PreAcceptResponse, RecoverRequest, RecoverResponse, State,
-};
+use consensus_transport::consensus_transport::{AcceptRequest, AcceptResponse, ApplyRequest, CommitRequest, Dependency, PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse, State};
 use consensus_transport::network::{BroadcastRequest, NetworkInterface, NodeInfo};
 use consensus_transport::utils::IntoInner;
 use monotime::MonoTime;
@@ -16,15 +12,18 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
-use tracing::instrument;
+use tracing::{instrument, trace};
 
 /// An iterator that goes through the different states of the coordinator
+
 pub enum CoordinatorIterator {
     Initialized(Option<Coordinator<Initialized>>),
     PreAccepted(Option<Coordinator<PreAccepted>>),
     Accepted(Option<Coordinator<Accepted>>),
     Committed(Option<Coordinator<Committed>>),
     Applied,
+    Recovering,
+    RestartRecovery,
 }
 
 impl CoordinatorIterator {
@@ -85,13 +84,24 @@ impl CoordinatorIterator {
         network_interface: Arc<dyn NetworkInterface>,
         t0_recover: T0,
     ) -> Result<()> {
-        let mut coordinator_iter =
-            Coordinator::<Recover>::recover(node, event_store, network_interface, t0_recover)
-                .await?;
-        while coordinator_iter.next().await?.is_some() {}
+
+        let mut backoff_counter: u8 = 0;
+        while backoff_counter <= MAX_RETRIES {
+            let mut coordinator_iter =
+                Coordinator::<Recover>::recover(node.clone(), event_store.clone(), network_interface.clone(), t0_recover)
+                    .await?;
+            if let CoordinatorIterator::RestartRecovery = coordinator_iter {
+                backoff_counter += 1;
+                continue;
+            }
+            while coordinator_iter.next().await?.is_some() {}
+            break;
+        }
         Ok(())
     }
 }
+
+const MAX_RETRIES: u8 = 5;
 
 pub struct Initialized;
 pub struct PreAccepted;
@@ -152,14 +162,11 @@ impl Coordinator<Recover> {
         network_interface: Arc<dyn NetworkInterface>,
         t0_recover: T0,
     ) -> Result<CoordinatorIterator> {
-        let (event, mut watcher) = event_store
-            .lock()
-            .await
-            .get_or_insert_event_with_watcher(t0_recover)
-            .await;
+        let event = event_store.lock().await.get_or_insert(t0_recover).await;
+        let mut rx = event.state.subscribe();
         timeout(
             Duration::from_millis(RECOVER_TIMEOUT),
-            watcher.wait_for(|(s, _)| *s != State::Undefined),
+            rx.wait_for(|(s, _)| *s != State::Undefined),
         )
         .await??;
 
@@ -168,7 +175,6 @@ impl Coordinator<Recover> {
 
         let ballot = event.ballot + 1;
 
-        // TODO: NACK ?
         let recover_responses = network_interface
             .broadcast(BroadcastRequest::Recover(RecoverRequest {
                 ballot,
@@ -181,11 +187,10 @@ impl Coordinator<Recover> {
             node,
             event_store,
             network_interface,
-            &recover_responses
+            recover_responses
                 .into_iter()
                 .map(|res| res.into_inner())
                 .collect::<Result<Vec<_>>>()?,
-            ballot,
             t0_recover,
         )
         .await
@@ -196,22 +201,155 @@ impl Coordinator<Recover> {
         node: Arc<NodeInfo>,
         event_store: Arc<Mutex<EventStore>>,
         network_interface: Arc<dyn NetworkInterface>,
-        responses: &[RecoverResponse],
-        ballot: u32,
-        t_zero: T0,
+        mut responses: Vec<RecoverResponse>,
+        t0: T0,
     ) -> Result<CoordinatorIterator> {
-        let mut transaction_state = TransactionStateMachine {
-            state: State::PreAccepted,
-            transaction: Bytes::new(),
-            t_zero: T0::default(),
-            t: T::default(),
-            dependencies: BTreeMap::default(),
-            ballot,
+        // Query the newest state
+        let event = event_store.lock().await.get_or_insert(t0).await;
+        let previous_state = event.state.borrow().0;
+
+        let mut state_machine = TransactionStateMachine {
+            transaction: event.event,
+            t_zero: event.t_zero,
+            ballot: event.ballot,
+            ..Default::default()
         };
 
-        for response in responses {}
+        // Keep track of values to replace
+        let mut highest_ballot: Option<u32> = None;
+        let mut superseding = false;
+        let mut waiting: Vec<Dependency> = Vec::new();
+        
+        for response in responses.iter_mut() {
+            if response.nack > 0 || highest_ballot.is_some() {
+                match highest_ballot.as_mut() {
+                    None => {
+                        highest_ballot = Some(response.nack);
+                    }
+                    Some(b) if &response.nack > b => {
+                        *b = response.nack;
+                    }
+                    _ => {}
+                }
+                continue;
+            }
 
-        todo!()
+            let replica_t = T(MonoTime::try_from(response.timestamp.as_slice())?);
+
+            if !response.superseding.is_empty() {
+                superseding = true;
+            }
+            waiting.extend(std::mem::take(&mut response.wait));
+
+
+            // Update state
+            let replica_state = response.local_state();
+
+            match replica_state {
+                State::PreAccepted  if state_machine.state <= State::PreAccepted => {
+                    if replica_t > state_machine.t {
+                        state_machine.t = replica_t;
+                    }
+                    state_machine.dependencies.extend(from_dependency(response.dependencies.clone())?);
+                },
+                State::Accepted if state_machine.state < State::Accepted => {
+                    state_machine.t = replica_t;
+                    state_machine.state = State::Accepted;
+                    state_machine.dependencies = from_dependency(response.dependencies.clone())?;
+                }
+                State::Accepted if state_machine.state == State::Accepted && replica_t > state_machine.t => {
+                    state_machine.t = replica_t;
+                    state_machine.dependencies = from_dependency(response.dependencies.clone())?;
+                }
+                any_state if any_state > state_machine.state => {
+                    state_machine.state = any_state;
+                    state_machine.t = replica_t;
+                    if state_machine.state >= State::Accepted {
+                        state_machine.dependencies = from_dependency(response.dependencies.clone())?;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(highest_b) = highest_ballot {
+            event_store.lock().await.update_ballot(&t0, highest_b);
+            if previous_state != State::Applied {
+                let mut rx = event.state.subscribe();
+                timeout(
+                    Duration::from_millis(RECOVER_TIMEOUT),
+                    rx.wait_for(|(s, _)| *s > previous_state),
+                )
+                .await??;
+                return Ok(CoordinatorIterator::Recovering);
+            }
+            return Ok(CoordinatorIterator::Applied);
+        }
+
+        // Wait for deps
+
+        Ok(match state_machine.state {
+            State::Applied => {
+                CoordinatorIterator::Committed(Some(Coordinator::<Committed>{
+                    node,
+                    network_interface,
+                    event_store,
+                    transaction: state_machine,
+                    phantom: Default::default(),
+                }))
+            }
+            State::Commited => {
+                CoordinatorIterator::Accepted(Some(Coordinator::<Accepted> {
+                    node,
+                    network_interface,
+                    event_store,
+                    transaction: state_machine,
+                    phantom: Default::default(),
+                }))
+            }
+            State::Accepted  => {
+                CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted>{
+                    node,
+                    network_interface,
+                    event_store,
+                    transaction: state_machine,
+                    phantom: Default::default(),
+                }))
+            }
+
+            State::PreAccepted => {
+                if superseding {
+                    CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted>{
+                        node,
+                        network_interface,
+                        event_store,
+                        transaction: state_machine,
+                        phantom: Default::default(),
+                    }))
+                } else if !waiting.is_empty() {
+                    let mut rx = event.state.subscribe();
+                    timeout(
+                        Duration::from_millis(RECOVER_TIMEOUT),
+                        rx.wait_for(|(s, _)| *s > previous_state),
+                    )
+                    .await??;
+                    return Ok(CoordinatorIterator::RestartRecovery);
+                } else {
+                    state_machine.t = T(*state_machine.t_zero);
+                    CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted>{
+                        node,
+                        network_interface,
+                        event_store,
+                        transaction: state_machine,
+                        phantom: Default::default(),
+                    }))
+                }
+            }
+            _ => {
+                tracing::warn!(?state_machine, "Recovery state not matched");
+                CoordinatorIterator::Recovering
+            }
+        })
     }
 }
 
@@ -319,7 +457,7 @@ impl Coordinator<PreAccepted> {
 
     #[instrument(level = "trace", skip(self))]
     async fn accept_consensus(&mut self, responses: &[AcceptResponse]) -> Result<()> {
-        // A little bit redundant but I think the alternative to create a common behavior between responses may be even worse
+        // A little bit redundant, but I think the alternative to create a common behavior between responses may be even worse
         // Handle returned dependencies
         let mut dependencies_inverted = HashMap::new(); // TZero -> MaxT
         for response in responses {

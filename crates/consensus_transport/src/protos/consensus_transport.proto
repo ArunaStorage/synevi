@@ -79,6 +79,7 @@ message RecoverResponse {
   State local_state = 1;
   repeated Dependency wait = 2;
   repeated Dependency superseding = 3;
-  bytes timestamp = 4;
-  bool nack = 5;
+  repeated Dependency dependencies = 4;
+  bytes timestamp = 5;
+  uint32 nack = 6; 
 }

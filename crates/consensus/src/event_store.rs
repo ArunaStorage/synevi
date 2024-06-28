@@ -35,7 +35,7 @@ pub struct Event {
     pub t: T, // maybe this should be changed to an actual timestamp
     // This holds the state and can be used by waiters to watch for a state change
     // In contrast to notify this can also be used if the state is already reached
-    pub state: tokio::sync::watch::Sender<(State, T)>,
+    pub state: watch::Sender<(State, T)>,
     pub event: Bytes,
     pub dependencies: BTreeMap<T, T0>, // t and t_zero
     pub ballot: u32,
@@ -93,11 +93,8 @@ impl EventStore {
     }
 
     #[instrument(level = "trace")]
-    pub async fn get_or_insert_event_with_watcher(
-        &mut self,
-        t_zero: T0,
-    ) -> (Event, watch::Receiver<(State, T)>) {
-        let (tx, rx) = watch::channel((State::Undefined, T::default()));
+    pub async fn get_or_insert(&mut self, t_zero: T0) -> Event {
+        let (tx, _) = watch::channel((State::Undefined, T(*t_zero)));
         let entry = self.events.entry(t_zero).or_insert(Event {
             t_zero,
             t: T(*t_zero),
@@ -106,7 +103,7 @@ impl EventStore {
             dependencies: BTreeMap::default(),
             ballot: 0,
         });
-        (entry.clone(), rx)
+        entry.clone()
     }
 
     #[instrument(level = "trace")]
@@ -159,6 +156,12 @@ impl EventStore {
             .get(t_zero)
             .map(|event| event.ballot)
             .unwrap_or(0)
+    }
+    #[instrument(level = "trace")]
+    pub fn update_ballot(&mut self, t_zero: &T0, ballot: u32) {
+        if let Some(event) = self.events.get_mut(&t_zero) {
+            event.ballot = ballot;
+        }
     }
 
     #[instrument(level = "trace")]

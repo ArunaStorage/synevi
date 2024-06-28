@@ -108,10 +108,12 @@ pub struct RecoverResponse {
     pub wait: ::prost::alloc::vec::Vec<Dependency>,
     #[prost(message, repeated, tag = "3")]
     pub superseding: ::prost::alloc::vec::Vec<Dependency>,
-    #[prost(bytes = "vec", tag = "4")]
+    #[prost(message, repeated, tag = "4")]
+    pub dependencies: ::prost::alloc::vec::Vec<Dependency>,
+    #[prost(bytes = "vec", tag = "5")]
     pub timestamp: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bool, tag = "5")]
-    pub nack: bool,
+    #[prost(uint32, tag = "6")]
+    pub nack: u32,
 }
 #[derive(serde::Deserialize, serde::Serialize)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
