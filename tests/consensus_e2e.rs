@@ -52,6 +52,10 @@ mod tests {
             res.unwrap().unwrap();
         }
 
+
+        let (total, accepts) = arc_coordinator.get_stats();
+        println!("Fast: {:?}, Slow: {:?} Paths / {:?} Total", total-accepts, accepts, total);
+
         let coordinator_store: BTreeMap<T0, T> = arc_coordinator
             .get_event_store()
             .lock()
@@ -163,6 +167,11 @@ mod tests {
             while let Some(res) = joinset.join_next().await {
                 res.unwrap().unwrap();
             }
+
+            let (total, accepts) = arc_coordinator1.get_stats();
+            println!("C1: Fast: {:?}, Slow: {:?} Paths / {:?} Total", total-accepts, accepts, total);
+            let (total, accepts) = arc_coordinator2.get_stats();
+            println!("C2: Fast: {:?}, Slow: {:?} Paths / {:?} Total", total-accepts, accepts, total);
 
             println!("Done");
         });

@@ -1,4 +1,5 @@
 use crate::event_store::{Event, EventStore};
+use crate::node::Stats;
 use crate::utils::{await_dependencies, from_dependency, T, T0};
 use anyhow::Result;
 use bytes::Bytes;
@@ -15,6 +16,7 @@ pub struct ReplicaConfig {
     pub node_info: Arc<NodeInfo>,
     pub network: Arc<Mutex<dyn Network + Send + Sync>>,
     pub event_store: Arc<Mutex<EventStore>>,
+    pub stats: Arc<Stats>,
     //pub reorder_buffer: Arc<Mutex<BTreeMap<T0, (Bytes, watch::Sender<Option<T0>>)>>>,
 }
 
@@ -111,6 +113,7 @@ impl Replica for ReplicaConfig {
             &dependencies,
             self.network.lock().await.get_interface(),
             t,
+            self.stats.clone(),
         )
         .await?;
 
@@ -132,6 +135,7 @@ impl Replica for ReplicaConfig {
             &dependencies,
             self.network.lock().await.get_interface(),
             t,
+            self.stats.clone(),
         )
         .await?;
 

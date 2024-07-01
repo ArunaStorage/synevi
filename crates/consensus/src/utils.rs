@@ -1,5 +1,6 @@
 use crate::coordinator::CoordinatorIterator;
 use crate::event_store::{Event, EventStore};
+use crate::node::Stats;
 use crate::{coordinator::TransactionStateMachine, error::WaitError};
 use anyhow::Result;
 use consensus_transport::consensus_transport::{Dependency, State};
@@ -95,6 +96,7 @@ pub async fn await_dependencies(
     dependencies: &BTreeMap<T, T0>,
     network_interface: Arc<dyn consensus_transport::network::NetworkInterface>,
     t: T,
+    stats: Arc<Stats>,
 ) -> Result<()> {
     let mut backoff_counter = 0;
     'outer: loop {
@@ -120,6 +122,7 @@ pub async fn await_dependencies(
                             store.clone(),
                             network_interface.clone(),
                             t0,
+                            stats.clone(),
                         )
                         .await?;
                         // Retry from handles

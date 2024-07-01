@@ -1,4 +1,5 @@
 use crate::event_store::EventStore;
+use crate::node::Stats;
 use crate::utils::{await_dependencies, from_dependency, into_dependency, T, T0};
 use anyhow::Result;
 use bytes::Bytes;
@@ -11,6 +12,7 @@ use consensus_transport::utils::IntoInner;
 use monotime::MonoTime;
 use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -35,9 +37,10 @@ impl CoordinatorIterator {
         event_store: Arc<Mutex<EventStore>>,
         network_interface: Arc<dyn NetworkInterface>,
         transaction: Bytes,
+        stats: Arc<Stats>,
     ) -> Self {
         CoordinatorIterator::Initialized(Some(
-            Coordinator::<Initialized>::new(node, event_store, network_interface, transaction)
+            Coordinator::<Initialized>::new(node, event_store, network_interface, transaction, stats)
                 .await,
         ))
     }
@@ -86,6 +89,7 @@ impl CoordinatorIterator {
         event_store: Arc<Mutex<EventStore>>,
         network_interface: Arc<dyn NetworkInterface>,
         t0_recover: T0,
+        stats: Arc<Stats>,
     ) -> Result<()> {
         let mut backoff_counter: u8 = 0;
         while backoff_counter <= MAX_RETRIES {
@@ -94,6 +98,7 @@ impl CoordinatorIterator {
                 event_store.clone(),
                 network_interface.clone(),
                 t0_recover,
+                stats.clone(),
             )
             .await?;
             if let CoordinatorIterator::RestartRecovery = coordinator_iter {
@@ -122,6 +127,7 @@ pub struct Coordinator<X> {
     pub event_store: Arc<Mutex<EventStore>>,
     pub transaction: TransactionStateMachine,
     pub phantom: PhantomData<X>,
+    pub stats: Arc<Stats>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -141,6 +147,7 @@ impl<X> Coordinator<X> {
         event_store: Arc<Mutex<EventStore>>,
         network_interface: Arc<dyn NetworkInterface>,
         transaction: Bytes,
+        stats: Arc<Stats>,
     ) -> Coordinator<Initialized> {
         // Create struct
         let transaction = event_store
@@ -154,6 +161,7 @@ impl<X> Coordinator<X> {
             event_store,
             transaction,
             phantom: PhantomData,
+            stats,
         }
     }
 }
@@ -167,6 +175,7 @@ impl Coordinator<Recover> {
         event_store: Arc<Mutex<EventStore>>,
         network_interface: Arc<dyn NetworkInterface>,
         t0_recover: T0,
+        stats: Arc<Stats>,
     ) -> Result<CoordinatorIterator> {
         let event = event_store.lock().await.get_or_insert(t0_recover).await;
         let mut rx = event.state.subscribe();
@@ -198,6 +207,7 @@ impl Coordinator<Recover> {
                 .map(|res| res.into_inner())
                 .collect::<Result<Vec<_>>>()?,
             t0_recover,
+            stats,
         )
         .await
     }
@@ -209,6 +219,7 @@ impl Coordinator<Recover> {
         network_interface: Arc<dyn NetworkInterface>,
         mut responses: Vec<RecoverResponse>,
         t0: T0,
+        stats: Arc<Stats>,
     ) -> Result<CoordinatorIterator> {
         // Query the newest state
         let event = event_store.lock().await.get_or_insert(t0).await;
@@ -304,6 +315,7 @@ impl Coordinator<Recover> {
                 network_interface,
                 event_store,
                 transaction: state_machine,
+                stats,
                 phantom: Default::default(),
             })),
             State::Commited => CoordinatorIterator::Accepted(Some(Coordinator::<Accepted> {
@@ -311,6 +323,7 @@ impl Coordinator<Recover> {
                 network_interface,
                 event_store,
                 transaction: state_machine,
+                stats,
                 phantom: Default::default(),
             })),
             State::Accepted => CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted> {
@@ -318,6 +331,7 @@ impl Coordinator<Recover> {
                 network_interface,
                 event_store,
                 transaction: state_machine,
+                stats,
                 phantom: Default::default(),
             })),
 
@@ -328,6 +342,7 @@ impl Coordinator<Recover> {
                         network_interface,
                         event_store,
                         transaction: state_machine,
+                        stats,
                         phantom: Default::default(),
                     }))
                 } else if !waiting.is_empty() {
@@ -345,6 +360,7 @@ impl Coordinator<Recover> {
                         network_interface,
                         event_store,
                         transaction: state_machine,
+                        stats,
                         phantom: Default::default(),
                     }))
                 }
@@ -360,6 +376,9 @@ impl Coordinator<Recover> {
 impl Coordinator<Initialized> {
     #[instrument(level = "trace", skip(self))]
     pub async fn pre_accept(mut self) -> Result<Coordinator<PreAccepted>> {
+
+        self.stats.total_requests.fetch_add(1, Ordering::Relaxed);
+
         // Create the PreAccepted msg
         let pre_accepted_request = PreAcceptRequest {
             event: self.transaction.transaction.to_vec(),
@@ -384,6 +403,7 @@ impl Coordinator<Initialized> {
             network_interface: self.network_interface,
             event_store: self.event_store,
             transaction: self.transaction,
+            stats: self.stats,
             phantom: PhantomData,
         })
     }
@@ -428,7 +448,8 @@ impl Coordinator<Initialized> {
 impl Coordinator<PreAccepted> {
     #[instrument(level = "trace", skip(self))]
     pub async fn accept(mut self) -> Result<Coordinator<Accepted>> {
-        if *self.transaction.t_zero == *self.transaction.t {
+        if *self.transaction.t_zero != *self.transaction.t {
+            self.stats.total_accepts.fetch_add(1, Ordering::Relaxed);
             let accepted_request = AcceptRequest {
                 ballot: self.transaction.ballot,
                 event: self.transaction.transaction.clone().into(),
@@ -455,6 +476,7 @@ impl Coordinator<PreAccepted> {
             network_interface: self.network_interface,
             event_store: self.event_store,
             transaction: self.transaction,
+            stats: self.stats,
             phantom: PhantomData,
         })
     }
@@ -518,6 +540,7 @@ impl Coordinator<Accepted> {
             network_interface: self.network_interface,
             event_store: self.event_store,
             transaction: self.transaction,
+            stats: self.stats,
             phantom: PhantomData,
         })
     }
@@ -536,6 +559,7 @@ impl Coordinator<Accepted> {
             &self.transaction.dependencies,
             self.network_interface.clone(),
             self.transaction.t,
+            self.stats.clone(),
         ))
         .await?;
         Ok(())
@@ -564,6 +588,7 @@ impl Coordinator<Committed> {
             network_interface: self.network_interface,
             event_store: self.event_store,
             transaction: self.transaction,
+            stats: self.stats,
             phantom: PhantomData,
         })
     }
@@ -612,6 +637,7 @@ mod tests {
             event_store,
             Arc::new(NetworkMock {}),
             Bytes::from("test"),
+            Arc::new(Default::default()),
         )
         .await;
         assert_eq!(coordinator.transaction.state, State::PreAccepted);
@@ -642,6 +668,7 @@ mod tests {
             network_interface: Arc::new(NetworkMock {}),
             event_store: event_store.clone(),
             transaction: state_machine.clone(),
+            stats: Arc::new(Default::default()),
             phantom: Default::default(),
         };
 
@@ -802,6 +829,7 @@ mod tests {
             network_interface: Arc::new(NetworkMock {}),
             event_store: event_store.clone(),
             transaction: state_machine.clone(),
+            stats: Arc::new(Default::default()),
             phantom: Default::default(),
         };
 

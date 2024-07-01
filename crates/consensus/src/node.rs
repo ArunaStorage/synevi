@@ -5,14 +5,21 @@ use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::network::{Network, NodeInfo};
 use diesel_ulid::DieselUlid;
-use std::sync::Arc;
+use std::sync::{atomic::AtomicU64, Arc};
 use tokio::sync::Mutex;
 use tracing::instrument;
+
+#[derive(Debug, Default)]
+pub struct Stats {
+    pub total_requests: AtomicU64,
+    pub total_accepts: AtomicU64,
+}
 
 pub struct Node {
     info: Arc<NodeInfo>,
     network: Arc<Mutex<dyn Network + Send + Sync>>,
     event_store: Arc<Mutex<EventStore>>,
+    stats: Arc<Stats>,
 }
 
 impl Node {
@@ -29,10 +36,16 @@ impl Node {
         let node_name = Arc::new(NodeInfo { id, serial });
         let event_store = Arc::new(Mutex::new(EventStore::init()));
 
+        let stats = Arc::new(Stats {
+            total_requests: AtomicU64::new(0),
+            total_accepts: AtomicU64::new(0),
+        });
+
         let replica = Arc::new(ReplicaConfig {
             node_info: node_name.clone(),
             event_store: event_store.clone(),
             network: network.clone(),
+            stats: stats.clone(),
         });
         // Spawn tonic server
         network.lock().await.spawn_server(replica).await?;
@@ -42,6 +55,7 @@ impl Node {
             info: node_name,
             event_store,
             network,
+            stats,
         })
     }
 
@@ -57,6 +71,7 @@ impl Node {
             self.event_store.clone(),
             self.network.lock().await.get_interface(),
             transaction,
+            self.stats.clone(),
         )
         .await;
 
@@ -72,5 +87,12 @@ impl Node {
     #[instrument(level = "trace", skip(self))]
     pub fn get_info(&self) -> Arc<NodeInfo> {
         self.info.clone()
+    }
+
+    pub fn get_stats(&self) -> (u64, u64) {
+        (
+            self.stats.total_requests.load(std::sync::atomic::Ordering::Relaxed),
+            self.stats.total_accepts.load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 }
