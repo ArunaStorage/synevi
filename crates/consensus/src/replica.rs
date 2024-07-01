@@ -12,6 +12,8 @@ use tokio::sync::{watch, Mutex};
 use tracing::instrument;
 
 #[derive(Debug)]
+
+// todo!()
 pub struct ReplicaConfig {
     pub node_info: Arc<NodeInfo>,
     pub network: Arc<Mutex<dyn Network + Send + Sync>>,
@@ -157,7 +159,59 @@ impl Replica for ReplicaConfig {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn recover(&self, _request: RecoverRequest) -> Result<RecoverResponse> {
-        todo!()
+    async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse> {
+        let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
+        let mut event_store_lock = self.event_store.lock().await;
+        if let Some(mut event) = event_store_lock.get_event(t_zero).await {
+            // If another coordinator has started recovery with a higher ballot
+            // Return NACK with the higher ballot number
+            if event.ballot > request.ballot {
+                return Ok(RecoverResponse {
+                    nack: event.ballot,
+                    ..Default::default()
+                });
+            }
+
+            if matches!(event.state.borrow().0, State::Undefined) {
+                event.t = event_store_lock
+                        .pre_accept(
+                            PreAcceptRequest {
+                                timestamp_zero: request.timestamp_zero.clone(),
+                                event: request.event.clone(),
+                            },
+                            self.node_info.serial,
+                        )
+                        .await?.1;
+            };
+            let recover_deps = event_store_lock.get_recover_deps(&event.t, &t_zero).await?;
+
+            Ok(RecoverResponse {
+                local_state: event.state.borrow().0.clone().into(),
+                wait: recover_deps.wait,
+                superseding: recover_deps.superseding,
+                dependencies: recover_deps.dependencies,
+                timestamp: event.t.into(),
+                nack: 0,
+            })
+        } else {
+            let (_, t) = event_store_lock
+                .pre_accept(
+                    PreAcceptRequest {
+                        timestamp_zero: request.timestamp_zero.clone(),
+                        event: request.event.clone(),
+                    },
+                    self.node_info.serial,
+                )
+                .await?;
+            let recover_deps = event_store_lock.get_recover_deps(&t, &t_zero).await?;
+            Ok(RecoverResponse {
+                local_state: State::PreAccepted.into(),
+                wait: recover_deps.wait,
+                superseding: recover_deps.superseding,
+                dependencies: recover_deps.dependencies,
+                timestamp: t.into(),
+                nack: 0,
+            })
+        }
     }
 }

@@ -72,7 +72,6 @@ enum State {
   STATE_ACCEPTED = 2;
   STATE_COMMITED = 3;
   STATE_APPLIED = 4;
-  STATE_RECOVER = 5;
 }
 
 message RecoverResponse {

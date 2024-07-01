@@ -91,8 +91,12 @@ impl Node {
 
     pub fn get_stats(&self) -> (u64, u64) {
         (
-            self.stats.total_requests.load(std::sync::atomic::Ordering::Relaxed),
-            self.stats.total_accepts.load(std::sync::atomic::Ordering::Relaxed),
+            self.stats
+                .total_requests
+                .load(std::sync::atomic::Ordering::Relaxed),
+            self.stats
+                .total_accepts
+                .load(std::sync::atomic::Ordering::Relaxed),
         )
     }
 }

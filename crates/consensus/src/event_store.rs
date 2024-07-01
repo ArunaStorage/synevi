@@ -53,6 +53,14 @@ impl PartialEq for Event {
 
 type WaitHandleResult = Result<(JoinSet<std::result::Result<(), WaitError>>, Vec<(T0, T)>)>;
 
+
+#[derive(Debug, Default)]
+pub(crate) struct RecoverDependencies {
+    pub dependencies: Vec<Dependency>,
+    pub wait: Vec<Dependency>,
+    pub superseding: Vec<Dependency>,
+}
+
 impl EventStore {
     #[instrument(level = "trace")]
     pub fn init() -> Self {
@@ -129,7 +137,6 @@ impl EventStore {
                 // No entries in the map -> insert the new event
                 *t_zero
             });
-            self.mappings.insert(t, t_zero);
             // This might not be necessary to re-use the write lock here
             let deps: Vec<Dependency> = self.get_dependencies(&t, &t_zero).await;
             (t, deps)
@@ -146,7 +153,7 @@ impl EventStore {
             dependencies: from_dependency(deps.clone())?,
             ballot: 0,
         };
-        self.events.insert(t_zero, event);
+        self.upsert(event).await;
         Ok((deps, t))
     }
 
@@ -212,6 +219,57 @@ impl EventStore {
         }
         vec![]
     }
+
+    #[instrument(level = "trace")]
+    pub async fn get_recover_deps(&self, t: &T, t_zero: &T0) -> Result<RecoverDependencies> {
+        let mut recover_deps = RecoverDependencies::default();
+        for (t_dep, t_zero_dep) in self.mappings.range(self.last_applied..) {
+            let dep_event = self.events.get(t_zero_dep).ok_or_else(|| {
+                anyhow::anyhow!("Dependency not found for t_zero: {:?}", t_zero_dep)
+            })?;
+            match dep_event.state.borrow().0 {
+                State::Accepted => {
+                    if dep_event.dependencies.iter().any(|(_, t_zero_dep_dep)| t_zero == t_zero_dep_dep) {
+                        // Wait -> Accord p19 l7 + l9
+                        if t_zero_dep < t_zero && **t_dep > **t_zero {
+                            recover_deps.wait.push(Dependency {
+                                timestamp: (*t_dep).into(),
+                                timestamp_zero: (*t_zero_dep).into(),
+                            });
+                        }
+                        // Superseding -> Accord: p19 l10
+                        if t_zero_dep > t_zero {
+                            recover_deps.superseding.push(Dependency {
+                                timestamp: (*t_dep).into(),
+                                timestamp_zero: (*t_zero_dep).into(),
+                            });
+                        }
+                    }
+                }
+                State::Commited => {
+                    if dep_event.dependencies.iter().any(|(_, t_zero_dep_dep)| t_zero == t_zero_dep_dep) {
+                        // Superseding -> Accord: p19 l11
+                        if **t_dep > **t_zero {
+                            recover_deps.superseding.push(Dependency {
+                                timestamp: (*t_dep).into(),
+                                timestamp_zero: (*t_zero_dep).into(),
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+            // Collect "normal" deps -> Accord: p19 l16
+            if t_zero_dep < t_zero {
+                recover_deps.dependencies.push(Dependency {
+                    timestamp: (*t_dep).into(),
+                    timestamp_zero: (*t_zero_dep).into(),
+                });
+            }
+        }
+        Ok(recover_deps)
+    }
+
 
     #[instrument(level = "trace")]
     pub async fn create_wait_handles(

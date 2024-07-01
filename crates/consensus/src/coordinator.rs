@@ -40,8 +40,14 @@ impl CoordinatorIterator {
         stats: Arc<Stats>,
     ) -> Self {
         CoordinatorIterator::Initialized(Some(
-            Coordinator::<Initialized>::new(node, event_store, network_interface, transaction, stats)
-                .await,
+            Coordinator::<Initialized>::new(
+                node,
+                event_store,
+                network_interface,
+                transaction,
+                stats,
+            )
+            .await,
         ))
     }
 
@@ -376,7 +382,6 @@ impl Coordinator<Recover> {
 impl Coordinator<Initialized> {
     #[instrument(level = "trace", skip(self))]
     pub async fn pre_accept(mut self) -> Result<Coordinator<PreAccepted>> {
-
         self.stats.total_requests.fetch_add(1, Ordering::Relaxed);
 
         // Create the PreAccepted msg
@@ -448,7 +453,6 @@ impl Coordinator<Initialized> {
 impl Coordinator<PreAccepted> {
     #[instrument(level = "trace", skip(self))]
     pub async fn accept(mut self) -> Result<Coordinator<Accepted>> {
-
         // Safeguard: T0 <= T
         assert!(*self.transaction.t_zero <= *self.transaction.t);
 
