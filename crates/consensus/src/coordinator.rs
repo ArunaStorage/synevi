@@ -97,6 +97,7 @@ impl CoordinatorIterator {
         t0_recover: T0,
         stats: Arc<Stats>,
     ) -> Result<()> {
+        println!("{node:?}");
         let mut backoff_counter: u8 = 0;
         while backoff_counter <= MAX_RETRIES {
             let mut coordinator_iter = Coordinator::<Recover>::recover(
@@ -183,7 +184,8 @@ impl Coordinator<Recover> {
         t0_recover: T0,
         stats: Arc<Stats>,
     ) -> Result<CoordinatorIterator> {
-        let event = event_store.lock().await.get_or_insert(t0_recover).await;
+        let mut event_store_lock = event_store.lock().await;
+        let event = event_store_lock.get_or_insert(t0_recover).await;
         let mut rx = event.state.subscribe();
         timeout(
             Duration::from_millis(RECOVER_TIMEOUT),
@@ -195,7 +197,10 @@ impl Coordinator<Recover> {
         assert_eq!(event.t_zero, t0_recover);
 
         let ballot = event.ballot + 1;
-
+        event_store_lock.update_ballot(&t0_recover, ballot);
+        drop(event_store_lock);
+        
+        println!("Send rcv from node: {}", node.serial);
         let recover_responses = network_interface
             .broadcast(BroadcastRequest::Recover(RecoverRequest {
                 ballot,
@@ -203,6 +208,7 @@ impl Coordinator<Recover> {
                 timestamp_zero: t0_recover.into(),
             }))
             .await?;
+        
 
         Self::recover_consensus(
             node,
@@ -227,6 +233,8 @@ impl Coordinator<Recover> {
         t0: T0,
         stats: Arc<Stats>,
     ) -> Result<CoordinatorIterator> {
+        
+        
         // Query the newest state
         let event = event_store.lock().await.get_or_insert(t0).await;
         let previous_state = event.state.borrow().0;
@@ -272,6 +280,7 @@ impl Coordinator<Recover> {
                     if replica_t > state_machine.t {
                         state_machine.t = replica_t;
                     }
+                    state_machine.state = State::PreAccepted;
                     state_machine
                         .dependencies
                         .extend(from_dependency(response.dependencies.clone())?);
@@ -298,10 +307,13 @@ impl Coordinator<Recover> {
                 _ => {}
             }
         }
+        
 
         if let Some(highest_b) = highest_ballot {
+            println!("Updating ballot with : {}", highest_b);
             event_store.lock().await.update_ballot(&t0, highest_b);
             if previous_state != State::Applied {
+                println!("Waiting for timeout ...");
                 let mut rx = event.state.subscribe();
                 timeout(
                     Duration::from_millis(RECOVER_TIMEOUT),
@@ -314,6 +326,7 @@ impl Coordinator<Recover> {
         }
 
         // Wait for deps
+        println!("Reached state {:?}; Node: {}", state_machine.state, node.serial);
 
         Ok(match state_machine.state {
             State::Applied => CoordinatorIterator::Committed(Some(Coordinator::<Committed> {
@@ -343,6 +356,7 @@ impl Coordinator<Recover> {
 
             State::PreAccepted => {
                 if superseding {
+                    println!("Starting preaccept");
                     CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted> {
                         node,
                         network_interface,

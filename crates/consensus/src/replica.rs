@@ -1,13 +1,14 @@
 use crate::event_store::{Event, EventStore};
 use crate::node::Stats;
 use crate::utils::{await_dependencies, from_dependency, T, T0};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use consensus_transport::consensus_transport::*;
 use consensus_transport::network::{Network, NodeInfo};
 use consensus_transport::replica::Replica;
 use monotime::MonoTime;
 use std::sync::Arc;
+use chrono::Weekday::Mon;
 use tokio::sync::{watch, Mutex};
 use tracing::instrument;
 
@@ -160,6 +161,7 @@ impl Replica for ReplicaConfig {
 
     #[instrument(level = "trace", skip(self))]
     async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse> {
+        println!("RECOVERY from node: {}", self.node_info.serial);
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
         let mut event_store_lock = self.event_store.lock().await;
         if let Some(mut event) = event_store_lock.get_event(t_zero).await {
@@ -171,22 +173,26 @@ impl Replica for ReplicaConfig {
                     ..Default::default()
                 });
             }
+            
+            println!("Event ballot : {}, Request ballot: {}", event.ballot, request.ballot);
+            event_store_lock.update_ballot(&t_zero, request.ballot);
 
             if matches!(event.state.borrow().0, State::Undefined) {
                 event.t = event_store_lock
-                        .pre_accept(
-                            PreAcceptRequest {
-                                timestamp_zero: request.timestamp_zero.clone(),
-                                event: request.event.clone(),
-                            },
-                            self.node_info.serial,
-                        )
-                        .await?.1;
+                    .pre_accept(
+                        PreAcceptRequest {
+                            timestamp_zero: request.timestamp_zero.clone(),
+                            event: request.event.clone(),
+                        },
+                        self.node_info.serial,
+                    )
+                    .await?
+                    .1;
             };
             let recover_deps = event_store_lock.get_recover_deps(&event.t, &t_zero).await?;
 
             Ok(RecoverResponse {
-                local_state: event.state.borrow().0.clone().into(),
+                local_state: event.state.borrow().0.into(),
                 wait: recover_deps.wait,
                 superseding: recover_deps.superseding,
                 dependencies: recover_deps.dependencies,
@@ -213,5 +219,87 @@ impl Replica for ReplicaConfig {
                 nack: 0,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio::sync::watch::Sender;
+    use consensus_transport::consensus_transport::{CommitRequest, Dependency, State};
+    use consensus_transport::network::NodeInfo;
+    use consensus_transport::replica::Replica;
+    use monotime::MonoTime;
+    use crate::event_store::{Event, EventStore};
+    use crate::replica::ReplicaConfig;
+    use crate::tests;
+    use crate::utils::{T, T0};
+
+    #[tokio::test]
+    async fn start_recovery() {
+        let event_store = Arc::new(Mutex::new(EventStore::init()));
+
+        let conflicting_t0 = MonoTime::new(0,0);
+        event_store.lock().await.upsert(Event {
+            t_zero: T0(conflicting_t0),
+            t: T(conflicting_t0),
+            state: Sender::new((State::PreAccepted, T(conflicting_t0))),
+            event: Default::default(),
+            dependencies: BTreeMap::new(), // No deps
+            ballot: 0,
+        }).await;
+        
+        let replica = ReplicaConfig{
+            node_info: Arc::new(NodeInfo { id: Default::default(), serial: 0 }),
+            network: Arc::new(Mutex::new(tests::NetworkMock{})),
+            event_store: event_store.clone(),
+            stats: Arc::new(Default::default()),
+        };
+
+
+        let t0 = conflicting_t0.next().into_time();
+        let request = CommitRequest {
+            event: vec![],
+            timestamp_zero: t0.into(),
+            timestamp: t0.into(),
+            dependencies: vec![Dependency{ timestamp: conflicting_t0.into(), timestamp_zero: conflicting_t0.into() }],
+        };
+        
+        assert!(replica.commit(request).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn rcv_recover() {
+        let event_store = Arc::new(Mutex::new(EventStore::init()));
+
+        let conflicting_t0 = MonoTime::new(0,0);
+        event_store.lock().await.upsert(Event {
+            t_zero: T0(conflicting_t0),
+            t: T(conflicting_t0),
+            state: Sender::new((State::PreAccepted, T(conflicting_t0))),
+            event: Default::default(),
+            dependencies: BTreeMap::new(), // No deps
+            ballot: 0,
+        }).await;
+
+        let replica = ReplicaConfig{
+            node_info: Arc::new(NodeInfo { id: Default::default(), serial: 0 }),
+            network: Arc::new(Mutex::new(tests::NetworkMock{})),
+            event_store: event_store.clone(),
+            stats: Arc::new(Default::default()),
+        };
+
+
+        let t0 = conflicting_t0.next().into_time();
+        let request = CommitRequest {
+            event: vec![],
+            timestamp_zero: t0.into(),
+            timestamp: t0.into(),
+            dependencies: vec![Dependency{ timestamp: conflicting_t0.into(), timestamp_zero: conflicting_t0.into() }],
+        };
+
+        assert!(replica.commit(request).await.is_err());
     }
 }

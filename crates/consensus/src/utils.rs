@@ -101,7 +101,7 @@ pub async fn await_dependencies(
     let mut backoff_counter = 0;
     'outer: loop {
         if backoff_counter > MAX_RETRIES {
-            return Err(anyhow::anyhow!("Max retries reached"));
+            return Err(anyhow::anyhow!("Node: {:?} reached max retries", node));
         }
         backoff_counter += 1;
         let mut handles = store

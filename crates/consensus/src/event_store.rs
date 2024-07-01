@@ -53,7 +53,6 @@ impl PartialEq for Event {
 
 type WaitHandleResult = Result<(JoinSet<std::result::Result<(), WaitError>>, Vec<(T0, T)>)>;
 
-
 #[derive(Debug, Default)]
 pub(crate) struct RecoverDependencies {
     pub dependencies: Vec<Dependency>,
@@ -166,7 +165,7 @@ impl EventStore {
     }
     #[instrument(level = "trace")]
     pub fn update_ballot(&mut self, t_zero: &T0, ballot: u32) {
-        if let Some(event) = self.events.get_mut(&t_zero) {
+        if let Some(event) = self.events.get_mut(t_zero) {
             event.ballot = ballot;
         }
     }
@@ -196,6 +195,21 @@ impl EventStore {
 
     #[instrument(level = "trace")]
     pub async fn get_dependencies(&self, t: &T, t_zero: &T0) -> Vec<Dependency> {
+        if self.last_applied == T::default() {
+            return self.events
+                .range(..&T0(**t))
+                .filter_map(|(_, v)| {
+                    if v.t_zero == *t_zero {
+                        None
+                    } else {
+                        Some(Dependency {
+                            timestamp: (*v.t).into(),
+                            timestamp_zero: (*v.t_zero).into(),
+                        })
+                    }
+                })
+                .collect()
+        }
         if let Some(last_t0) = self.mappings.get(&self.last_applied) {
             return if **last_t0 == **t {
                 vec![]
@@ -229,7 +243,11 @@ impl EventStore {
             })?;
             match dep_event.state.borrow().0 {
                 State::Accepted => {
-                    if dep_event.dependencies.iter().any(|(_, t_zero_dep_dep)| t_zero == t_zero_dep_dep) {
+                    if dep_event
+                        .dependencies
+                        .iter()
+                        .any(|(_, t_zero_dep_dep)| t_zero == t_zero_dep_dep)
+                    {
                         // Wait -> Accord p19 l7 + l9
                         if t_zero_dep < t_zero && **t_dep > **t_zero {
                             recover_deps.wait.push(Dependency {
@@ -247,7 +265,11 @@ impl EventStore {
                     }
                 }
                 State::Commited => {
-                    if dep_event.dependencies.iter().any(|(_, t_zero_dep_dep)| t_zero == t_zero_dep_dep) {
+                    if dep_event
+                        .dependencies
+                        .iter()
+                        .any(|(_, t_zero_dep_dep)| t_zero == t_zero_dep_dep)
+                    {
                         // Superseding -> Accord: p19 l11
                         if **t_dep > **t_zero {
                             recover_deps.superseding.push(Dependency {
@@ -269,7 +291,6 @@ impl EventStore {
         }
         Ok(recover_deps)
     }
-
 
     #[instrument(level = "trace")]
     pub async fn create_wait_handles(
