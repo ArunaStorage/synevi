@@ -448,6 +448,10 @@ impl Coordinator<Initialized> {
 impl Coordinator<PreAccepted> {
     #[instrument(level = "trace", skip(self))]
     pub async fn accept(mut self) -> Result<Coordinator<Accepted>> {
+
+        // Safeguard: T0 <= T
+        assert!(*self.transaction.t_zero <= *self.transaction.t);
+
         if *self.transaction.t_zero != *self.transaction.t {
             self.stats.total_accepts.fetch_add(1, Ordering::Relaxed);
             let accepted_request = AcceptRequest {
