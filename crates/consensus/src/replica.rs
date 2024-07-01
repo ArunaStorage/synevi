@@ -1,14 +1,13 @@
 use crate::event_store::{Event, EventStore};
 use crate::node::Stats;
-use crate::utils::{await_dependencies, from_dependency, T, T0};
-use anyhow::{anyhow, Result};
+use crate::utils::{await_dependencies, from_dependency, Ballot, T, T0};
+use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::*;
 use consensus_transport::network::{Network, NodeInfo};
 use consensus_transport::replica::Replica;
 use monotime::MonoTime;
 use std::sync::Arc;
-use chrono::Weekday::Mon;
 use tokio::sync::{watch, Mutex};
 use tracing::instrument;
 
@@ -61,12 +60,13 @@ impl Replica for ReplicaConfig {
     async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse> {
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
         let t = T(MonoTime::try_from(request.timestamp.as_slice())?);
+        let request_ballot = Ballot(MonoTime::try_from(request.ballot.as_slice())?);
 
         let (tx, _) = watch::channel((State::Accepted, t));
 
         let dependencies = {
             let mut store = self.event_store.lock().await;
-            if request.ballot < store.get_ballot(&t_zero) {
+            if request_ballot < store.get_ballot(&t_zero) {
                 return Ok(AcceptResponse {
                     dependencies: vec![],
                     nack: true,
@@ -79,7 +79,7 @@ impl Replica for ReplicaConfig {
                     state: tx,
                     event: request.event.into(),
                     dependencies: from_dependency(request.dependencies.clone())?,
-                    ballot: request.ballot,
+                    ballot: request_ballot,
                 })
                 .await;
 
@@ -107,7 +107,7 @@ impl Replica for ReplicaConfig {
                 state: tx,
                 event: request.event.clone().into(),
                 dependencies: dependencies.clone(),
-                ballot: 0, // Will keep the highest ballot
+                ballot: Ballot::default(), // Will keep the highest ballot
             })
             .await;
         await_dependencies(
@@ -152,7 +152,7 @@ impl Replica for ReplicaConfig {
                 state: tx,
                 event: transaction,
                 dependencies,
-                ballot: 0,
+                ballot: Ballot::default(),
             })
             .await;
 
@@ -167,15 +167,19 @@ impl Replica for ReplicaConfig {
         if let Some(mut event) = event_store_lock.get_event(t_zero).await {
             // If another coordinator has started recovery with a higher ballot
             // Return NACK with the higher ballot number
-            if event.ballot > request.ballot {
+            let request_ballot = Ballot(MonoTime::try_from(request.ballot.as_slice())?);
+            if event.ballot > request_ballot {
                 return Ok(RecoverResponse {
-                    nack: event.ballot,
+                    nack: event.ballot.into(),
                     ..Default::default()
                 });
             }
-            
-            println!("Event ballot : {}, Request ballot: {}", event.ballot, request.ballot);
-            event_store_lock.update_ballot(&t_zero, request.ballot);
+
+            println!(
+                "Event ballot : {:?}, Request ballot: {:?}",
+                event.ballot, request.ballot
+            );
+            event_store_lock.update_ballot(&t_zero, request_ballot);
 
             if matches!(event.state.borrow().0, State::Undefined) {
                 event.t = event_store_lock
@@ -197,7 +201,7 @@ impl Replica for ReplicaConfig {
                 superseding: recover_deps.superseding,
                 dependencies: recover_deps.dependencies,
                 timestamp: event.t.into(),
-                nack: 0,
+                nack: Ballot::default().into(),
             })
         } else {
             let (_, t) = event_store_lock
@@ -216,7 +220,7 @@ impl Replica for ReplicaConfig {
                 superseding: recover_deps.superseding,
                 dependencies: recover_deps.dependencies,
                 timestamp: t.into(),
-                nack: 0,
+                nack: Ballot::default().into(),
             })
         }
     }
@@ -224,80 +228,56 @@ impl Replica for ReplicaConfig {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
-    use tokio::sync::watch::Sender;
+    use crate::event_store::{Event, EventStore};
+    use crate::replica::ReplicaConfig;
+    use crate::tests;
+    use crate::utils::{Ballot, T, T0};
     use consensus_transport::consensus_transport::{CommitRequest, Dependency, State};
     use consensus_transport::network::NodeInfo;
     use consensus_transport::replica::Replica;
     use monotime::MonoTime;
-    use crate::event_store::{Event, EventStore};
-    use crate::replica::ReplicaConfig;
-    use crate::tests;
-    use crate::utils::{T, T0};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use tokio::sync::watch::Sender;
+    use tokio::sync::Mutex;
 
     #[tokio::test]
     async fn start_recovery() {
         let event_store = Arc::new(Mutex::new(EventStore::init()));
 
-        let conflicting_t0 = MonoTime::new(0,0);
-        event_store.lock().await.upsert(Event {
-            t_zero: T0(conflicting_t0),
-            t: T(conflicting_t0),
-            state: Sender::new((State::PreAccepted, T(conflicting_t0))),
-            event: Default::default(),
-            dependencies: BTreeMap::new(), // No deps
-            ballot: 0,
-        }).await;
-        
-        let replica = ReplicaConfig{
-            node_info: Arc::new(NodeInfo { id: Default::default(), serial: 0 }),
-            network: Arc::new(Mutex::new(tests::NetworkMock{})),
+        let conflicting_t0 = MonoTime::new(0, 0);
+        event_store
+            .lock()
+            .await
+            .upsert(Event {
+                t_zero: T0(conflicting_t0),
+                t: T(conflicting_t0),
+                state: Sender::new((State::PreAccepted, T(conflicting_t0))),
+                event: Default::default(),
+                dependencies: BTreeMap::new(), // No deps
+                ballot: Ballot::default(),
+            })
+            .await;
+
+        let replica = ReplicaConfig {
+            node_info: Arc::new(NodeInfo {
+                id: Default::default(),
+                serial: 0,
+            }),
+            network: Arc::new(Mutex::new(tests::NetworkMock {})),
             event_store: event_store.clone(),
             stats: Arc::new(Default::default()),
         };
-
 
         let t0 = conflicting_t0.next().into_time();
         let request = CommitRequest {
             event: vec![],
             timestamp_zero: t0.into(),
             timestamp: t0.into(),
-            dependencies: vec![Dependency{ timestamp: conflicting_t0.into(), timestamp_zero: conflicting_t0.into() }],
-        };
-        
-        assert!(replica.commit(request).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn rcv_recover() {
-        let event_store = Arc::new(Mutex::new(EventStore::init()));
-
-        let conflicting_t0 = MonoTime::new(0,0);
-        event_store.lock().await.upsert(Event {
-            t_zero: T0(conflicting_t0),
-            t: T(conflicting_t0),
-            state: Sender::new((State::PreAccepted, T(conflicting_t0))),
-            event: Default::default(),
-            dependencies: BTreeMap::new(), // No deps
-            ballot: 0,
-        }).await;
-
-        let replica = ReplicaConfig{
-            node_info: Arc::new(NodeInfo { id: Default::default(), serial: 0 }),
-            network: Arc::new(Mutex::new(tests::NetworkMock{})),
-            event_store: event_store.clone(),
-            stats: Arc::new(Default::default()),
-        };
-
-
-        let t0 = conflicting_t0.next().into_time();
-        let request = CommitRequest {
-            event: vec![],
-            timestamp_zero: t0.into(),
-            timestamp: t0.into(),
-            dependencies: vec![Dependency{ timestamp: conflicting_t0.into(), timestamp_zero: conflicting_t0.into() }],
+            dependencies: vec![Dependency {
+                timestamp: conflicting_t0.into(),
+                timestamp_zero: conflicting_t0.into(),
+            }],
         };
 
         assert!(replica.commit(request).await.is_err());

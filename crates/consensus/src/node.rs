@@ -135,12 +135,20 @@ mod tests {
                 .await
                 .unwrap();
             for node in nodes.iter_mut() {
-                node.add_member(*name, i as u16, format!("http://localhost:{}", 13000 + i)).await.unwrap();
+                node.add_member(*name, i as u16, format!("http://localhost:{}", 13000 + i))
+                    .await
+                    .unwrap();
             }
         }
-        
+
         for node in nodes.iter_mut() {
-            node.add_member(DieselUlid::generate(), 4, format!("http://localhost:{}", 13004)).await.unwrap();
+            node.add_member(
+                DieselUlid::generate(),
+                4,
+                format!("http://localhost:{}", 13004),
+            )
+            .await
+            .unwrap();
         }
 
         let arc_coordinator = Arc::new(coordinator);
@@ -156,17 +164,24 @@ mod tests {
         .await;
         coordinator_iter.next().await.unwrap();
 
-
         // let accepted = coordinator_iter.next().await.unwrap();
         // let committed = coordinator_iter.next().await.unwrap();
         // let applied = coordinator_iter.next().await.unwrap();
 
-        arc_coordinator.transaction(Bytes::from("First")).await.unwrap();
-
+        arc_coordinator
+            .transaction(Bytes::from("First"))
+            .await
+            .unwrap();
 
         for node in nodes {
-            dbg!(&node.get_event_store().lock().await.events.values().map(|ev| (ev.dependencies.clone(), ev.state.borrow())).collect::<Vec<_>>());
+            dbg!(&node
+                .get_event_store()
+                .lock()
+                .await
+                .events
+                .values()
+                .map(|ev| (ev.dependencies.clone(), ev.state.borrow()))
+                .collect::<Vec<_>>());
         }
     }
-
 }

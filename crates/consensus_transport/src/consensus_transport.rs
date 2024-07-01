@@ -30,8 +30,8 @@ pub struct PreAcceptResponse {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AcceptRequest {
-    #[prost(uint32, tag = "1")]
-    pub ballot: u32,
+    #[prost(bytes = "vec", tag = "1")]
+    pub ballot: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "2")]
     pub event: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "3")]
@@ -91,8 +91,8 @@ pub struct ApplyResponse {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RecoverRequest {
-    #[prost(uint32, tag = "1")]
-    pub ballot: u32,
+    #[prost(bytes = "vec", tag = "1")]
+    pub ballot: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "2")]
     pub event: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "3")]
@@ -112,8 +112,8 @@ pub struct RecoverResponse {
     pub dependencies: ::prost::alloc::vec::Vec<Dependency>,
     #[prost(bytes = "vec", tag = "5")]
     pub timestamp: ::prost::alloc::vec::Vec<u8>,
-    #[prost(uint32, tag = "6")]
-    pub nack: u32,
+    #[prost(bytes = "vec", tag = "6")]
+    pub nack: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(serde::Deserialize, serde::Serialize)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]

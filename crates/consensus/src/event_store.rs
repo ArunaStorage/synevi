@@ -10,7 +10,7 @@ use tracing::instrument;
 use crate::{
     coordinator::TransactionStateMachine,
     error::WaitError,
-    utils::{from_dependency, wait_for, T, T0},
+    utils::{from_dependency, wait_for, Ballot, T, T0},
 };
 
 #[derive(Debug)]
@@ -38,7 +38,7 @@ pub struct Event {
     pub state: watch::Sender<(State, T)>,
     pub event: Bytes,
     pub dependencies: BTreeMap<T, T0>, // t and t_zero
-    pub ballot: u32,
+    pub ballot: Ballot,
 }
 
 impl PartialEq for Event {
@@ -90,7 +90,7 @@ impl EventStore {
             t_zero: T0(t0),
             t: T(t0),
             dependencies: BTreeMap::default(),
-            ballot: 0,
+            ballot: Ballot::default(),
         }
     }
 
@@ -108,7 +108,7 @@ impl EventStore {
             state: tx,
             event: Default::default(),
             dependencies: BTreeMap::default(),
-            ballot: 0,
+            ballot: Ballot::default(),
         });
         entry.clone()
     }
@@ -150,21 +150,21 @@ impl EventStore {
             state: tx,
             event: request.event.into(),
             dependencies: from_dependency(deps.clone())?,
-            ballot: 0,
+            ballot: Ballot::default(),
         };
         self.upsert(event).await;
         Ok((deps, t))
     }
 
     #[instrument(level = "trace")]
-    pub fn get_ballot(&self, t_zero: &T0) -> u32 {
+    pub fn get_ballot(&self, t_zero: &T0) -> Ballot {
         self.events
             .get(t_zero)
             .map(|event| event.ballot)
-            .unwrap_or(0)
+            .unwrap_or(Ballot::default())
     }
     #[instrument(level = "trace")]
-    pub fn update_ballot(&mut self, t_zero: &T0, ballot: u32) {
+    pub fn update_ballot(&mut self, t_zero: &T0, ballot: Ballot) {
         if let Some(event) = self.events.get_mut(t_zero) {
             event.ballot = ballot;
         }
@@ -196,7 +196,8 @@ impl EventStore {
     #[instrument(level = "trace")]
     pub async fn get_dependencies(&self, t: &T, t_zero: &T0) -> Vec<Dependency> {
         if self.last_applied == T::default() {
-            return self.events
+            return self
+                .events
                 .range(..&T0(**t))
                 .filter_map(|(_, v)| {
                     if v.t_zero == *t_zero {
@@ -208,7 +209,7 @@ impl EventStore {
                         })
                     }
                 })
-                .collect()
+                .collect();
         }
         if let Some(last_t0) = self.mappings.get(&self.last_applied) {
             return if **last_t0 == **t {
@@ -323,7 +324,7 @@ impl EventStore {
                     state: tx,
                     event: Default::default(),
                     dependencies: BTreeMap::default(),
-                    ballot: 0,
+                    ballot: Ballot::default(),
                 })
                 .await;
             }

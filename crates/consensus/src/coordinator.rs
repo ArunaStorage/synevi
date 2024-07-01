@@ -1,6 +1,6 @@
 use crate::event_store::EventStore;
 use crate::node::Stats;
-use crate::utils::{await_dependencies, from_dependency, into_dependency, T, T0};
+use crate::utils::{await_dependencies, from_dependency, into_dependency, Ballot, T, T0};
 use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::{
@@ -70,6 +70,7 @@ impl CoordinatorIterator {
                 }
             }
             CoordinatorIterator::Accepted(coordinator) => {
+                println!("Committing");
                 if let Some(c) = coordinator.take() {
                     *self = CoordinatorIterator::Committed(Some(c.commit().await?));
                     Ok(Some(()))
@@ -78,6 +79,7 @@ impl CoordinatorIterator {
                 }
             }
             CoordinatorIterator::Committed(coordinator) => {
+                println!("Applying");
                 if let Some(c) = coordinator.take() {
                     c.apply().await?;
                     *self = CoordinatorIterator::Applied;
@@ -97,7 +99,6 @@ impl CoordinatorIterator {
         t0_recover: T0,
         stats: Arc<Stats>,
     ) -> Result<()> {
-        println!("{node:?}");
         let mut backoff_counter: u8 = 0;
         while backoff_counter <= MAX_RETRIES {
             let mut coordinator_iter = Coordinator::<Recover>::recover(
@@ -108,8 +109,10 @@ impl CoordinatorIterator {
                 stats.clone(),
             )
             .await?;
+            println!("Recovering");
             if let CoordinatorIterator::RestartRecovery = coordinator_iter {
                 backoff_counter += 1;
+                tokio::time::sleep(Duration::from_millis(1000)).await;
                 continue;
             }
             while coordinator_iter.next().await?.is_some() {}
@@ -144,7 +147,7 @@ pub struct TransactionStateMachine {
     pub t_zero: T0,
     pub t: T,
     pub dependencies: BTreeMap<T, T0>, // T -> T0
-    pub ballot: u32,
+    pub ballot: Ballot,
 }
 
 impl<X> Coordinator<X> {
@@ -196,19 +199,17 @@ impl Coordinator<Recover> {
         // Just for sanity purposes
         assert_eq!(event.t_zero, t0_recover);
 
-        let ballot = event.ballot + 1;
+        let ballot = Ballot(event.ballot.next_with_node(node.serial).into_time());
         event_store_lock.update_ballot(&t0_recover, ballot);
         drop(event_store_lock);
-        
-        println!("Send rcv from node: {}", node.serial);
+
         let recover_responses = network_interface
             .broadcast(BroadcastRequest::Recover(RecoverRequest {
-                ballot,
+                ballot: ballot.into(),
                 event: event.event.to_vec(),
                 timestamp_zero: t0_recover.into(),
             }))
             .await?;
-        
 
         Self::recover_consensus(
             node,
@@ -233,8 +234,6 @@ impl Coordinator<Recover> {
         t0: T0,
         stats: Arc<Stats>,
     ) -> Result<CoordinatorIterator> {
-        
-        
         // Query the newest state
         let event = event_store.lock().await.get_or_insert(t0).await;
         let previous_state = event.state.borrow().0;
@@ -247,18 +246,19 @@ impl Coordinator<Recover> {
         };
 
         // Keep track of values to replace
-        let mut highest_ballot: Option<u32> = None;
+        let mut highest_ballot: Option<Ballot> = None;
         let mut superseding = false;
         let mut waiting: Vec<Dependency> = Vec::new();
 
         for response in responses.iter_mut() {
-            if response.nack > 0 || highest_ballot.is_some() {
+            let response_ballot = Ballot(MonoTime::try_from(response.nack.as_slice())?);
+            if response_ballot > Ballot::default() || highest_ballot.is_some() {
                 match highest_ballot.as_mut() {
                     None => {
-                        highest_ballot = Some(response.nack);
+                        highest_ballot = Some(response_ballot);
                     }
-                    Some(b) if &response.nack > b => {
-                        *b = response.nack;
+                    Some(b) if &response_ballot > b => {
+                        *b = response_ballot;
                     }
                     _ => {}
                 }
@@ -307,13 +307,11 @@ impl Coordinator<Recover> {
                 _ => {}
             }
         }
-        
 
         if let Some(highest_b) = highest_ballot {
-            println!("Updating ballot with : {}", highest_b);
+            println!("Updating ballot with : {:?}", highest_b);
             event_store.lock().await.update_ballot(&t0, highest_b);
             if previous_state != State::Applied {
-                println!("Waiting for timeout ...");
                 let mut rx = event.state.subscribe();
                 timeout(
                     Duration::from_millis(RECOVER_TIMEOUT),
@@ -326,7 +324,6 @@ impl Coordinator<Recover> {
         }
 
         // Wait for deps
-        println!("Reached state {:?}; Node: {}", state_machine.state, node.serial);
 
         Ok(match state_machine.state {
             State::Applied => CoordinatorIterator::Committed(Some(Coordinator::<Committed> {
@@ -356,7 +353,7 @@ impl Coordinator<Recover> {
 
             State::PreAccepted => {
                 if superseding {
-                    println!("Starting preaccept");
+                    println!("Starting preaccept {:?}", state_machine);
                     CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted> {
                         node,
                         network_interface,
@@ -473,7 +470,7 @@ impl Coordinator<PreAccepted> {
         if *self.transaction.t_zero != *self.transaction.t {
             self.stats.total_accepts.fetch_add(1, Ordering::Relaxed);
             let accepted_request = AcceptRequest {
-                ballot: self.transaction.ballot,
+                ballot: self.transaction.ballot.into(),
                 event: self.transaction.transaction.clone().into(),
                 timestamp_zero: (*self.transaction.t_zero).into(),
                 timestamp: (*self.transaction.t).into(),
@@ -557,6 +554,7 @@ impl Coordinator<Accepted> {
         committed_result?; // TODO Recovery
         broadcast_result?; // TODO Recovery
 
+        println!("Committed");
         Ok(Coordinator::<Committed> {
             node: self.node,
             network_interface: self.network_interface,
@@ -636,7 +634,7 @@ mod tests {
         coordinator::{Initialized, TransactionStateMachine},
         event_store::{Event, EventStore},
         tests::NetworkMock,
-        utils::{T, T0},
+        utils::{Ballot, T, T0},
     };
     use bytes::Bytes;
     use consensus_transport::{
@@ -680,7 +678,7 @@ mod tests {
             t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
             t: T(MonoTime::new_with_time(10u128, 0, 0)),
             dependencies: BTreeMap::default(),
-            ballot: 0,
+            ballot: Ballot::default(),
         };
         let mut coordinator = Coordinator::<Initialized> {
             node: Arc::new(NodeInfo {
@@ -721,7 +719,7 @@ mod tests {
                 t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
                 t: T(MonoTime::new_with_time(10u128, 0, 0)),
                 dependencies: BTreeMap::default(),
-                ballot: 0,
+                ballot: Ballot::default(),
             }
         );
 
@@ -791,7 +789,7 @@ mod tests {
                 .iter()
                 .cloned(),
             ),
-            ballot: 0,
+            ballot: Ballot::default(),
         };
 
         assert_eq!(coordinator.transaction, state_machine);
@@ -826,7 +824,7 @@ mod tests {
                     .iter()
                     .cloned()
                 ),
-                ballot: 0,
+                ballot: Ballot::default(),
             }
         );
     }
@@ -841,7 +839,7 @@ mod tests {
             t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
             t: T(MonoTime::new_with_time(10u128, 0, 0)),
             dependencies: BTreeMap::default(),
-            ballot: 0,
+            ballot: Ballot::default(),
         };
         let mut coordinator = Coordinator {
             node: Arc::new(NodeInfo {
@@ -894,7 +892,7 @@ mod tests {
                     T(MonoTime::new_with_time(13u128, 0, 1)),
                     T0(MonoTime::new_with_time(11u128, 0, 1))
                 ),]),
-                ballot: 0,
+                ballot: Ballot::default(),
             }
         );
     }

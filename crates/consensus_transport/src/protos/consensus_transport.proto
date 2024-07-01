@@ -26,14 +26,14 @@ message PreAcceptResponse {
 }
 
 message AcceptRequest {
-  uint32 ballot = 1;
+  bytes ballot = 1;
   bytes event = 2;
   bytes timestamp_zero = 3;
   bytes timestamp = 4;
   repeated Dependency dependencies = 5;
 }
 
-message AcceptResponse { 
+message AcceptResponse {
   repeated Dependency dependencies = 1;
   bool nack = 2;
 }
@@ -61,7 +61,7 @@ message ApplyRequest {
 message ApplyResponse {}
 
 message RecoverRequest {
-  uint32 ballot = 1;
+  bytes ballot = 1;
   bytes event = 2;
   bytes timestamp_zero = 3;
 }
@@ -80,5 +80,5 @@ message RecoverResponse {
   repeated Dependency superseding = 3;
   repeated Dependency dependencies = 4;
   bytes timestamp = 5;
-  uint32 nack = 6; 
+  bytes nack = 6;
 }
