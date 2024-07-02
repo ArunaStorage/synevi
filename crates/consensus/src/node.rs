@@ -114,12 +114,12 @@ mod tests {
     use tokio::sync::Mutex;
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn recovery() {
-        let mut node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
+    async fn recovery_single() {
+        let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
         let mut nodes: Vec<Node> = vec![];
 
         for (i, m) in node_names.iter().enumerate() {
-            let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13000 + i)).unwrap();
+            let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13100 + i)).unwrap();
             let network = Arc::new(Mutex::new(
                 consensus_transport::network::NetworkConfig::new(socket_addr),
             ));
@@ -128,32 +128,16 @@ mod tests {
                 .unwrap();
             nodes.push(node);
         }
-        let mut coordinator = nodes.pop().unwrap();
-        let _ = node_names.pop(); // Do not connect to your self
         for (i, name) in node_names.iter().enumerate() {
-            coordinator
-                .add_member(*name, i as u16, format!("http://localhost:{}", 13000 + i))
-                .await
-                .unwrap();
             for (i2, node) in nodes.iter_mut().enumerate() {
                 if i != i2 {
-                    node.add_member(*name, i as u16, format!("http://localhost:{}", 13000 + i))
-                    .await
-                    .unwrap();
+                    node.add_member(*name, i as u16, format!("http://localhost:{}", 13100 + i))
+                        .await
+                        .unwrap();
                 }
             }
         }
-
-        for node in nodes.iter_mut() {
-            node.add_member(
-                DieselUlid::generate(),
-                4,
-                format!("http://localhost:{}", 13004),
-            )
-            .await
-            .unwrap();
-        }
-
+        let coordinator = nodes.pop().unwrap();
         let arc_coordinator = Arc::new(coordinator);
 
         let coordinator = arc_coordinator.clone();
@@ -177,7 +161,67 @@ mod tests {
             .await
             .unwrap();
 
-        let coord = arc_coordinator.get_event_store().lock().await.events.clone();
+        let coord = arc_coordinator
+            .get_event_store()
+            .lock()
+            .await
+            .events
+            .clone();
+        for node in nodes {
+            assert_eq!(node.get_event_store().lock().await.events, coord);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn recovery_random_test() {
+        let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
+        let mut nodes: Vec<Node> = vec![];
+
+        for (i, m) in node_names.iter().enumerate() {
+            let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13000 + i)).unwrap();
+            let network = Arc::new(Mutex::new(
+                consensus_transport::network::NetworkConfig::new(socket_addr),
+            ));
+            let node = Node::new_with_parameters(*m, i as u16, network)
+                .await
+                .unwrap();
+            nodes.push(node);
+        }
+        for (i, name) in node_names.iter().enumerate() {
+            for (i2, node) in nodes.iter_mut().enumerate() {
+                if i != i2 {
+                    node.add_member(*name, i as u16, format!("http://localhost:{}", 13000 + i))
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+        let coordinator = nodes.pop().unwrap();
+        let arc_coordinator = Arc::new(coordinator);
+
+        let coordinator = arc_coordinator.clone();
+        let interface = coordinator.network.lock().await.get_interface();
+        let mut coordinator_iter = CoordinatorIterator::new(
+            coordinator.info.clone(),
+            coordinator.event_store.clone(),
+            interface,
+            Bytes::from("Recovery transaction"),
+            coordinator.stats.clone(),
+        )
+        .await;
+        coordinator_iter.next().await.unwrap();
+
+        arc_coordinator
+            .transaction(Bytes::from("First"))
+            .await
+            .unwrap();
+
+        let coord = arc_coordinator
+            .get_event_store()
+            .lock()
+            .await
+            .events
+            .clone();
         for node in nodes {
             assert_eq!(node.get_event_store().lock().await.events, coord);
         }

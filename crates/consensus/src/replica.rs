@@ -93,7 +93,6 @@ impl Replica for ReplicaConfig {
 
     #[instrument(level = "trace", skip(self))]
     async fn commit(&self, request: CommitRequest) -> Result<CommitResponse> {
-
         let network_interface = self.network.lock().await.get_interface();
 
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
@@ -128,7 +127,6 @@ impl Replica for ReplicaConfig {
 
     #[instrument(level = "trace", skip(self))]
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse> {
-
         let network_interface = self.network.lock().await.get_interface();
         let transaction: Bytes = request.event.into();
 
