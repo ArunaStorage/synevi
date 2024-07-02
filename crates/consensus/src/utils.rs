@@ -159,7 +159,7 @@ pub async fn await_dependencies(
     }
 }
 
-const TIMEOUT: u64 = 100;
+const TIMEOUT: u64 = 2000;
 
 pub fn wait_for(
     t_request: T,

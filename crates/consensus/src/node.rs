@@ -20,6 +20,7 @@ pub struct Node {
     network: Arc<Mutex<dyn Network + Send + Sync>>,
     event_store: Arc<Mutex<EventStore>>,
     stats: Arc<Stats>,
+    semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl Node {
@@ -56,6 +57,7 @@ impl Node {
             event_store,
             network,
             stats,
+            semaphore: Arc::new(tokio::sync::Semaphore::new(20)),
         })
     }
 
@@ -66,6 +68,7 @@ impl Node {
 
     #[instrument(level = "trace", skip(self))]
     pub async fn transaction(&self, transaction: Bytes) -> Result<()> {
+        let _permit = self.semaphore.clone().acquire_owned().await?;
         let interface = self.network.lock().await.get_interface();
         let mut coordinator_iter = CoordinatorIterator::new(
             self.info.clone(),
