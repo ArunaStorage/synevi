@@ -70,7 +70,6 @@ impl CoordinatorIterator {
                 }
             }
             CoordinatorIterator::Accepted(coordinator) => {
-                println!("Committing");
                 if let Some(c) = coordinator.take() {
                     *self = CoordinatorIterator::Committed(Some(c.commit().await?));
                     Ok(Some(()))
@@ -79,7 +78,6 @@ impl CoordinatorIterator {
                 }
             }
             CoordinatorIterator::Committed(coordinator) => {
-                println!("Applying");
                 if let Some(c) = coordinator.take() {
                     c.apply().await?;
                     *self = CoordinatorIterator::Applied;
@@ -99,6 +97,7 @@ impl CoordinatorIterator {
         t0_recover: T0,
         stats: Arc<Stats>,
     ) -> Result<()> {
+        println!("Started recovery at {:?}", node.serial);
         let mut backoff_counter: u8 = 0;
         while backoff_counter <= MAX_RETRIES {
             let mut coordinator_iter = Coordinator::<Recover>::recover(
@@ -109,7 +108,6 @@ impl CoordinatorIterator {
                 stats.clone(),
             )
             .await?;
-            println!("Recovering");
             if let CoordinatorIterator::RestartRecovery = coordinator_iter {
                 backoff_counter += 1;
                 tokio::time::sleep(Duration::from_millis(1000)).await;
@@ -309,7 +307,6 @@ impl Coordinator<Recover> {
         }
 
         if let Some(highest_b) = highest_ballot {
-            println!("Updating ballot with : {:?}", highest_b);
             event_store.lock().await.update_ballot(&t0, highest_b);
             if previous_state != State::Applied {
                 let mut rx = event.state.subscribe();
@@ -318,6 +315,7 @@ impl Coordinator<Recover> {
                     rx.wait_for(|(s, _)| *s > previous_state),
                 )
                 .await??;
+
                 return Ok(CoordinatorIterator::Recovering);
             }
             return Ok(CoordinatorIterator::Applied);
@@ -353,7 +351,6 @@ impl Coordinator<Recover> {
 
             State::PreAccepted => {
                 if superseding {
-                    println!("Starting preaccept {:?}", state_machine);
                     CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted> {
                         node,
                         network_interface,
@@ -554,7 +551,6 @@ impl Coordinator<Accepted> {
         committed_result?; // TODO Recovery
         broadcast_result?; // TODO Recovery
 
-        println!("Committed");
         Ok(Coordinator::<Committed> {
             node: self.node,
             network_interface: self.network_interface,
@@ -567,12 +563,14 @@ impl Coordinator<Accepted> {
 
     #[instrument(level = "trace", skip(self))]
     async fn commit_consensus(&mut self) -> Result<()> {
+
         self.transaction.state = State::Commited;
         self.event_store
             .lock()
             .await
             .upsert((&self.transaction).into())
             .await;
+
         Box::pin(await_dependencies(
             self.node.clone(),
             self.event_store.clone(),

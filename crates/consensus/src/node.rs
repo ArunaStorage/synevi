@@ -66,10 +66,11 @@ impl Node {
 
     #[instrument(level = "trace", skip(self))]
     pub async fn transaction(&self, transaction: Bytes) -> Result<()> {
+        let interface = self.network.lock().await.get_interface();
         let mut coordinator_iter = CoordinatorIterator::new(
             self.info.clone(),
             self.event_store.clone(),
-            self.network.lock().await.get_interface(),
+            interface,
             transaction,
             self.stats.clone(),
         )
@@ -134,10 +135,12 @@ mod tests {
                 .add_member(*name, i as u16, format!("http://localhost:{}", 13000 + i))
                 .await
                 .unwrap();
-            for node in nodes.iter_mut() {
-                node.add_member(*name, i as u16, format!("http://localhost:{}", 13000 + i))
+            for (i2, node) in nodes.iter_mut().enumerate() {
+                if i != i2 {
+                    node.add_member(*name, i as u16, format!("http://localhost:{}", 13000 + i))
                     .await
                     .unwrap();
+                }
             }
         }
 
@@ -154,10 +157,11 @@ mod tests {
         let arc_coordinator = Arc::new(coordinator);
 
         let coordinator = arc_coordinator.clone();
+        let interface = coordinator.network.lock().await.get_interface();
         let mut coordinator_iter = CoordinatorIterator::new(
             coordinator.info.clone(),
             coordinator.event_store.clone(),
-            coordinator.network.lock().await.get_interface(),
+            interface,
             Bytes::from("Recovery transaction"),
             coordinator.stats.clone(),
         )
@@ -173,15 +177,9 @@ mod tests {
             .await
             .unwrap();
 
+        let coord = arc_coordinator.get_event_store().lock().await.events.clone();
         for node in nodes {
-            dbg!(&node
-                .get_event_store()
-                .lock()
-                .await
-                .events
-                .values()
-                .map(|ev| (ev.dependencies.clone(), ev.state.borrow()))
-                .collect::<Vec<_>>());
+            assert_eq!(node.get_event_store().lock().await.events, coord);
         }
     }
 }

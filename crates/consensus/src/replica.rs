@@ -93,6 +93,9 @@ impl Replica for ReplicaConfig {
 
     #[instrument(level = "trace", skip(self))]
     async fn commit(&self, request: CommitRequest) -> Result<CommitResponse> {
+
+        let network_interface = self.network.lock().await.get_interface();
+
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
         let t = T(MonoTime::try_from(request.timestamp.as_slice())?);
         let dependencies = from_dependency(request.dependencies.clone())?;
@@ -114,7 +117,7 @@ impl Replica for ReplicaConfig {
             self.node_info.clone(),
             self.event_store.clone(),
             &dependencies,
-            self.network.lock().await.get_interface(),
+            network_interface,
             t,
             self.stats.clone(),
         )
@@ -125,6 +128,8 @@ impl Replica for ReplicaConfig {
 
     #[instrument(level = "trace", skip(self))]
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse> {
+
+        let network_interface = self.network.lock().await.get_interface();
         let transaction: Bytes = request.event.into();
 
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
@@ -136,7 +141,7 @@ impl Replica for ReplicaConfig {
             self.node_info.clone(),
             self.event_store.clone(),
             &dependencies,
-            self.network.lock().await.get_interface(),
+            network_interface,
             t,
             self.stats.clone(),
         )
@@ -161,7 +166,7 @@ impl Replica for ReplicaConfig {
 
     #[instrument(level = "trace", skip(self))]
     async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse> {
-        println!("RECOVERY from node: {}", self.node_info.serial);
+        println!("RECOVERY at replica: {}", self.node_info.serial);
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
         let mut event_store_lock = self.event_store.lock().await;
         if let Some(mut event) = event_store_lock.get_event(t_zero).await {
@@ -175,10 +180,6 @@ impl Replica for ReplicaConfig {
                 });
             }
 
-            println!(
-                "Event ballot : {:?}, Request ballot: {:?}",
-                event.ballot, request.ballot
-            );
             event_store_lock.update_ballot(&t_zero, request_ballot);
 
             if matches!(event.state.borrow().0, State::Undefined) {
