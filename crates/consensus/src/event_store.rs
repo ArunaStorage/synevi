@@ -26,7 +26,7 @@ pub struct EventStore {
     pub events: BTreeMap<T0, Event>,      // Key: t0, value: Event
     pub database: Option<Database>,
     pub(crate) mappings: BTreeMap<T, T0>, // Key: t, value t0
-    pub(crate) last_applied: T,           // t of last applied entry
+    pub last_applied: T,           // t of last applied entry
     pub(crate) latest_t0: T0,             // last created or recognized t0
 }
 
@@ -193,6 +193,9 @@ impl EventStore {
         self.mappings.insert(event.t, event.t_zero);
         let new_state: (State, T) = *event.state.borrow();
         old_event.state.send_modify(|old| *old = new_state);
+        if old_event.state.borrow().0 == State::Applied {
+            self.last_applied = event.t;
+        }
         if let Some(db) = &self.database {
             let t: Vec<u8> = (*old_event.t).into();
             db.persist(t.into(), old_event.event.clone()).unwrap()
@@ -202,11 +205,13 @@ impl EventStore {
     #[instrument(level = "trace")]
     pub async fn get_dependencies(&self, t: &T, t_zero: &T0) -> Vec<Dependency> {
         if self.last_applied == T::default() {
-            return self
+            self
                 .events
                 .range(..&T0(**t))
                 .filter_map(|(_, v)| {
                     if v.t_zero == *t_zero {
+                        None
+                    } else if v.state.borrow().0 == State::Undefined {
                         None
                     } else {
                         Some(Dependency {
@@ -215,10 +220,9 @@ impl EventStore {
                         })
                     }
                 })
-                .collect();
-        }
-        if let Some(last_t0) = self.mappings.get(&self.last_applied) {
-            return if **last_t0 == **t {
+                .collect()
+        } else if let Some(last_t0) = self.mappings.get(&self.last_applied) {
+            if **last_t0 == **t {
                 vec![]
             } else {
                 // Range from last applied t0 to T
@@ -228,6 +232,8 @@ impl EventStore {
                     .filter_map(|(_, v)| {
                         if v.t_zero == *t_zero {
                             None
+                        } else if v.state.borrow().0 == State::Undefined {
+                            None
                         } else {
                             Some(Dependency {
                                 timestamp: (*v.t).into(),
@@ -236,9 +242,10 @@ impl EventStore {
                         }
                     })
                     .collect()
-            };
+            }
+        }else{
+            vec![]
         }
-        vec![]
     }
 
     #[instrument(level = "trace")]

@@ -563,7 +563,6 @@ impl Coordinator<Accepted> {
 
     #[instrument(level = "trace", skip(self))]
     async fn commit_consensus(&mut self) -> Result<()> {
-
         self.transaction.state = State::Commited;
         self.event_store
             .lock()

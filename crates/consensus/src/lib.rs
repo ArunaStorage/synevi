@@ -7,13 +7,13 @@ pub mod utils;
 
 #[cfg(test)]
 pub mod tests {
-    use std::sync::Arc;
     use anyhow::Result;
-    use diesel_ulid::DieselUlid;
-    use consensus_transport::network::{BroadcastRequest, Member, Network};
     use consensus_transport::network::BroadcastResponse;
     use consensus_transport::network::NetworkInterface;
+    use consensus_transport::network::{BroadcastRequest, Member, Network};
     use consensus_transport::replica::Replica;
+    use diesel_ulid::DieselUlid;
+    use std::sync::Arc;
 
     #[derive(Debug)]
     pub struct NetworkMock {}
@@ -25,11 +25,10 @@ pub mod tests {
             Ok(vec![])
         }
     }
-    
+
     #[async_trait::async_trait]
     impl Network for NetworkMock {
-        async fn add_members(&mut self, _members: Vec<Arc<Member>>) {
-        }
+        async fn add_members(&mut self, _members: Vec<Arc<Member>>) {}
 
         async fn add_member(&mut self, _id: DieselUlid, _serial: u16, _host: String) -> Result<()> {
             Ok(())
@@ -40,8 +39,7 @@ pub mod tests {
         }
 
         fn get_interface(&self) -> Arc<dyn NetworkInterface> {
-            Arc::new(NetworkMock{})
+            Arc::new(NetworkMock {})
         }
     }
-    
 }
