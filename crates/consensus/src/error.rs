@@ -1,4 +1,5 @@
 use crate::utils::T0;
+use consensus_transport::error::BroadCastError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -13,7 +14,9 @@ pub enum WaitError {
 #[derive(Error, Debug)]
 pub enum ConsensusError {
     #[error("Majority not reached")]
-    MajorityNotReached,
+    BroadCastError(#[from] BroadCastError),
     #[error("Competing coordinator")]
     CompetingCoordinator,
+    #[error("Anyhow error")]
+    AnyhowError(#[from] anyhow::Error),
 }

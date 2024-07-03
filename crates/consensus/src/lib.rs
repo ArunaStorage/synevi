@@ -8,6 +8,7 @@ pub mod utils;
 #[cfg(test)]
 pub mod tests {
     use anyhow::Result;
+    use consensus_transport::error::BroadCastError;
     use consensus_transport::network::BroadcastResponse;
     use consensus_transport::network::NetworkInterface;
     use consensus_transport::network::{BroadcastRequest, Member, Network};
@@ -29,7 +30,7 @@ pub mod tests {
 
     #[async_trait::async_trait]
     impl NetworkInterface for NetworkMock {
-        async fn broadcast(&self, request: BroadcastRequest) -> Result<Vec<BroadcastResponse>> {
+        async fn broadcast(&self, request: BroadcastRequest) -> Result<Vec<BroadcastResponse>, BroadCastError> {
             self.got_requests.lock().await.push(request);
             Ok(vec![])
         }

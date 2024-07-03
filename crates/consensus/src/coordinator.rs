@@ -56,16 +56,37 @@ impl CoordinatorIterator {
         match self {
             CoordinatorIterator::Initialized(coordinator) => {
                 if let Some(c) = coordinator.take() {
-                    *self = CoordinatorIterator::PreAccepted(Some(c.pre_accept().await?));
-                    Ok(Some(()))
+
+                    let pre_accepted = c.pre_accept().await;
+                    match pre_accepted {
+                        Ok(c) => {
+                            *self = CoordinatorIterator::PreAccepted(Some(c));
+                            Ok(Some(()))
+                        }
+                        Err(ConsensusError::CompetingCoordinator) => {
+                            *self = CoordinatorIterator::Recovering;
+                            Ok(None)
+                        }
+                        Err(e) => Err(e.into()),
+                    }
                 } else {
                     Ok(None)
                 }
             }
             CoordinatorIterator::PreAccepted(coordinator) => {
                 if let Some(c) = coordinator.take() {
-                    *self = CoordinatorIterator::Accepted(Some(c.accept().await?));
-                    Ok(Some(()))
+                    let accepted = c.accept().await;
+                    match accepted {
+                        Ok(c) => {
+                            *self = CoordinatorIterator::Accepted(Some(c));
+                            Ok(Some(()))
+                        }
+                        Err(ConsensusError::CompetingCoordinator) => {
+                            *self = CoordinatorIterator::Recovering;
+                            Ok(None)
+                        }
+                        Err(e) => Err(e.into()),
+                    }
                 } else {
                     Ok(None)
                 }
@@ -408,7 +429,7 @@ impl Coordinator<Initialized> {
         .collect::<Result<Vec<_>>>()?;
 
         if pa_responses.iter().any(|PreAcceptResponse{nack, ..}| *nack) {
-            return Ok(self);
+            return Err(ConsensusError::CompetingCoordinator);
         }
 
         self.pre_accept_consensus(
@@ -465,7 +486,7 @@ impl Coordinator<Initialized> {
 
 impl Coordinator<PreAccepted> {
     #[instrument(level = "trace", skip(self))]
-    pub async fn accept(mut self) -> Result<Coordinator<Accepted>> {
+    pub async fn accept(mut self) -> Result<Coordinator<Accepted>, ConsensusError> {
         // Safeguard: T0 <= T
         assert!(*self.transaction.t_zero <= *self.transaction.t);
 
@@ -483,11 +504,17 @@ impl Coordinator<PreAccepted> {
                 .broadcast(BroadcastRequest::Accept(accepted_request))
                 .await?;
 
+            let pa_responses = accepted_responses
+                .into_iter()
+                .map(|res| res.into_inner())
+                .collect::<Result<Vec<_>>>()?;
+        
+                if pa_responses.iter().any(|AcceptResponse{nack, ..}| *nack) {
+                    return Err(ConsensusError::CompetingCoordinator);
+                }
+
             self.accept_consensus(
-                &accepted_responses
-                    .into_iter()
-                    .map(|res| res.into_inner())
-                    .collect::<Result<Vec<_>>>()?,
+                &pa_responses,
             )
             .await?;
         }
@@ -700,6 +727,7 @@ mod tests {
             PreAcceptResponse {
                 timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
                 dependencies: vec![],
+                nack: false,
             };
             3
         ];
@@ -736,6 +764,7 @@ mod tests {
                     timestamp_zero: MonoTime::new_with_time(1u128, 0, 0).into(),
                     timestamp: MonoTime::new_with_time(1u128, 0, 0).into(),
                 }],
+                nack: false,
             },
             PreAcceptResponse {
                 timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
@@ -749,6 +778,7 @@ mod tests {
                         timestamp: MonoTime::new_with_time(3u128, 0, 0).into(),
                     },
                 ],
+                nack: false,
             },
             PreAcceptResponse {
                 timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
@@ -762,6 +792,7 @@ mod tests {
                         timestamp: MonoTime::new_with_time(2u128, 0, 0).into(),
                     },
                 ],
+                nack: false,
             },
         ];
 
@@ -864,14 +895,17 @@ mod tests {
                     timestamp_zero: T(MonoTime::new_with_time(11u128, 0, 1)).into(),
                     timestamp: T0(MonoTime::new_with_time(13u128, 0, 1)).into(),
                 }],
+                nack: false,
             },
             PreAcceptResponse {
                 timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
                 dependencies: vec![],
+                nack: false,
             },
             PreAcceptResponse {
                 timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
                 dependencies: vec![],
+                nack: false,
             },
         ];
 
