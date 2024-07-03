@@ -119,7 +119,6 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
-    use std::time::Duration;
     use tokio::sync::Mutex;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -213,6 +212,7 @@ mod tests {
         let mut rng = rand::thread_rng();
         let die = Uniform::from(0..10);
 
+        // Working coordinator
         for _ in 0..10 {
             let interface = coordinator.network.lock().await;
             // Working coordinator
@@ -224,33 +224,10 @@ mod tests {
                 coordinator.stats.clone(),
             )
             .await;
-
+            drop(interface);
             while coordinator_iter.next().await.unwrap().is_some() {
                 let throw = die.sample(&mut rng);
                 if throw == 0 {
-                    match coordinator_iter {
-                        CoordinatorIterator::Initialized(_) => {
-                            println!("Break at Init")
-                        }
-                        CoordinatorIterator::PreAccepted(_) => {
-                            println!("Break at PreAccepted")
-                        }
-                        CoordinatorIterator::Accepted(_) => {
-                            println!("Break at Accepted")
-                        }
-                        CoordinatorIterator::Committed(_) => {
-                            println!("Break at Committed")
-                        }
-                        CoordinatorIterator::Applied => {
-                            println!("Break at Applied")
-                        }
-                        CoordinatorIterator::Recovering => {
-                            println!("Break at Recovering")
-                        }
-                        CoordinatorIterator::RestartRecovery => {
-                            println!("Break at RestartRecovery")
-                        }
-                    }
                     break;
                 }
             }
@@ -259,8 +236,6 @@ mod tests {
             .transaction(Bytes::from("last transaction"))
             .await
             .unwrap();
-
-        tokio::time::sleep(Duration::from_secs(1)).await;
 
         let coordinator_store: BTreeMap<T0, T> = arc_coordinator
             .get_event_store()

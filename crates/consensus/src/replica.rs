@@ -96,6 +96,7 @@ impl Replica for ReplicaConfig {
         let network_interface = self.network.lock().await.get_interface();
 
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
+
         let t = T(MonoTime::try_from(request.timestamp.as_slice())?);
         let dependencies = from_dependency(request.dependencies.clone())?;
         let (tx, _) = watch::channel((State::Commited, t));
@@ -119,6 +120,7 @@ impl Replica for ReplicaConfig {
             network_interface,
             t,
             self.stats.clone(),
+            false,
         )
         .await?;
 
@@ -142,6 +144,7 @@ impl Replica for ReplicaConfig {
             network_interface,
             t,
             self.stats.clone(),
+            false,
         )
         .await?;
 
@@ -158,13 +161,11 @@ impl Replica for ReplicaConfig {
                 ballot: Ballot::default(),
             })
             .await;
-
         Ok(ApplyResponse {})
     }
 
     #[instrument(level = "trace", skip(self))]
     async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse> {
-        println!("RECOVERY at replica: {}", self.node_info.serial);
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
         let mut event_store_lock = self.event_store.lock().await;
         if let Some(mut event) = event_store_lock.get_event(t_zero).await {
@@ -172,20 +173,11 @@ impl Replica for ReplicaConfig {
             // Return NACK with the higher ballot number
             let request_ballot = Ballot(MonoTime::try_from(request.ballot.as_slice())?);
             if event.ballot > request_ballot {
-                println!(
-                    "REPLICA {}: NACK with ballot {:?}",
-                    self.node_info.serial, event.ballot
-                );
                 return Ok(RecoverResponse {
                     nack: event.ballot.into(),
                     ..Default::default()
                 });
             }
-
-            println!(
-                "REPLICA {}: This Ballot won {:?}",
-                self.node_info.serial, request_ballot
-            );
 
             event_store_lock.update_ballot(&t_zero, request_ballot);
 
@@ -267,12 +259,14 @@ mod tests {
             })
             .await;
 
+        let network = Arc::new(Mutex::new(tests::NetworkMock::default()));
+
         let replica = ReplicaConfig {
             node_info: Arc::new(NodeInfo {
                 id: Default::default(),
                 serial: 0,
             }),
-            network: Arc::new(Mutex::new(tests::NetworkMock {})),
+            network: network.clone(),
             event_store: event_store.clone(),
             stats: Arc::new(Default::default()),
         };
@@ -288,6 +282,9 @@ mod tests {
             }],
         };
 
-        assert!(replica.commit(request).await.is_err());
+        replica.commit(request).await.unwrap();
+        assert!(
+            matches!(network.lock().await.get_requests().await.first().unwrap(), consensus_transport::network::BroadcastRequest::Recover(_))
+        );
     }
 }

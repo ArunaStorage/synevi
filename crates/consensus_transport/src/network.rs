@@ -40,7 +40,7 @@ pub struct Member {
     pub channel: Channel,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BroadcastRequest {
     PreAccept(PreAcceptRequest),
     Accept(AcceptRequest),

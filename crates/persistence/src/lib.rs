@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
-use rocksdb::{DBPath, DBWithThreadMode, MultiThreaded, SingleThreaded, DB};
+use rocksdb::{DBWithThreadMode, MultiThreaded};
 
 #[derive(Debug)]
 pub struct Database {

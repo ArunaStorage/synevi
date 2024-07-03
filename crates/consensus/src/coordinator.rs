@@ -10,7 +10,6 @@ use consensus_transport::consensus_transport::{
 use consensus_transport::network::{BroadcastRequest, NetworkInterface, NodeInfo};
 use consensus_transport::utils::IntoInner;
 use monotime::MonoTime;
-use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
@@ -98,7 +97,6 @@ impl CoordinatorIterator {
         t0_recover: T0,
         stats: Arc<Stats>,
     ) -> Result<()> {
-        println!("Started recovery at {:?}", node.serial);
         let mut backoff_counter: u8 = 0;
         while backoff_counter <= MAX_RETRIES {
             let mut coordinator_iter = Coordinator::<Recover>::recover(
@@ -109,29 +107,6 @@ impl CoordinatorIterator {
                 stats.clone(),
             )
             .await?;
-            match coordinator_iter {
-                CoordinatorIterator::Initialized(_) => {
-                    println!("Node {}: with Init", node.serial)
-                }
-                CoordinatorIterator::PreAccepted(_) => {
-                    println!("Node {}: with PreAccepted", node.serial)
-                }
-                CoordinatorIterator::Accepted(_) => {
-                    println!("Node {}: with Accepted", node.serial)
-                }
-                CoordinatorIterator::Committed(_) => {
-                    println!("Node {}: with Committed", node.serial)
-                }
-                CoordinatorIterator::Applied => {
-                    println!("Node {}: with Applied", node.serial)
-                }
-                CoordinatorIterator::Recovering => {
-                    println!("Node {}: with Recovering", node.serial)
-                }
-                CoordinatorIterator::RestartRecovery => {
-                    println!("Node {}: with RestartRecovery", node.serial)
-                }
-            }
             if let CoordinatorIterator::RestartRecovery = coordinator_iter {
                 backoff_counter += 1;
                 tokio::time::sleep(Duration::from_millis(1000)).await;
@@ -212,17 +187,10 @@ impl Coordinator<Recover> {
         let mut event_store_lock = event_store.lock().await;
         let event = event_store_lock.get_or_insert(t0_recover).await;
         if matches!(event.state.borrow().0, State::Undefined) {
-            println!("Node {} with undefined recovery", node.serial);
+            tracing::debug!("Node {} with undefined recovery", node.serial);
             return Ok(CoordinatorIterator::Recovering);
         }
-        //let mut rx = event.state.subscribe();
-        //timeout(
-        //    Duration::from_millis(RECOVER_TIMEOUT),
-        //    rx.wait_for(|(s, _)| *s != State::Undefined),
-        //)
-        //.await??;
-
-        println!("Node started recovery: {}", node.serial);
+        
         // Just for sanity purposes
         assert_eq!(event.t_zero, t0_recover);
 
@@ -266,14 +234,11 @@ impl Coordinator<Recover> {
         // Query the newest state
         let event = event_store.lock().await.get_or_insert(t0).await;
         let previous_state = event.state.borrow().0;
-        println!(
-            "CoordRecovery at {} with previous state {:?} and ballot {:?}",
-            node.serial, previous_state, ballot
-        );
 
         let mut state_machine = TransactionStateMachine {
             transaction: event.event,
             t_zero: event.t_zero,
+            t: event.t,
             ballot,
             state: previous_state,
             ..Default::default()
@@ -286,10 +251,6 @@ impl Coordinator<Recover> {
 
         for response in responses.iter_mut() {
             let response_ballot = Ballot(MonoTime::try_from(response.nack.as_slice())?);
-            println!(
-                "Coord {} request with ballot {:?}",
-                node.serial, response_ballot
-            );
             if response_ballot > Ballot::default() || highest_ballot.is_some() {
                 match highest_ballot.as_mut() {
                     None => {
@@ -585,8 +546,8 @@ impl Coordinator<Accepted> {
             network_interface_clone.broadcast(BroadcastRequest::Commit(committed_request))
         );
 
-        committed_result?; // TODO Recovery
-        broadcast_result?; // TODO Recovery
+        committed_result.unwrap(); // TODO Recovery
+        broadcast_result.unwrap(); // TODO Recovery
 
         Ok(Coordinator::<Committed> {
             node: self.node,
@@ -614,8 +575,10 @@ impl Coordinator<Accepted> {
             self.network_interface.clone(),
             self.transaction.t,
             self.stats.clone(),
+            true,
         ))
         .await?;
+
         Ok(())
     }
 }
@@ -650,10 +613,12 @@ impl Coordinator<Committed> {
     #[instrument(level = "trace", skip(self))]
     async fn execute_consensus(&mut self) -> Result<()> {
         // TODO: Apply in backend
-        let mut store_lock = self.event_store.lock().await;
-
         self.transaction.state = State::Applied;
-        store_lock.upsert((&self.transaction).into()).await;
+        self.event_store
+            .lock()
+            .await
+            .upsert((&self.transaction).into())
+            .await;
 
         Ok(())
     }
@@ -687,7 +652,7 @@ mod tests {
                 serial: 0,
             }),
             event_store,
-            Arc::new(NetworkMock {}),
+            Arc::new(NetworkMock::default()),
             Bytes::from("test"),
             Arc::new(Default::default()),
         )
@@ -717,7 +682,7 @@ mod tests {
                 id: DieselUlid::generate(),
                 serial: 0,
             }),
-            network_interface: Arc::new(NetworkMock {}),
+            network_interface: Arc::new(NetworkMock::default()),
             event_store: event_store.clone(),
             transaction: state_machine.clone(),
             stats: Arc::new(Default::default()),
@@ -878,7 +843,7 @@ mod tests {
                 id: DieselUlid::generate(),
                 serial: 0,
             }),
-            network_interface: Arc::new(NetworkMock {}),
+            network_interface: Arc::new(NetworkMock::default()),
             event_store: event_store.clone(),
             transaction: state_machine.clone(),
             stats: Arc::new(Default::default()),

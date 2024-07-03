@@ -14,14 +14,23 @@ pub mod tests {
     use consensus_transport::replica::Replica;
     use diesel_ulid::DieselUlid;
     use std::sync::Arc;
+    use tokio::sync::Mutex;
 
-    #[derive(Debug)]
-    pub struct NetworkMock {}
+    #[derive(Debug, Default)]
+    pub struct NetworkMock {
+        got_requests: Arc<Mutex<Vec<BroadcastRequest>>>,
+    }
+
+    impl NetworkMock {
+        pub async fn get_requests(&self) -> Vec<BroadcastRequest> {
+            self.got_requests.lock().await.to_vec()
+        }
+    }
 
     #[async_trait::async_trait]
     impl NetworkInterface for NetworkMock {
         async fn broadcast(&self, request: BroadcastRequest) -> Result<Vec<BroadcastResponse>> {
-            println!("{:?}", request);
+            self.got_requests.lock().await.push(request);
             Ok(vec![])
         }
     }
@@ -39,7 +48,7 @@ pub mod tests {
         }
 
         fn get_interface(&self) -> Arc<dyn NetworkInterface> {
-            Arc::new(NetworkMock {})
+            Arc::new(NetworkMock {got_requests: self.got_requests.clone()})
         }
     }
 }

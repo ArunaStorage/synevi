@@ -112,6 +112,7 @@ pub async fn await_dependencies(
     network_interface: Arc<dyn consensus_transport::network::NetworkInterface>,
     t: T,
     stats: Arc<Stats>,
+    is_coordinator: bool,
 ) -> Result<()> {
     let mut backoff_counter = 0;
     'outer: loop {
@@ -159,7 +160,7 @@ pub async fn await_dependencies(
     }
 }
 
-const TIMEOUT: u64 = 2000;
+const TIMEOUT: u64 = 100;
 
 pub fn wait_for(
     t_request: T,
