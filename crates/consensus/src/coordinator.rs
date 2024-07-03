@@ -1,6 +1,6 @@
 use crate::event_store::EventStore;
 use crate::node::Stats;
-use crate::utils::{await_dependencies, from_dependency, into_dependency, T, T0};
+use crate::utils::{await_dependencies, from_dependency, into_dependency, Ballot, T, T0};
 use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::{
@@ -97,6 +97,7 @@ impl CoordinatorIterator {
         t0_recover: T0,
         stats: Arc<Stats>,
     ) -> Result<()> {
+        println!("Started recovery at {:?}", node.serial);
         let mut backoff_counter: u8 = 0;
         while backoff_counter <= MAX_RETRIES {
             let mut coordinator_iter = Coordinator::<Recover>::recover(
@@ -109,6 +110,7 @@ impl CoordinatorIterator {
             .await?;
             if let CoordinatorIterator::RestartRecovery = coordinator_iter {
                 backoff_counter += 1;
+                tokio::time::sleep(Duration::from_millis(1000)).await;
                 continue;
             }
             while coordinator_iter.next().await?.is_some() {}
@@ -143,7 +145,7 @@ pub struct TransactionStateMachine {
     pub t_zero: T0,
     pub t: T,
     pub dependencies: BTreeMap<T, T0>, // T -> T0
-    pub ballot: u32,
+    pub ballot: Ballot,
 }
 
 impl<X> Coordinator<X> {
@@ -183,7 +185,8 @@ impl Coordinator<Recover> {
         t0_recover: T0,
         stats: Arc<Stats>,
     ) -> Result<CoordinatorIterator> {
-        let event = event_store.lock().await.get_or_insert(t0_recover).await;
+        let mut event_store_lock = event_store.lock().await;
+        let event = event_store_lock.get_or_insert(t0_recover).await;
         let mut rx = event.state.subscribe();
         timeout(
             Duration::from_millis(RECOVER_TIMEOUT),
@@ -194,11 +197,13 @@ impl Coordinator<Recover> {
         // Just for sanity purposes
         assert_eq!(event.t_zero, t0_recover);
 
-        let ballot = event.ballot + 1;
+        let ballot = Ballot(event.ballot.next_with_node(node.serial).into_time());
+        event_store_lock.update_ballot(&t0_recover, ballot);
+        drop(event_store_lock);
 
         let recover_responses = network_interface
             .broadcast(BroadcastRequest::Recover(RecoverRequest {
-                ballot,
+                ballot: ballot.into(),
                 event: event.event.to_vec(),
                 timestamp_zero: t0_recover.into(),
             }))
@@ -239,18 +244,19 @@ impl Coordinator<Recover> {
         };
 
         // Keep track of values to replace
-        let mut highest_ballot: Option<u32> = None;
+        let mut highest_ballot: Option<Ballot> = None;
         let mut superseding = false;
         let mut waiting: Vec<Dependency> = Vec::new();
 
         for response in responses.iter_mut() {
-            if response.nack > 0 || highest_ballot.is_some() {
+            let response_ballot = Ballot(MonoTime::try_from(response.nack.as_slice())?);
+            if response_ballot > Ballot::default() || highest_ballot.is_some() {
                 match highest_ballot.as_mut() {
                     None => {
-                        highest_ballot = Some(response.nack);
+                        highest_ballot = Some(response_ballot);
                     }
-                    Some(b) if &response.nack > b => {
-                        *b = response.nack;
+                    Some(b) if &response_ballot > b => {
+                        *b = response_ballot;
                     }
                     _ => {}
                 }
@@ -272,6 +278,7 @@ impl Coordinator<Recover> {
                     if replica_t > state_machine.t {
                         state_machine.t = replica_t;
                     }
+                    state_machine.state = State::PreAccepted;
                     state_machine
                         .dependencies
                         .extend(from_dependency(response.dependencies.clone())?);
@@ -308,6 +315,7 @@ impl Coordinator<Recover> {
                     rx.wait_for(|(s, _)| *s > previous_state),
                 )
                 .await??;
+
                 return Ok(CoordinatorIterator::Recovering);
             }
             return Ok(CoordinatorIterator::Applied);
@@ -459,7 +467,7 @@ impl Coordinator<PreAccepted> {
         if *self.transaction.t_zero != *self.transaction.t {
             self.stats.total_accepts.fetch_add(1, Ordering::Relaxed);
             let accepted_request = AcceptRequest {
-                ballot: self.transaction.ballot,
+                ballot: self.transaction.ballot.into(),
                 event: self.transaction.transaction.clone().into(),
                 timestamp_zero: (*self.transaction.t_zero).into(),
                 timestamp: (*self.transaction.t).into(),
@@ -555,12 +563,14 @@ impl Coordinator<Accepted> {
 
     #[instrument(level = "trace", skip(self))]
     async fn commit_consensus(&mut self) -> Result<()> {
+
         self.transaction.state = State::Commited;
         self.event_store
             .lock()
             .await
             .upsert((&self.transaction).into())
             .await;
+
         Box::pin(await_dependencies(
             self.node.clone(),
             self.event_store.clone(),
@@ -622,7 +632,7 @@ mod tests {
         coordinator::{Initialized, TransactionStateMachine},
         event_store::{Event, EventStore},
         tests::NetworkMock,
-        utils::{T, T0},
+        utils::{Ballot, T, T0},
     };
     use bytes::Bytes;
     use consensus_transport::{
@@ -666,7 +676,7 @@ mod tests {
             t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
             t: T(MonoTime::new_with_time(10u128, 0, 0)),
             dependencies: BTreeMap::default(),
-            ballot: 0,
+            ballot: Ballot::default(),
         };
         let mut coordinator = Coordinator::<Initialized> {
             node: Arc::new(NodeInfo {
@@ -707,7 +717,7 @@ mod tests {
                 t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
                 t: T(MonoTime::new_with_time(10u128, 0, 0)),
                 dependencies: BTreeMap::default(),
-                ballot: 0,
+                ballot: Ballot::default(),
             }
         );
 
@@ -777,7 +787,7 @@ mod tests {
                 .iter()
                 .cloned(),
             ),
-            ballot: 0,
+            ballot: Ballot::default(),
         };
 
         assert_eq!(coordinator.transaction, state_machine);
@@ -812,7 +822,7 @@ mod tests {
                     .iter()
                     .cloned()
                 ),
-                ballot: 0,
+                ballot: Ballot::default(),
             }
         );
     }
@@ -827,7 +837,7 @@ mod tests {
             t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
             t: T(MonoTime::new_with_time(10u128, 0, 0)),
             dependencies: BTreeMap::default(),
-            ballot: 0,
+            ballot: Ballot::default(),
         };
         let mut coordinator = Coordinator {
             node: Arc::new(NodeInfo {
@@ -880,7 +890,7 @@ mod tests {
                     T(MonoTime::new_with_time(13u128, 0, 1)),
                     T0(MonoTime::new_with_time(11u128, 0, 1))
                 ),]),
-                ballot: 0,
+                ballot: Ballot::default(),
             }
         );
     }

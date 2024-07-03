@@ -47,6 +47,21 @@ impl From<T> for Vec<u8> {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
+pub struct Ballot(pub MonoTime);
+impl Deref for Ballot {
+    type Target = MonoTime;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<Ballot> for Vec<u8> {
+    fn from(val: Ballot) -> Self {
+        val.0.into()
+    }
+}
+
 pub fn into_dependency(map: BTreeMap<T, T0>) -> Vec<Dependency> {
     map.iter()
         .map(|(t, t_zero)| Dependency {
@@ -101,7 +116,7 @@ pub async fn await_dependencies(
     let mut backoff_counter = 0;
     'outer: loop {
         if backoff_counter > MAX_RETRIES {
-            return Err(anyhow::anyhow!("Max retries reached"));
+            return Err(anyhow::anyhow!("Node: {:?} reached max retries", node));
         }
         backoff_counter += 1;
         let mut handles = store
@@ -139,6 +154,7 @@ pub async fn await_dependencies(
                 }
             }
         }
+
         return Ok(());
     }
 }
