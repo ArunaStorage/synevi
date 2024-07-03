@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package configure_transport;
+
+service TimeService {
+  rpc GetTime(GetTimeRequest) returns (GetTimeResponse) {}
+}
+
+// I have time X 
+message GetTimeRequest {
+  bytes timestamp = 1;
+}
+
+// I have time Y
+message GetTimeResponse {
+  bytes local_timestamp = 1;
+}
+
+// RoundTripLatency -> Diff between Request and Response
+// Skew ~ LocalTimestamp - (Timestamp + RoundTripLatency / 2) -> Between Node Get and Node Respond
