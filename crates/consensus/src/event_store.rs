@@ -163,7 +163,7 @@ impl EventStore {
         self.events
             .get(t_zero)
             .map(|event| event.ballot)
-            .unwrap_or(Ballot::default())
+            .unwrap_or_default()
     }
     #[instrument(level = "trace")]
     pub fn update_ballot(&mut self, t_zero: &T0, ballot: Ballot) {
@@ -208,9 +208,7 @@ impl EventStore {
             self.events
                 .range(..&T0(**t))
                 .filter_map(|(_, v)| {
-                    if v.t_zero == *t_zero {
-                        None
-                    } else if v.state.borrow().0 == State::Undefined {
+                    if v.t_zero == *t_zero || v.state.borrow().0 == State::Undefined {
                         None
                     } else {
                         Some(Dependency {
@@ -229,9 +227,7 @@ impl EventStore {
                 self.events
                     .range(last_t0..&T0(**t))
                     .filter_map(|(_, v)| {
-                        if v.t_zero == *t_zero {
-                            None
-                        } else if v.state.borrow().0 == State::Undefined {
+                        if v.t_zero == *t_zero || v.state.borrow().0 == State::Undefined {
                             None
                         } else {
                             Some(Dependency {

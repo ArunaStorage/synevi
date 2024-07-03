@@ -283,8 +283,9 @@ mod tests {
         };
 
         replica.commit(request).await.unwrap();
-        assert!(
-            matches!(network.lock().await.get_requests().await.first().unwrap(), consensus_transport::network::BroadcastRequest::Recover(_))
-        );
+        assert!(matches!(
+            network.lock().await.get_requests().await.first().unwrap(),
+            consensus_transport::network::BroadcastRequest::Recover(_)
+        ));
     }
 }

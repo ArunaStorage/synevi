@@ -190,7 +190,7 @@ impl Coordinator<Recover> {
             tracing::debug!("Node {} with undefined recovery", node.serial);
             return Ok(CoordinatorIterator::Recovering);
         }
-        
+
         // Just for sanity purposes
         assert_eq!(event.t_zero, t0_recover);
 

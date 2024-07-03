@@ -48,7 +48,9 @@ pub mod tests {
         }
 
         fn get_interface(&self) -> Arc<dyn NetworkInterface> {
-            Arc::new(NetworkMock {got_requests: self.got_requests.clone()})
+            Arc::new(NetworkMock {
+                got_requests: self.got_requests.clone(),
+            })
         }
     }
 }
