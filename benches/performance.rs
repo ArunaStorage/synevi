@@ -14,7 +14,7 @@ async fn prepare() -> Arc<Node> {
         let network = Arc::new(Mutex::new(
             consensus_transport::network::NetworkConfig::new(socket_addr),
         ));
-        let node = Node::new_with_parameters(*m, i as u16, network)
+        let node = Node::new_with_parameters(*m, i as u16, network, None)
             .await
             .unwrap();
         nodes.push(node);

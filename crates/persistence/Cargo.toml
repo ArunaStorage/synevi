@@ -7,4 +7,6 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow = {workspace = true}
+bytes = {workspace = true}
 rocksdb = "0.22.0"

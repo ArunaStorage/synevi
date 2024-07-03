@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tracing::instrument;
-
+use persistence::Database;
 use crate::{
     coordinator::TransactionStateMachine,
     error::WaitError,
@@ -24,6 +24,7 @@ pub struct EventStore {
     //  - Updates need to consider both maps (when t is changing)
     //  - Events and mappings need clean up cron jobs and some form of consolidation
     pub events: BTreeMap<T0, Event>,      // Key: t0, value: Event
+    pub database: Option<Database>,
     pub(crate) mappings: BTreeMap<T, T0>, // Key: t, value t0
     pub(crate) last_applied: T,           // t of last applied entry
     pub(crate) latest_t0: T0,             // last created or recognized t0
@@ -63,12 +64,13 @@ pub(crate) struct RecoverDependencies {
 
 impl EventStore {
     #[instrument(level = "trace")]
-    pub fn init() -> Self {
+    pub fn init(path: Option<String>) -> Self {
         EventStore {
             events: BTreeMap::default(),
             mappings: BTreeMap::default(),
             last_applied: T::default(),
             latest_t0: T0::default(),
+            database: path.map(|p| Database::new(p).unwrap())
         }
     }
 
@@ -191,7 +193,11 @@ impl EventStore {
 
         self.mappings.insert(event.t, event.t_zero);
         let new_state: (State, T) = *event.state.borrow();
-        old_event.state.send_modify(|old| *old = new_state)
+        old_event.state.send_modify(|old| *old = new_state);
+        if let Some(db) = &self.database {
+            let t: Vec<u8> = (*old_event.t).into();
+            db.persist(t.into(), old_event.event.clone()).unwrap()
+        }
     }
 
     #[instrument(level = "trace")]

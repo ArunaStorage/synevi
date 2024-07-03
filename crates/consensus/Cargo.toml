@@ -8,9 +8,10 @@ license.workspace = true
 
 [dependencies]
 consensus_transport = { path = "../consensus_transport" }
+persistence = {path = "../persistence"}
 monotime = { path = "../monotime" }
 anyhow = { workspace = true }
-bytes = "1.6.0"
+bytes = { workspace = true}
 chrono = "0.4.38"
 diesel-ulid = { workspace = true }
 futures = "0.3.30"

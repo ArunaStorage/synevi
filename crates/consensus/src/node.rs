@@ -20,6 +20,7 @@ pub struct Node {
     network: Arc<Mutex<dyn Network + Send + Sync>>,
     event_store: Arc<Mutex<EventStore>>,
     stats: Arc<Stats>,
+    semaphore: tokio::sync::Semaphore
 }
 
 impl Node {
@@ -32,9 +33,10 @@ impl Node {
         id: DieselUlid,
         serial: u16,
         network: Arc<Mutex<dyn Network + Send + Sync>>,
+        db_path: Option<String>
     ) -> Result<Self> {
         let node_name = Arc::new(NodeInfo { id, serial });
-        let event_store = Arc::new(Mutex::new(EventStore::init()));
+        let event_store = Arc::new(Mutex::new(EventStore::init(db_path)));
 
         let stats = Arc::new(Stats {
             total_requests: AtomicU64::new(0),
@@ -49,6 +51,7 @@ impl Node {
         });
         // Spawn tonic server
         network.lock().await.spawn_server(replica).await?;
+        let semaphore = tokio::sync::Semaphore::new(10);
 
         // If no config / persistence -> default
         Ok(Node {
@@ -56,6 +59,7 @@ impl Node {
             event_store,
             network,
             stats,
+            semaphore
         })
     }
 
@@ -66,6 +70,7 @@ impl Node {
 
     #[instrument(level = "trace", skip(self))]
     pub async fn transaction(&self, transaction: Bytes) -> Result<()> {
+        let _permit = self.semaphore.acquire().await?;
         let mut coordinator_iter = CoordinatorIterator::new(
             self.info.clone(),
             self.event_store.clone(),

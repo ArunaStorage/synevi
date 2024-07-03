@@ -603,14 +603,14 @@ impl Coordinator<Committed> {
 
     #[instrument(level = "trace", skip(self))]
     async fn execute_consensus(&mut self) -> Result<()> {
+        // TODO: Apply in backend
+        let mut store_lock = self.event_store.lock().await;
+        
         self.transaction.state = State::Applied;
-        self.event_store
-            .lock()
-            .await
+        store_lock
             .upsert((&self.transaction).into())
             .await;
 
-        // TODO: Apply in backend
         Ok(())
     }
 }
@@ -636,7 +636,7 @@ mod tests {
 
     #[tokio::test]
     async fn init_test() {
-        let event_store = Arc::new(Mutex::new(EventStore::init()));
+        let event_store = Arc::new(Mutex::new(EventStore::init(None)));
         let coordinator = Coordinator::<Initialized>::new(
             Arc::new(NodeInfo {
                 id: DieselUlid::generate(),
@@ -658,7 +658,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_accepted_fast_path_test() {
-        let event_store = Arc::new(Mutex::new(EventStore::init()));
+        let event_store = Arc::new(Mutex::new(EventStore::init(None)));
 
         let state_machine = TransactionStateMachine {
             state: State::PreAccepted,
@@ -819,7 +819,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_accepted_slow_path_test() {
-        let event_store = Arc::new(Mutex::new(EventStore::init()));
+        let event_store = Arc::new(Mutex::new(EventStore::init(None)));
 
         let state_machine = TransactionStateMachine {
             state: State::PreAccepted,
