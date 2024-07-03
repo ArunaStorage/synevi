@@ -23,6 +23,7 @@ message PreAcceptRequest {
 message PreAcceptResponse {
   bytes timestamp = 1;
   repeated Dependency dependencies = 2;
+  bool nack = 3;
 }
 
 message AcceptRequest {

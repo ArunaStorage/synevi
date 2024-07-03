@@ -1,3 +1,4 @@
+use crate::error::ConsensusError;
 use crate::event_store::EventStore;
 use crate::node::Stats;
 use crate::utils::{await_dependencies, from_dependency, into_dependency, Ballot, T, T0};
@@ -387,7 +388,7 @@ impl Coordinator<Recover> {
 
 impl Coordinator<Initialized> {
     #[instrument(level = "trace", skip(self))]
-    pub async fn pre_accept(mut self) -> Result<Coordinator<PreAccepted>> {
+    pub async fn pre_accept(mut self) -> Result<Coordinator<PreAccepted>, ConsensusError> {
         self.stats.total_requests.fetch_add(1, Ordering::Relaxed);
 
         // Create the PreAccepted msg
@@ -401,11 +402,17 @@ impl Coordinator<Initialized> {
             .broadcast(BroadcastRequest::PreAccept(pre_accepted_request))
             .await?;
 
+        let pa_responses = pre_accepted_responses
+        .into_iter()
+        .map(|res| res.into_inner())
+        .collect::<Result<Vec<_>>>()?;
+
+        if pa_responses.iter().any(|PreAcceptResponse{nack, ..}| *nack) {
+            return Ok(self);
+        }
+
         self.pre_accept_consensus(
-            &pre_accepted_responses
-                .into_iter()
-                .map(|res| res.into_inner())
-                .collect::<Result<Vec<_>>>()?,
+            &pa_responses
         )
         .await?;
 

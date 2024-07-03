@@ -1,4 +1,5 @@
 use crate::consensus_transport::{RecoverRequest, RecoverResponse};
+use crate::error::BroadCastError;
 use crate::{
     consensus_transport::{
         consensus_transport_client::ConsensusTransportClient,
@@ -16,7 +17,7 @@ use tonic::transport::{Channel, Server};
 
 #[async_trait::async_trait]
 pub trait NetworkInterface: std::fmt::Debug + Send + Sync {
-    async fn broadcast(&self, request: BroadcastRequest) -> Result<Vec<BroadcastResponse>>;
+    async fn broadcast(&self, request: BroadcastRequest) -> Result<Vec<BroadcastResponse>, BroadCastError>;
 }
 
 #[async_trait::async_trait]
@@ -124,9 +125,9 @@ impl Network for NetworkConfig {
 
 #[async_trait::async_trait]
 impl NetworkInterface for NetworkSet {
-    async fn broadcast(&self, request: BroadcastRequest) -> Result<Vec<BroadcastResponse>> {
+    async fn broadcast(&self, request: BroadcastRequest) -> Result<Vec<BroadcastResponse>, BroadCastError> {
         //dbg!("[broadcast]: Start");
-        let mut responses: JoinSet<Result<BroadcastResponse>> = JoinSet::new();
+        let mut responses: JoinSet<Result<BroadcastResponse, BroadCastError>> = JoinSet::new();
         let mut result = Vec::new();
 
         // Send PreAccept request to every known member
@@ -252,11 +253,7 @@ impl NetworkInterface for NetworkSet {
         }
 
         if result.len() < majority {
-            return Err(anyhow::anyhow!(
-                "Majority not reached len: {} / majority:{}",
-                result.len(),
-                majority
-            ));
+            return Err(BroadCastError::MajorityNotReached);
         }
         Ok(result)
     }

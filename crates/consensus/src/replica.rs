@@ -40,6 +40,16 @@ impl Replica for ReplicaConfig {
         // Wenn timeout -> Wecke buffer[0] und sag dem ich wars (T0)
         // wait_for(|inner| inner.is_some())
 
+        let ballot = self.event_store.lock().await.get_ballot(&T0(MonoTime::try_from(request.timestamp_zero.as_slice())?));
+
+        if ballot != Ballot::default() {
+            return Ok(PreAcceptResponse {
+                nack: true,
+                ..Default::default()
+            });
+        }
+
+
         let (deps, t) = self
             .event_store
             .lock()
@@ -53,6 +63,7 @@ impl Replica for ReplicaConfig {
         Ok(PreAcceptResponse {
             timestamp: t.into(),
             dependencies: deps,
+            nack: false,
         })
     }
 
@@ -283,9 +294,8 @@ mod tests {
         };
 
         replica.commit(request).await.unwrap();
-        assert!(matches!(
-            network.lock().await.get_requests().await.first().unwrap(),
-            consensus_transport::network::BroadcastRequest::Recover(_)
-        ));
+        assert!(
+            matches!(network.lock().await.get_requests().await.first().unwrap(), consensus_transport::network::BroadcastRequest::Recover(_))
+        );
     }
 }

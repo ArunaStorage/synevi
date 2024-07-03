@@ -8,3 +8,12 @@ pub enum WaitError {
     #[error("Sender got closed")]
     SenderClosed,
 }
+
+
+#[derive(Error, Debug)]
+pub enum ConsensusError {
+    #[error("Majority not reached")]
+    MajorityNotReached,
+    #[error("Competing coordinator")]
+    CompetingCoordinator,
+}

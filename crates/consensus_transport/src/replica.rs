@@ -1,7 +1,6 @@
 use std::sync::Arc;
-
-use crate::consensus_transport::*;
 use anyhow::Result;
+use crate::consensus_transport::*;
 use consensus_transport_server::ConsensusTransport;
 use tonic::{Request, Response, Status};
 
