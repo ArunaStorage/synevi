@@ -1,3 +1,4 @@
+use crate::configure_transport::time_service_server::TimeServiceServer;
 use crate::consensus_transport::{RecoverRequest, RecoverResponse};
 use crate::error::BroadCastError;
 use crate::{
@@ -22,7 +23,7 @@ pub trait NetworkInterface: std::fmt::Debug + Send + Sync {
 
 #[async_trait::async_trait]
 pub trait Network: std::fmt::Debug {
-    async fn add_members(&mut self, members: Vec<Arc<Member>>);
+    async fn add_members(&mut self, members: Vec<(DieselUlid, u16, String)>);
     async fn add_member(&mut self, id: DieselUlid, serial: u16, host: String) -> Result<()>;
     async fn spawn_server(&mut self, server: Arc<dyn Replica>) -> Result<()>;
     fn get_interface(&self) -> Arc<dyn NetworkInterface>;
@@ -39,6 +40,13 @@ pub struct Member {
     pub info: NodeInfo,
     pub host: String,
     pub channel: Channel,
+}
+
+#[derive(Clone, Debug)]
+pub struct MemberWithLatency {
+    pub member: Arc<Member>,
+    pub latency: u64,
+    pub skew: i64
 }
 
 #[derive(Debug, Clone)]
@@ -64,7 +72,7 @@ pub enum BroadcastResponse {
 #[derive(Debug)]
 pub struct NetworkConfig {
     pub socket_addr: SocketAddr,
-    pub members: Vec<Arc<Member>>,
+    pub members: Vec<MemberWithLatency>,
     join_set: JoinSet<Result<()>>,
 }
 
@@ -84,24 +92,28 @@ impl NetworkConfig {
 
     pub fn create_network_set(&self) -> Arc<NetworkSet> {
         Arc::new(NetworkSet {
-            members: self.members.clone(),
+            members: self.members.iter().map(|e| e.member.clone()).collect(),
         })
     }
 }
 
 #[async_trait::async_trait]
 impl Network for NetworkConfig {
-    async fn add_members(&mut self, members: Vec<Arc<Member>>) {
-        self.members.extend(members);
+    async fn add_members(&mut self, members: Vec<(DieselUlid, u16, String)>) {
+        for (id, serial, host) in members {
+            self.add_member(id, serial, host).await.unwrap();
+        }
     }
 
     async fn add_member(&mut self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
         let channel = Channel::from_shared(host.clone())?.connect().await?;
-        self.members.push(Arc::new(Member {
+        self.members.push(MemberWithLatency{
+            member: Arc::new(Member {
             info: NodeInfo { id, serial },
             host,
             channel,
-        }));
+        }), latency: 10, skew: 0}
+        );
 
         Ok(())
     }
@@ -111,7 +123,7 @@ impl Network for NetworkConfig {
         let addr = self.socket_addr;
         self.join_set.spawn(async move {
             let builder =
-                Server::builder().add_service(ConsensusTransportServer::new(new_replica_box));
+                Server::builder().add_service(ConsensusTransportServer::new(new_replica_box.clone())).add_service(TimeServiceServer::new(new_replica_box));
             builder.serve(addr).await?;
             Ok(())
         });

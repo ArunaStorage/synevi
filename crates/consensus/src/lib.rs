@@ -11,7 +11,7 @@ pub mod tests {
     use consensus_transport::error::BroadCastError;
     use consensus_transport::network::BroadcastResponse;
     use consensus_transport::network::NetworkInterface;
-    use consensus_transport::network::{BroadcastRequest, Member, Network};
+    use consensus_transport::network::{BroadcastRequest, Network};
     use consensus_transport::replica::Replica;
     use diesel_ulid::DieselUlid;
     use std::sync::Arc;
@@ -38,7 +38,7 @@ pub mod tests {
 
     #[async_trait::async_trait]
     impl Network for NetworkMock {
-        async fn add_members(&mut self, _members: Vec<Arc<Member>>) {}
+        async fn add_members(&mut self, _members: Vec<(DieselUlid, u16, String)>) {}
 
         async fn add_member(&mut self, _id: DieselUlid, _serial: u16, _host: String) -> Result<()> {
             Ok(())

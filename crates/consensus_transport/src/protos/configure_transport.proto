@@ -14,6 +14,7 @@ message GetTimeRequest {
 // I have time Y
 message GetTimeResponse {
   bytes local_timestamp = 1;
+  bytes diff = 2; 
 }
 
 // RoundTripLatency -> Diff between Request and Response

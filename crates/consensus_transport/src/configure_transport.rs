@@ -14,6 +14,8 @@ pub struct GetTimeRequest {
 pub struct GetTimeResponse {
     #[prost(bytes = "vec", tag = "1")]
     pub local_timestamp: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub diff: ::prost::alloc::vec::Vec<u8>,
 }
 /// Generated client implementations.
 pub mod time_service_client {

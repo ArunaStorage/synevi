@@ -4,3 +4,4 @@ pub mod network;
 pub mod replica;
 pub mod utils;
 pub mod error;
+mod latency_service;
