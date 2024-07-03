@@ -6,7 +6,7 @@ use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 use tokio::{runtime, sync::Mutex};
 
 async fn prepare() -> Arc<Node> {
-    let mut node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
+    let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
     let mut nodes: Vec<Node> = vec![];
 
     for (i, m) in node_names.iter().enumerate() {
@@ -19,21 +19,22 @@ async fn prepare() -> Arc<Node> {
             .unwrap();
         nodes.push(node);
     }
-    let mut coordinator = nodes.pop().unwrap();
-    let _ = node_names.pop(); // Do not connect to your self
     for (i, name) in node_names.iter().enumerate() {
-        coordinator
-            .add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i))
-            .await
-            .unwrap();
+        for (i2, node) in nodes.iter_mut().enumerate() {
+            if i != i2 {
+                node.add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i))
+                    .await
+                    .unwrap();
+            }
+        }
     }
-
+    let coordinator = nodes.pop().unwrap();
     Arc::new(coordinator)
 }
 async fn parallel_execution(coordinator: Arc<Node>) {
     let mut joinset = tokio::task::JoinSet::new();
 
-    for _ in 0..1000 {
+    for _ in 0..100 {
         let coordinator = coordinator.clone();
         joinset.spawn(async move {
             coordinator

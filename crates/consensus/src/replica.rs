@@ -7,13 +7,12 @@ use consensus_transport::consensus_transport::*;
 use consensus_transport::network::{Network, NodeInfo};
 use consensus_transport::replica::Replica;
 use monotime::MonoTime;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex};
 use tracing::instrument;
 
 #[derive(Debug)]
-
-// todo!()
 pub struct ReplicaConfig {
     pub node_info: Arc<NodeInfo>,
     pub network: Arc<Mutex<dyn Network + Send + Sync>>,
@@ -40,7 +39,11 @@ impl Replica for ReplicaConfig {
         // Wenn timeout -> Wecke buffer[0] und sag dem ich wars (T0)
         // wait_for(|inner| inner.is_some())
 
-        let ballot = self.event_store.lock().await.get_ballot(&T0(MonoTime::try_from(request.timestamp_zero.as_slice())?));
+        let ballot = self
+            .event_store
+            .lock()
+            .await
+            .get_ballot(&T0(MonoTime::try_from(request.timestamp_zero.as_slice())?));
 
         if ballot != Ballot::default() {
             return Ok(PreAcceptResponse {
@@ -48,7 +51,6 @@ impl Replica for ReplicaConfig {
                 ..Default::default()
             });
         }
-
 
         let (deps, t) = self
             .event_store
@@ -206,6 +208,8 @@ impl Replica for ReplicaConfig {
             };
             let recover_deps = event_store_lock.get_recover_deps(&event.t, &t_zero).await?;
 
+            self.stats.total_recovers.fetch_add(1, Ordering::Relaxed);
+
             Ok(RecoverResponse {
                 local_state: event.state.borrow().0.into(),
                 wait: recover_deps.wait,
@@ -225,6 +229,8 @@ impl Replica for ReplicaConfig {
                 )
                 .await?;
             let recover_deps = event_store_lock.get_recover_deps(&t, &t_zero).await?;
+            self.stats.total_recovers.fetch_add(1, Ordering::Relaxed);
+
             Ok(RecoverResponse {
                 local_state: State::PreAccepted.into(),
                 wait: recover_deps.wait,
@@ -294,8 +300,9 @@ mod tests {
         };
 
         replica.commit(request).await.unwrap();
-        assert!(
-            matches!(network.lock().await.get_requests().await.first().unwrap(), consensus_transport::network::BroadcastRequest::Recover(_))
-        );
+        assert!(matches!(
+            network.lock().await.get_requests().await.first().unwrap(),
+            consensus_transport::network::BroadcastRequest::Recover(_)
+        ));
     }
 }

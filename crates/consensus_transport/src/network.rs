@@ -18,7 +18,10 @@ use tonic::transport::{Channel, Server};
 
 #[async_trait::async_trait]
 pub trait NetworkInterface: std::fmt::Debug + Send + Sync {
-    async fn broadcast(&self, request: BroadcastRequest) -> Result<Vec<BroadcastResponse>, BroadCastError>;
+    async fn broadcast(
+        &self,
+        request: BroadcastRequest,
+    ) -> Result<Vec<BroadcastResponse>, BroadCastError>;
 }
 
 #[async_trait::async_trait]
@@ -46,7 +49,7 @@ pub struct Member {
 pub struct MemberWithLatency {
     pub member: Arc<Member>,
     pub latency: u64,
-    pub skew: i64
+    pub skew: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -107,13 +110,15 @@ impl Network for NetworkConfig {
 
     async fn add_member(&mut self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
         let channel = Channel::from_shared(host.clone())?.connect().await?;
-        self.members.push(MemberWithLatency{
+        self.members.push(MemberWithLatency {
             member: Arc::new(Member {
-            info: NodeInfo { id, serial },
-            host,
-            channel,
-        }), latency: 10, skew: 0}
-        );
+                info: NodeInfo { id, serial },
+                host,
+                channel,
+            }),
+            latency: 10,
+            skew: 0,
+        });
 
         Ok(())
     }
@@ -122,8 +127,9 @@ impl Network for NetworkConfig {
         let new_replica_box = ReplicaBox::new(server);
         let addr = self.socket_addr;
         self.join_set.spawn(async move {
-            let builder =
-                Server::builder().add_service(ConsensusTransportServer::new(new_replica_box.clone())).add_service(TimeServiceServer::new(new_replica_box));
+            let builder = Server::builder()
+                .add_service(ConsensusTransportServer::new(new_replica_box.clone()))
+                .add_service(TimeServiceServer::new(new_replica_box));
             builder.serve(addr).await?;
             Ok(())
         });
@@ -137,7 +143,10 @@ impl Network for NetworkConfig {
 
 #[async_trait::async_trait]
 impl NetworkInterface for NetworkSet {
-    async fn broadcast(&self, request: BroadcastRequest) -> Result<Vec<BroadcastResponse>, BroadCastError> {
+    async fn broadcast(
+        &self,
+        request: BroadcastRequest,
+    ) -> Result<Vec<BroadcastResponse>, BroadCastError> {
         //dbg!("[broadcast]: Start");
         let mut responses: JoinSet<Result<BroadcastResponse, BroadCastError>> = JoinSet::new();
         let mut result = Vec::new();
@@ -265,6 +274,7 @@ impl NetworkInterface for NetworkSet {
         }
 
         if result.len() < majority {
+            println!("Majority not reached: {:?}", result);
             return Err(BroadCastError::MajorityNotReached);
         }
         Ok(result)

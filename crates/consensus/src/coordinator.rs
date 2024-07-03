@@ -56,7 +56,6 @@ impl CoordinatorIterator {
         match self {
             CoordinatorIterator::Initialized(coordinator) => {
                 if let Some(c) = coordinator.take() {
-
                     let pre_accepted = c.pre_accept().await;
                     match pre_accepted {
                         Ok(c) => {
@@ -134,6 +133,7 @@ impl CoordinatorIterator {
                 tokio::time::sleep(Duration::from_millis(1000)).await;
                 continue;
             }
+            stats.total_recovers.fetch_add(1, Ordering::Relaxed);
             while coordinator_iter.next().await?.is_some() {}
             break;
         }
@@ -424,18 +424,18 @@ impl Coordinator<Initialized> {
             .await?;
 
         let pa_responses = pre_accepted_responses
-        .into_iter()
-        .map(|res| res.into_inner())
-        .collect::<Result<Vec<_>>>()?;
+            .into_iter()
+            .map(|res| res.into_inner())
+            .collect::<Result<Vec<_>>>()?;
 
-        if pa_responses.iter().any(|PreAcceptResponse{nack, ..}| *nack) {
+        if pa_responses
+            .iter()
+            .any(|PreAcceptResponse { nack, .. }| *nack)
+        {
             return Err(ConsensusError::CompetingCoordinator);
         }
 
-        self.pre_accept_consensus(
-            &pa_responses
-        )
-        .await?;
+        self.pre_accept_consensus(&pa_responses).await?;
 
         Ok(Coordinator::<PreAccepted> {
             node: self.node,
@@ -508,15 +508,12 @@ impl Coordinator<PreAccepted> {
                 .into_iter()
                 .map(|res| res.into_inner())
                 .collect::<Result<Vec<_>>>()?;
-        
-                if pa_responses.iter().any(|AcceptResponse{nack, ..}| *nack) {
-                    return Err(ConsensusError::CompetingCoordinator);
-                }
 
-            self.accept_consensus(
-                &pa_responses,
-            )
-            .await?;
+            if pa_responses.iter().any(|AcceptResponse { nack, .. }| *nack) {
+                return Err(ConsensusError::CompetingCoordinator);
+            }
+
+            self.accept_consensus(&pa_responses).await?;
         }
 
         Ok(Coordinator::<Accepted> {
@@ -580,8 +577,8 @@ impl Coordinator<Accepted> {
             network_interface_clone.broadcast(BroadcastRequest::Commit(committed_request))
         );
 
-        committed_result.unwrap(); // TODO Recovery
-        broadcast_result.unwrap(); // TODO Recovery
+        committed_result?;
+        broadcast_result?; // TODO Recovery
 
         Ok(Coordinator::<Committed> {
             node: self.node,

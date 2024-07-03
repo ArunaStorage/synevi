@@ -14,7 +14,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn parallel_execution() {
-        let mut node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
+        let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
         let mut nodes: Vec<Node> = vec![];
 
         for (i, m) in node_names.iter().enumerate() {
@@ -28,18 +28,19 @@ mod tests {
                 .unwrap();
             nodes.push(node);
         }
-        let mut coordinator = nodes.pop().unwrap();
-        let _ = node_names.pop(); // Do not connect to your self
         for (i, name) in node_names.iter().enumerate() {
-            coordinator
-                .add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i))
-                .await
-                .unwrap();
+            for (i2, node) in nodes.iter_mut().enumerate() {
+                if i != i2 {
+                    node.add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i))
+                        .await
+                        .unwrap();
+                }
+            }
         }
+        let coordinator = nodes.pop().unwrap();
+        let arc_coordinator = Arc::new(coordinator);
 
         let mut joinset = tokio::task::JoinSet::new();
-
-        let arc_coordinator = Arc::new(coordinator);
 
         for _ in 0..1000 {
             let coordinator = arc_coordinator.clone();
@@ -53,12 +54,13 @@ mod tests {
             res.unwrap().unwrap();
         }
 
-        let (total, accepts) = arc_coordinator.get_stats();
+        let (total, accepts, recovers) = arc_coordinator.get_stats();
         println!(
-            "Fast: {:?}, Slow: {:?} Paths / {:?} Total",
+            "Fast: {:?}, Slow: {:?} Paths / {:?} Total / {:?} Recovers",
             total - accepts,
             accepts,
-            total
+            total,
+            recovers
         );
 
         let coordinator_store: BTreeMap<T0, T> = arc_coordinator
@@ -125,6 +127,7 @@ mod tests {
         handle.block_on(async move {
             let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
             let mut nodes: Vec<Node> = vec![];
+
             for (i, m) in node_names.iter().enumerate() {
                 let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 11000 + i)).unwrap();
                 let network = Arc::new(Mutex::new(
@@ -135,23 +138,13 @@ mod tests {
                     .unwrap();
                 nodes.push(node);
             }
-            let coordinator1 = nodes.get_mut(3).unwrap();
             for (i, name) in node_names.iter().enumerate() {
-                if i != 3 {
-                    coordinator1
-                        .add_member(*name, i as u16, format!("http://localhost:{}", 11000 + i))
-                        .await
-                        .unwrap();
-                }
-            }
-            let coordinator2 = nodes.get_mut(4).unwrap();
-
-            for (i, name) in node_names.iter().enumerate() {
-                if i != 4 {
-                    coordinator2
-                        .add_member(*name, i as u16, format!("http://localhost:{}", 11000 + i))
-                        .await
-                        .unwrap();
+                for (i2, node) in nodes.iter_mut().enumerate() {
+                    if i != i2 {
+                        node.add_member(*name, i as u16, format!("http://localhost:{}", 11000 + i))
+                            .await
+                            .unwrap();
+                    }
                 }
             }
 
@@ -173,19 +166,21 @@ mod tests {
                 res.unwrap().unwrap();
             }
 
-            let (total, accepts) = arc_coordinator1.get_stats();
+            let (total, accepts, recovers) = arc_coordinator1.get_stats();
             println!(
-                "C1: Fast: {:?}, Slow: {:?} Paths / {:?} Total",
+                "C1: Fast: {:?}, Slow: {:?} Paths / {:?} Total / {:?} Recovers",
                 total - accepts,
                 accepts,
-                total
+                total,
+                recovers
             );
-            let (total, accepts) = arc_coordinator2.get_stats();
+            let (total, accepts, recovers) = arc_coordinator2.get_stats();
             println!(
-                "C2: Fast: {:?}, Slow: {:?} Paths / {:?} Total",
+                "C2: Fast: {:?}, Slow: {:?} Paths / {:?} Total / {:?} Recovers",
                 total - accepts,
                 accepts,
-                total
+                total,
+                recovers
             );
 
             println!("Done");
