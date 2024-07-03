@@ -172,14 +172,20 @@ impl Replica for ReplicaConfig {
             // Return NACK with the higher ballot number
             let request_ballot = Ballot(MonoTime::try_from(request.ballot.as_slice())?);
             if event.ballot > request_ballot {
-                println!("REPLICA {}: NACK with ballot {:?}", self.node_info.serial, event.ballot);
+                println!(
+                    "REPLICA {}: NACK with ballot {:?}",
+                    self.node_info.serial, event.ballot
+                );
                 return Ok(RecoverResponse {
                     nack: event.ballot.into(),
                     ..Default::default()
                 });
             }
-            
-            println!("REPLICA {}: This Ballot won {:?}", self.node_info.serial, event.ballot);
+
+            println!(
+                "REPLICA {}: This Ballot won {:?}",
+                self.node_info.serial, request_ballot
+            );
 
             event_store_lock.update_ballot(&t_zero, request_ballot);
 

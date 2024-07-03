@@ -1,4 +1,3 @@
-use std::any::Any;
 use crate::event_store::EventStore;
 use crate::node::Stats;
 use crate::utils::{await_dependencies, from_dependency, into_dependency, Ballot, T, T0};
@@ -11,6 +10,7 @@ use consensus_transport::consensus_transport::{
 use consensus_transport::network::{BroadcastRequest, NetworkInterface, NodeInfo};
 use consensus_transport::utils::IntoInner;
 use monotime::MonoTime;
+use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
@@ -110,13 +110,27 @@ impl CoordinatorIterator {
             )
             .await?;
             match coordinator_iter {
-                CoordinatorIterator::Initialized(_) => {println!("Node {}: with Init", node.serial)}
-                CoordinatorIterator::PreAccepted(_) => {println!("Node {}: with PreAccepted", node.serial)}
-                CoordinatorIterator::Accepted(_) => {println!("Node {}: with Accepted", node.serial)}
-                CoordinatorIterator::Committed(_) => {println!("Node {}: with Committed", node.serial)}
-                CoordinatorIterator::Applied => {println!("Node {}: with Applied", node.serial)}
-                CoordinatorIterator::Recovering => {println!("Node {}: with Recovering", node.serial)}
-                CoordinatorIterator::RestartRecovery => {println!("Node {}: with RestartRecovery", node.serial)}
+                CoordinatorIterator::Initialized(_) => {
+                    println!("Node {}: with Init", node.serial)
+                }
+                CoordinatorIterator::PreAccepted(_) => {
+                    println!("Node {}: with PreAccepted", node.serial)
+                }
+                CoordinatorIterator::Accepted(_) => {
+                    println!("Node {}: with Accepted", node.serial)
+                }
+                CoordinatorIterator::Committed(_) => {
+                    println!("Node {}: with Committed", node.serial)
+                }
+                CoordinatorIterator::Applied => {
+                    println!("Node {}: with Applied", node.serial)
+                }
+                CoordinatorIterator::Recovering => {
+                    println!("Node {}: with Recovering", node.serial)
+                }
+                CoordinatorIterator::RestartRecovery => {
+                    println!("Node {}: with RestartRecovery", node.serial)
+                }
             }
             if let CoordinatorIterator::RestartRecovery = coordinator_iter {
                 backoff_counter += 1;
@@ -199,7 +213,7 @@ impl Coordinator<Recover> {
         let event = event_store_lock.get_or_insert(t0_recover).await;
         if matches!(event.state.borrow().0, State::Undefined) {
             println!("Node {} with undefined recovery", node.serial);
-            return Ok(CoordinatorIterator::Recovering)
+            return Ok(CoordinatorIterator::Recovering);
         }
         //let mut rx = event.state.subscribe();
         //timeout(
@@ -234,6 +248,7 @@ impl Coordinator<Recover> {
                 .collect::<Result<Vec<_>>>()?,
             t0_recover,
             stats,
+            ballot,
         )
         .await
     }
@@ -246,16 +261,20 @@ impl Coordinator<Recover> {
         mut responses: Vec<RecoverResponse>,
         t0: T0,
         stats: Arc<Stats>,
+        ballot: Ballot,
     ) -> Result<CoordinatorIterator> {
         // Query the newest state
         let event = event_store.lock().await.get_or_insert(t0).await;
         let previous_state = event.state.borrow().0;
-        println!("CoordRecovery at {} with previous state {:?} and response_len {}", node.serial, previous_state, responses.len());
+        println!(
+            "CoordRecovery at {} with previous state {:?} and ballot {:?}",
+            node.serial, previous_state, ballot
+        );
 
         let mut state_machine = TransactionStateMachine {
             transaction: event.event,
             t_zero: event.t_zero,
-            ballot: event.ballot,
+            ballot,
             state: previous_state,
             ..Default::default()
         };
@@ -267,6 +286,10 @@ impl Coordinator<Recover> {
 
         for response in responses.iter_mut() {
             let response_ballot = Ballot(MonoTime::try_from(response.nack.as_slice())?);
+            println!(
+                "Coord {} request with ballot {:?}",
+                node.serial, response_ballot
+            );
             if response_ballot > Ballot::default() || highest_ballot.is_some() {
                 match highest_ballot.as_mut() {
                     None => {
@@ -322,34 +345,18 @@ impl Coordinator<Recover> {
                 _ => {}
             }
         }
-        
 
-        if let Some(mut highest_b) = highest_ballot {
-            let mut event_lock = event_store.lock().await;
-            if let Some(event) = event_lock.get_event(t0).await {
-                if event.ballot > highest_b {
-                    highest_b = event.ballot;
-                } 
-            };
-            event_lock.update_ballot(&t0, highest_b);
-            drop(event_lock);
-            
-            //println!("Coord {} with ballot {:?}", node.serial, highest_b);
-            
+        if highest_ballot.is_some() {
             if previous_state != State::Applied {
-                //let mut rx = event.state.subscribe();
-                //timeout(
-                //    Duration::from_millis(RECOVER_TIMEOUT),
-                //    rx.wait_for(|(s, _)| *s > previous_state),
-                //)
-                //.await??;
-
                 return Ok(CoordinatorIterator::Recovering);
             }
             return Ok(CoordinatorIterator::Applied);
-        } else {
-            println!("Coord {} with ballot {:?}", node.serial, state_machine.ballot);
         }
+        if let Some(event) = event_store.lock().await.get_event(t0).await {
+            if event.ballot > ballot {
+                return Ok(CoordinatorIterator::Recovering);
+            }
+        };
 
         // Wait for deps
 

@@ -108,19 +108,19 @@ impl Node {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use crate::coordinator::CoordinatorIterator;
     use crate::node::Node;
+    use crate::utils::{T, T0};
     use bytes::Bytes;
+    use consensus_transport::consensus_transport::State;
     use diesel_ulid::DieselUlid;
+    use rand::distributions::{Distribution, Uniform};
+    use std::collections::BTreeMap;
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
     use std::time::Duration;
-    use rand::distributions::{Distribution, Uniform};
     use tokio::sync::Mutex;
-    use consensus_transport::consensus_transport::State;
-    use crate::utils::{T, T0};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn recovery_single() {
@@ -210,7 +210,6 @@ mod tests {
 
         let coordinator = arc_coordinator.clone();
 
-
         let mut rng = rand::thread_rng();
         let die = Uniform::from(0..10);
 
@@ -226,27 +225,42 @@ mod tests {
             )
             .await;
 
-
             while coordinator_iter.next().await.unwrap().is_some() {
                 let throw = die.sample(&mut rng);
-                if throw == 0  {
+                if throw == 0 {
                     match coordinator_iter {
-                        CoordinatorIterator::Initialized(_) => {println!("Break at Init")}
-                        CoordinatorIterator::PreAccepted(_) => {println!("Break at PreAccepted")}
-                        CoordinatorIterator::Accepted(_) => {println!("Break at Accepted")}
-                        CoordinatorIterator::Committed(_) => {println!("Break at Committed")}
-                        CoordinatorIterator::Applied => {println!("Break at Applied")}
-                        CoordinatorIterator::Recovering => {println!("Break at Recovering")}
-                        CoordinatorIterator::RestartRecovery => {println!("Break at RestartRecovery")}
+                        CoordinatorIterator::Initialized(_) => {
+                            println!("Break at Init")
+                        }
+                        CoordinatorIterator::PreAccepted(_) => {
+                            println!("Break at PreAccepted")
+                        }
+                        CoordinatorIterator::Accepted(_) => {
+                            println!("Break at Accepted")
+                        }
+                        CoordinatorIterator::Committed(_) => {
+                            println!("Break at Committed")
+                        }
+                        CoordinatorIterator::Applied => {
+                            println!("Break at Applied")
+                        }
+                        CoordinatorIterator::Recovering => {
+                            println!("Break at Recovering")
+                        }
+                        CoordinatorIterator::RestartRecovery => {
+                            println!("Break at RestartRecovery")
+                        }
                     }
-                    break
+                    break;
                 }
             }
         }
-        coordinator.transaction(Bytes::from("last transaction")).await.unwrap();
-        
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        coordinator
+            .transaction(Bytes::from("last transaction"))
+            .await
+            .unwrap();
 
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         let coordinator_store: BTreeMap<T0, T> = arc_coordinator
             .get_event_store()
