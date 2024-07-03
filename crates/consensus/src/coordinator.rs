@@ -1,3 +1,4 @@
+use std::any::Any;
 use crate::event_store::EventStore;
 use crate::node::Stats;
 use crate::utils::{await_dependencies, from_dependency, into_dependency, Ballot, T, T0};
@@ -108,6 +109,15 @@ impl CoordinatorIterator {
                 stats.clone(),
             )
             .await?;
+            match coordinator_iter {
+                CoordinatorIterator::Initialized(_) => {println!("Node {}: with Init", node.serial)}
+                CoordinatorIterator::PreAccepted(_) => {println!("Node {}: with PreAccepted", node.serial)}
+                CoordinatorIterator::Accepted(_) => {println!("Node {}: with Accepted", node.serial)}
+                CoordinatorIterator::Committed(_) => {println!("Node {}: with Committed", node.serial)}
+                CoordinatorIterator::Applied => {println!("Node {}: with Applied", node.serial)}
+                CoordinatorIterator::Recovering => {println!("Node {}: with Recovering", node.serial)}
+                CoordinatorIterator::RestartRecovery => {println!("Node {}: with RestartRecovery", node.serial)}
+            }
             if let CoordinatorIterator::RestartRecovery = coordinator_iter {
                 backoff_counter += 1;
                 tokio::time::sleep(Duration::from_millis(1000)).await;
@@ -187,13 +197,18 @@ impl Coordinator<Recover> {
     ) -> Result<CoordinatorIterator> {
         let mut event_store_lock = event_store.lock().await;
         let event = event_store_lock.get_or_insert(t0_recover).await;
-        let mut rx = event.state.subscribe();
-        timeout(
-            Duration::from_millis(RECOVER_TIMEOUT),
-            rx.wait_for(|(s, _)| *s != State::Undefined),
-        )
-        .await??;
+        if matches!(event.state.borrow().0, State::Undefined) {
+            println!("Node {} with undefined recovery", node.serial);
+            return Ok(CoordinatorIterator::Recovering)
+        }
+        //let mut rx = event.state.subscribe();
+        //timeout(
+        //    Duration::from_millis(RECOVER_TIMEOUT),
+        //    rx.wait_for(|(s, _)| *s != State::Undefined),
+        //)
+        //.await??;
 
+        println!("Node started recovery: {}", node.serial);
         // Just for sanity purposes
         assert_eq!(event.t_zero, t0_recover);
 
@@ -235,11 +250,13 @@ impl Coordinator<Recover> {
         // Query the newest state
         let event = event_store.lock().await.get_or_insert(t0).await;
         let previous_state = event.state.borrow().0;
+        println!("CoordRecovery at {} with previous state {:?} and response_len {}", node.serial, previous_state, responses.len());
 
         let mut state_machine = TransactionStateMachine {
             transaction: event.event,
             t_zero: event.t_zero,
             ballot: event.ballot,
+            state: previous_state,
             ..Default::default()
         };
 
@@ -305,20 +322,33 @@ impl Coordinator<Recover> {
                 _ => {}
             }
         }
+        
 
-        if let Some(highest_b) = highest_ballot {
-            event_store.lock().await.update_ballot(&t0, highest_b);
+        if let Some(mut highest_b) = highest_ballot {
+            let mut event_lock = event_store.lock().await;
+            if let Some(event) = event_lock.get_event(t0).await {
+                if event.ballot > highest_b {
+                    highest_b = event.ballot;
+                } 
+            };
+            event_lock.update_ballot(&t0, highest_b);
+            drop(event_lock);
+            
+            //println!("Coord {} with ballot {:?}", node.serial, highest_b);
+            
             if previous_state != State::Applied {
-                let mut rx = event.state.subscribe();
-                timeout(
-                    Duration::from_millis(RECOVER_TIMEOUT),
-                    rx.wait_for(|(s, _)| *s > previous_state),
-                )
-                .await??;
+                //let mut rx = event.state.subscribe();
+                //timeout(
+                //    Duration::from_millis(RECOVER_TIMEOUT),
+                //    rx.wait_for(|(s, _)| *s > previous_state),
+                //)
+                //.await??;
 
                 return Ok(CoordinatorIterator::Recovering);
             }
             return Ok(CoordinatorIterator::Applied);
+        } else {
+            println!("Coord {} with ballot {:?}", node.serial, state_machine.ballot);
         }
 
         // Wait for deps
@@ -614,11 +644,9 @@ impl Coordinator<Committed> {
     async fn execute_consensus(&mut self) -> Result<()> {
         // TODO: Apply in backend
         let mut store_lock = self.event_store.lock().await;
-        
+
         self.transaction.state = State::Applied;
-        store_lock
-            .upsert((&self.transaction).into())
-            .await;
+        store_lock.upsert((&self.transaction).into()).await;
 
         Ok(())
     }

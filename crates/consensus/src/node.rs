@@ -33,7 +33,7 @@ impl Node {
         id: DieselUlid,
         serial: u16,
         network: Arc<Mutex<dyn Network + Send + Sync>>,
-        db_path: Option<String>
+        db_path: Option<String>,
     ) -> Result<Self> {
         let node_name = Arc::new(NodeInfo { id, serial });
         let event_store = Arc::new(Mutex::new(EventStore::init(db_path)));
@@ -108,6 +108,7 @@ impl Node {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use crate::coordinator::CoordinatorIterator;
     use crate::node::Node;
     use bytes::Bytes;
@@ -115,7 +116,11 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
+    use std::time::Duration;
+    use rand::distributions::{Distribution, Uniform};
     use tokio::sync::Mutex;
+    use consensus_transport::consensus_transport::State;
+    use crate::utils::{T, T0};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn recovery_single() {
@@ -127,7 +132,7 @@ mod tests {
             let network = Arc::new(Mutex::new(
                 consensus_transport::network::NetworkConfig::new(socket_addr),
             ));
-            let node = Node::new_with_parameters(*m, i as u16, network)
+            let node = Node::new_with_parameters(*m, i as u16, network, None)
                 .await
                 .unwrap();
             nodes.push(node);
@@ -186,7 +191,7 @@ mod tests {
             let network = Arc::new(Mutex::new(
                 consensus_transport::network::NetworkConfig::new(socket_addr),
             ));
-            let node = Node::new_with_parameters(*m, i as u16, network)
+            let node = Node::new_with_parameters(*m, i as u16, network, None)
                 .await
                 .unwrap();
             nodes.push(node);
@@ -204,30 +209,98 @@ mod tests {
         let arc_coordinator = Arc::new(coordinator);
 
         let coordinator = arc_coordinator.clone();
-        let interface = coordinator.network.lock().await.get_interface();
-        let mut coordinator_iter = CoordinatorIterator::new(
-            coordinator.info.clone(),
-            coordinator.event_store.clone(),
-            interface,
-            Bytes::from("Recovery transaction"),
-            coordinator.stats.clone(),
-        )
-        .await;
-        coordinator_iter.next().await.unwrap();
 
-        arc_coordinator
-            .transaction(Bytes::from("First"))
-            .await
-            .unwrap();
 
-        let coord = arc_coordinator
+        let mut rng = rand::thread_rng();
+        let die = Uniform::from(0..10);
+
+        for _ in 0..10 {
+            let interface = coordinator.network.lock().await;
+            // Working coordinator
+            let mut coordinator_iter = CoordinatorIterator::new(
+                coordinator.info.clone(),
+                coordinator.event_store.clone(),
+                interface.get_interface(),
+                Bytes::from("Recovery transaction"),
+                coordinator.stats.clone(),
+            )
+            .await;
+
+
+            while coordinator_iter.next().await.unwrap().is_some() {
+                let throw = die.sample(&mut rng);
+                if throw == 0  {
+                    match coordinator_iter {
+                        CoordinatorIterator::Initialized(_) => {println!("Break at Init")}
+                        CoordinatorIterator::PreAccepted(_) => {println!("Break at PreAccepted")}
+                        CoordinatorIterator::Accepted(_) => {println!("Break at Accepted")}
+                        CoordinatorIterator::Committed(_) => {println!("Break at Committed")}
+                        CoordinatorIterator::Applied => {println!("Break at Applied")}
+                        CoordinatorIterator::Recovering => {println!("Break at Recovering")}
+                        CoordinatorIterator::RestartRecovery => {println!("Break at RestartRecovery")}
+                    }
+                    break
+                }
+            }
+        }
+        coordinator.transaction(Bytes::from("last transaction")).await.unwrap();
+        
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+
+        let coordinator_store: BTreeMap<T0, T> = arc_coordinator
             .get_event_store()
             .lock()
             .await
             .events
-            .clone();
+            .clone()
+            .into_values()
+            .map(|e| (e.t_zero, e.t))
+            .collect();
+        assert!(arc_coordinator
+            .get_event_store()
+            .lock()
+            .await
+            .events
+            .clone()
+            .iter()
+            .all(|(_, e)| (e.state.borrow()).0 == State::Applied));
+
+        let mut got_mismatch = false;
         for node in nodes {
-            assert_eq!(node.get_event_store().lock().await.events, coord);
+            let node_store: BTreeMap<T0, T> = node
+                .get_event_store()
+                .lock()
+                .await
+                .events
+                .clone()
+                .into_values()
+                .map(|e| (e.t_zero, e.t))
+                .collect();
+            assert!(node
+                .get_event_store()
+                .lock()
+                .await
+                .events
+                .clone()
+                .iter()
+                .all(|(_, e)| (e.state.borrow()).0 == State::Applied));
+            assert_eq!(coordinator_store.len(), node_store.len());
+            if coordinator_store != node_store {
+                println!("Node: {:?}", node.get_info());
+                let mut node_store_iter = node_store.iter();
+                for (k, v) in coordinator_store.iter() {
+                    if let Some(next) = node_store_iter.next() {
+                        if next != (k, v) {
+                            println!("Diff: Got {:?}, Expected: {:?}", next, (k, v));
+                            println!("Nanos: {:?} | {:?}", next.1 .0.get_nanos(), v.0.get_nanos());
+                        }
+                    }
+                }
+                got_mismatch = true;
+            }
+
+            assert!(!got_mismatch);
         }
     }
 }

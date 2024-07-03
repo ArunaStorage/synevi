@@ -1,17 +1,17 @@
-use anyhow::Result;
-use bytes::Bytes;
-use consensus_transport::consensus_transport::{Dependency, PreAcceptRequest, State};
-use monotime::MonoTime;
-use std::collections::BTreeMap;
-use tokio::sync::watch;
-use tokio::task::JoinSet;
-use tracing::instrument;
-use persistence::Database;
 use crate::{
     coordinator::TransactionStateMachine,
     error::WaitError,
     utils::{from_dependency, wait_for, Ballot, T, T0},
 };
+use anyhow::Result;
+use bytes::Bytes;
+use consensus_transport::consensus_transport::{Dependency, PreAcceptRequest, State};
+use monotime::MonoTime;
+use persistence::Database;
+use std::collections::BTreeMap;
+use tokio::sync::watch;
+use tokio::task::JoinSet;
+use tracing::instrument;
 
 #[derive(Debug)]
 pub struct EventStore {
@@ -23,10 +23,10 @@ pub struct EventStore {
     // cons:
     //  - Updates need to consider both maps (when t is changing)
     //  - Events and mappings need clean up cron jobs and some form of consolidation
-    pub events: BTreeMap<T0, Event>,      // Key: t0, value: Event
+    pub events: BTreeMap<T0, Event>, // Key: t0, value: Event
     pub database: Option<Database>,
     pub(crate) mappings: BTreeMap<T, T0>, // Key: t, value t0
-    pub last_applied: T,           // t of last applied entry
+    pub last_applied: T,                  // t of last applied entry
     pub(crate) latest_t0: T0,             // last created or recognized t0
 }
 
@@ -69,7 +69,7 @@ impl EventStore {
             mappings: BTreeMap::default(),
             last_applied: T::default(),
             latest_t0: T0::default(),
-            database: path.map(|p| Database::new(p).unwrap())
+            database: path.map(|p| Database::new(p).unwrap()),
         }
     }
 
@@ -205,8 +205,7 @@ impl EventStore {
     #[instrument(level = "trace")]
     pub async fn get_dependencies(&self, t: &T, t_zero: &T0) -> Vec<Dependency> {
         if self.last_applied == T::default() {
-            self
-                .events
+            self.events
                 .range(..&T0(**t))
                 .filter_map(|(_, v)| {
                     if v.t_zero == *t_zero {
@@ -243,7 +242,7 @@ impl EventStore {
                     })
                     .collect()
             }
-        }else{
+        } else {
             vec![]
         }
     }

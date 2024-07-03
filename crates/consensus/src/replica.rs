@@ -172,11 +172,14 @@ impl Replica for ReplicaConfig {
             // Return NACK with the higher ballot number
             let request_ballot = Ballot(MonoTime::try_from(request.ballot.as_slice())?);
             if event.ballot > request_ballot {
+                println!("REPLICA {}: NACK with ballot {:?}", self.node_info.serial, event.ballot);
                 return Ok(RecoverResponse {
                     nack: event.ballot.into(),
                     ..Default::default()
                 });
             }
+            
+            println!("REPLICA {}: This Ballot won {:?}", self.node_info.serial, event.ballot);
 
             event_store_lock.update_ballot(&t_zero, request_ballot);
 
@@ -242,7 +245,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_recovery() {
-        let event_store = Arc::new(Mutex::new(EventStore::init()));
+        let event_store = Arc::new(Mutex::new(EventStore::init(None)));
 
         let conflicting_t0 = MonoTime::new(0, 0);
         event_store
