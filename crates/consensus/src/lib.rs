@@ -56,5 +56,9 @@ pub mod tests {
                 got_requests: self.got_requests.clone(),
             })
         }
+
+        async fn get_waiting_time(&self, _node_serial: u16) -> u64 {
+            0
+        }
     }
 }

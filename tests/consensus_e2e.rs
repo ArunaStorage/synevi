@@ -9,6 +9,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
+    use std::time::Duration;
     use tokio::runtime::Builder;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -36,6 +37,8 @@ mod tests {
                 }
             }
         }
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        
         let coordinator = nodes.pop().unwrap();
         let arc_coordinator = Arc::new(coordinator);
 

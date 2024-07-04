@@ -13,13 +13,12 @@ use crate::{
 };
 use anyhow::Result;
 use diesel_ulid::DieselUlid;
-use std::sync::atomic::{AtomicI64, AtomicU64};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
 use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
 use tonic::transport::{Channel, Server};
-use tonic::Request;
 
 #[async_trait::async_trait]
 pub trait NetworkInterface: std::fmt::Debug + Send + Sync {
@@ -35,6 +34,7 @@ pub trait Network: std::fmt::Debug {
     async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<()>;
     async fn spawn_server(&self, server: Arc<dyn Replica>) -> Result<()>;
     async fn get_interface(&self) -> Arc<dyn NetworkInterface>;
+    async fn get_waiting_time(&self, node_serial: u16) -> u64;
 }
 
 #[derive(Clone, Debug)]
@@ -130,7 +130,6 @@ impl Network for NetworkConfig {
             latency: AtomicU64::new(10),
             skew: AtomicI64::new(0),
         });
-
         Ok(())
     }
 
@@ -152,6 +151,23 @@ impl Network for NetworkConfig {
 
     async fn get_interface(&self) -> Arc<dyn NetworkInterface> {
         self.create_network_set().await
+    }
+
+    async fn get_waiting_time(&self, node_serial: u16) -> u64 {
+        // Wait (max latency of majority + skew) - (latency from node)/2
+        let mut max_latency = 0;
+        let mut node_latency = 0;
+        for member in self.members.read().await.iter() {
+            let member_latency = member.latency.load(Ordering::Relaxed);
+            if member_latency > max_latency {
+                max_latency = member_latency;
+            }
+            if node_serial == member.member.info.serial {
+                node_latency = member_latency;
+            }
+        }
+        
+        (max_latency) - (node_latency / 2)
     }
 }
 
@@ -177,7 +193,7 @@ impl NetworkInterface for NetworkSet {
                     let inner = req.clone();
                     let mut request = tonic::Request::new(inner);
                     request.metadata_mut().append(
-                        AsciiMetadataKey::from_bytes("NODE_ID".as_bytes())?,
+                        AsciiMetadataKey::from_bytes("NODE_SERIAL".as_bytes())?,
                         AsciiMetadataValue::from(*serial),
                     );
                     // ... and send a request to member
@@ -254,10 +270,12 @@ impl NetworkInterface for NetworkSet {
                     Ok(Ok(r)) => result.push(r),
                     Ok(Err(e)) => {
                         tracing::error!("Error in response: {:?}", e);
+                        println!("Error in response: {:?}", e);
                         continue;
                     }
                     Err(_) => {
                         tracing::error!("Join error");
+                        println!("Join error");
                         continue;
                     }
                 };

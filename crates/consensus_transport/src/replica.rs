@@ -4,12 +4,17 @@ use crate::{
 };
 use anyhow::Result;
 use consensus_transport_server::ConsensusTransport;
+use std::str::FromStr;
 use std::{sync::Arc, time};
 use tonic::{Request, Response, Status};
 
 #[async_trait::async_trait]
 pub trait Replica: std::fmt::Debug + Send + Sync {
-    async fn pre_accept(&self, request: PreAcceptRequest) -> Result<PreAcceptResponse>;
+    async fn pre_accept(
+        &self,
+        request: PreAcceptRequest,
+        node_serial: u16,
+    ) -> Result<PreAcceptResponse>;
 
     async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse>;
 
@@ -67,11 +72,21 @@ impl ConsensusTransport for ReplicaBox {
         &self,
         request: Request<PreAcceptRequest>,
     ) -> Result<Response<PreAcceptResponse>, Status> {
+        let (metadata, _, request) = request.into_parts();
+        let serial = u16::from_str(
+            metadata
+                .get("NODE_SERIAL")
+                .ok_or_else(|| Status::invalid_argument("No node serial specified"))?
+                .to_str()
+                .map_err(|_| Status::invalid_argument("Wrong node serial specified"))?,
+        )
+        .map_err(|_| Status::invalid_argument("Wrong node serial specified"))?;
+
         Ok(Response::new(
             self.inner
-                .pre_accept(request.into_inner())
+                .pre_accept(request, serial)
                 .await
-                .map_err(|e| tonic::Status::internal(e.to_string()))?,
+                .map_err(|e| Status::internal(e.to_string()))?,
         ))
     }
 

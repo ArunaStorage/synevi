@@ -64,6 +64,6 @@ fn calculate_times(
     let remote_time = u128::from_be_bytes(response.local_timestamp.as_slice().try_into()?);
     let diff: i64 =
         ((time_now as i128 - (elapsed / 2) as i128 - remote_time as i128) / 1000).try_into()?;
-    let remote_time: u64 = (remote_time / 1000).try_into()?;
-    Ok((remote_time, diff))
+    let elapsed_time: u64 = (elapsed / 1000).try_into()?;
+    Ok((elapsed_time, diff))
 }

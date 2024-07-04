@@ -5,8 +5,7 @@ use crate::{
 };
 use anyhow::Result;
 use bytes::{BufMut, Bytes, BytesMut};
-use consensus_transport::consensus_transport::{Dependency, PreAcceptRequest, State};
-use monotime::MonoTime;
+use consensus_transport::consensus_transport::{Dependency, State};
 use persistence::Database;
 use std::collections::BTreeMap;
 use tokio::sync::watch;
@@ -137,12 +136,10 @@ impl EventStore {
     #[instrument(level = "trace")]
     pub async fn pre_accept(
         &mut self,
-        request: PreAcceptRequest,
+        t_zero: T0,
+        transaction: Bytes,
         node_serial: u16,
     ) -> Result<(Vec<Dependency>, T)> {
-        // Parse t_zero
-        let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
-
         let (t, deps) = {
             let t = T(if let Some((last_t, _)) = self.mappings.last_key_value() {
                 if **last_t > *t_zero {
@@ -169,7 +166,7 @@ impl EventStore {
             t_zero,
             t,
             state: tx,
-            event: request.event.into(),
+            event: transaction,
             dependencies: from_dependency(deps.clone())?,
             ballot: Ballot::default(),
         };

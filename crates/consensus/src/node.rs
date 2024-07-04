@@ -5,6 +5,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::network::{Network, NodeInfo};
 use diesel_ulid::DieselUlid;
+use std::collections::BTreeMap;
 use std::sync::{atomic::AtomicU64, Arc};
 use tokio::sync::Mutex;
 use tracing::instrument;
@@ -50,6 +51,7 @@ impl Node {
             event_store: event_store.clone(),
             network: network.clone(),
             stats: stats.clone(),
+            reorder_buffer: Arc::new(Mutex::new(BTreeMap::default())),
         });
         // Spawn tonic server
         network.spawn_server(replica).await?;
