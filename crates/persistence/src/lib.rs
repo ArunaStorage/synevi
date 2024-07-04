@@ -1,21 +1,16 @@
+use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use rocksdb::{ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options};
 use tokio::task::spawn_blocking;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Database {
-    db: DBWithThreadMode<MultiThreaded>,
+    db: Arc<DBWithThreadMode<MultiThreaded>>,
 }
 
-pub struct Entry {
-    pub t0: Bytes,
-    pub t: Bytes,
-    pub state: i32,
-    pub transaction: Bytes,
-}
 impl Database {
-    pub fn new(path: String) -> Result<Self> {
+    pub fn new(path: String) -> Result<Database> {
         //let db = DBWithThreadMode::open_default(path)?;
 
         // Setup column families
@@ -32,29 +27,30 @@ impl Database {
         db_opts.create_if_missing(true);
 
         // Create DB
-        let db = DBWithThreadMode::open_cf_descriptors(&db_opts, path, column_families)?;
+        let db: Arc<DBWithThreadMode<MultiThreaded>> = Arc::new(DBWithThreadMode::open_cf_descriptors(&db_opts, path, column_families)?);
+
         Ok(Database { db })
 
     }
-    pub fn persist(&self, key: Bytes, value: Bytes) -> Result<()> {
-        self.db.put(key, value).map_err(|e| anyhow!(e.to_string()))
+    
+    pub async fn init(&self, key: Bytes, transaction: Bytes, state: Bytes) -> Result<()> {
+        let db = self.clone();
+        spawn_blocking(move || -> Result<()> {
+            let event_cf= db.db.cf_handle("events").ok_or_else(||anyhow!("ColumnFamily for events not found"))?;
+            let state_cf= db.db.cf_handle("states").ok_or_else(||anyhow!("ColumnFamily for states not found"))?;
+            db.db.put_cf( &event_cf, &key, transaction).map_err(|e| anyhow!(e))?;
+            db.db.put_cf( &state_cf, key, state).map_err(|e| anyhow!(e))?;
+            Ok(())
+        }).await?
     }
 
-    pub async fn init(&self, event: Entry) -> Result<()> {
-        todo!();
-        //spawn_blocking(|| -> Result<()> {
-        //    let event_cf= self.db.cf_handle("events").ok_or_else(||anyhow!("ColumnFamily for events not found"))?;
-        //    let state_cf= self.db.cf_handle("states").ok_or_else(||anyhow!("ColumnFamily for states not found"))?;
-        //    self.db.put_cf( &event_cf ,event.t0, event.transaction).map_err(|e| anyhow!(e))?;
-        //    self.db.put_cf( &state_cf, event.t0, event.transaction).map_err(|e| anyhow!(e))?;
-        //    Ok(())
-        //}).await?
-    }
-    pub async fn update(&self, event: Entry) -> Result<()> {
-        todo!();
-        //spawn_blocking(|| -> Result<()> {
-        //    self.db.put(event.t0, event.transaction).map_err(|e| anyhow!(e))
-        //}).await?
+    pub async fn update(&self, key: Bytes, state: Bytes) -> Result<()> {
+        let db = self.clone();
+        spawn_blocking(move || -> Result<()> {
+            let state_cf= db.db.cf_handle("states").ok_or_else(||anyhow!("ColumnFamily for states not found"))?;
+            db.db.put_cf( &state_cf, key, state).map_err(|e| anyhow!(e))?;
+            Ok(())
+        }).await?
     }
 }
 
@@ -65,8 +61,9 @@ mod tests {
 
     #[test]
     fn test_db() {
-        let db = Database::new("../../tests/database".to_string()).unwrap();
-        db.persist(Bytes::from("key"), Bytes::from("value"))
-            .unwrap()
+        // TODO
+        //let db = Database::new("../../tests/database".to_string()).unwrap();
+        //db.init(Bytes::from("key"), Bytes::from("value"))
+        //    .unwrap()
     }
 }

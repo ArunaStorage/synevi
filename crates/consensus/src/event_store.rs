@@ -4,10 +4,10 @@ use crate::{
     utils::{from_dependency, wait_for, Ballot, T, T0},
 };
 use anyhow::Result;
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use consensus_transport::consensus_transport::{Dependency, PreAcceptRequest, State};
 use monotime::MonoTime;
-use persistence::Database;
+use persistence::{Database};
 use std::collections::BTreeMap;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
@@ -41,6 +41,24 @@ pub struct Event {
     pub event: Bytes,
     pub dependencies: BTreeMap<T, T0>, // t and t_zero
     pub ballot: Ballot,
+}
+
+impl Event {
+    pub fn as_bytes(&self) -> Bytes {
+        let mut new: BytesMut = BytesMut::new();
+        
+        new.put(<[u8; 16]>::from(*self.t).as_slice());
+        let state: i32 = self.state.borrow().0.into();
+        new.put(state.to_be_bytes().as_slice());
+        new.put(<[u8; 16]>::from(*self.ballot).as_slice());
+        
+        for dep in &self.dependencies {
+            new.put(<[u8; 16]>::from(**dep.0).as_slice());
+            new.put(<[u8; 16]>::from(**dep.1).as_slice());
+        }
+        
+        new.freeze()
+    }
 }
 
 impl PartialEq for Event {
@@ -181,7 +199,9 @@ impl EventStore {
         }
 
         // assert!(&old_event.t <= &event.t ); Can happen if minority is left behind
+        let mut update = false;
         if old_event != &event {
+            update = true;
             self.mappings.remove(&old_event.t);
             old_event.t = event.t;
             old_event.dependencies = event.dependencies;
@@ -197,9 +217,14 @@ impl EventStore {
         if old_event.state.borrow().0 == State::Applied {
             self.last_applied = event.t;
         }
+        
         if let Some(db) = &self.database {
             let t: Vec<u8> = (*old_event.t).into();
-            db.persist(t.into(), old_event.event.clone()).unwrap()
+            if update {
+                db.update(t.into(), old_event.as_bytes()).await.unwrap()       
+            } else {
+                db.init(t.into(), old_event.event.clone(), old_event.as_bytes()).await.unwrap()
+            }
         }
     }
 
