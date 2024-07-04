@@ -10,7 +10,6 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
     use tokio::runtime::Builder;
-    use tokio::sync::Mutex;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn parallel_execution() {
@@ -20,9 +19,9 @@ mod tests {
         for (i, m) in node_names.iter().enumerate() {
             let path = format!("../tests/database/{}_test_db", i);
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
-            let network = Arc::new(Mutex::new(
+            let network = Arc::new(
                 consensus_transport::network::NetworkConfig::new(socket_addr),
-            ));
+            );
             let node = Node::new_with_parameters(*m, i as u16, network, Some(path))
                 .await
                 .unwrap();
@@ -132,9 +131,9 @@ mod tests {
 
             for (i, m) in node_names.iter().enumerate() {
                 let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 11000 + i)).unwrap();
-                let network = Arc::new(Mutex::new(
+                let network = Arc::new(
                     consensus_transport::network::NetworkConfig::new(socket_addr),
-                ));
+                );
                 let node = Node::new_with_parameters(*m, i as u16, network, None)
                     .await
                     .unwrap();
@@ -200,9 +199,9 @@ mod tests {
             let mut nodes: Vec<Node> = vec![];
             for (i, m) in node_names.iter().enumerate() {
                 let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 12000 + i)).unwrap();
-                let network = Arc::new(Mutex::new(
+                let network = Arc::new(
                     consensus_transport::network::NetworkConfig::new(socket_addr),
-                ));
+                );
                 let node = Node::new_with_parameters(*m, i as u16, network, None)
                     .await
                     .unwrap();

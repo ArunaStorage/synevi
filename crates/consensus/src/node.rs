@@ -18,7 +18,7 @@ pub struct Stats {
 
 pub struct Node {
     info: Arc<NodeInfo>,
-    network: Arc<Mutex<dyn Network + Send + Sync>>,
+    network: Arc<dyn Network + Send + Sync>,
     event_store: Arc<Mutex<EventStore>>,
     stats: Arc<Stats>,
     semaphore: Arc<tokio::sync::Semaphore>,
@@ -33,7 +33,7 @@ impl Node {
     pub async fn new_with_parameters(
         id: DieselUlid,
         serial: u16,
-        network: Arc<Mutex<dyn Network + Send + Sync>>,
+        network: Arc<dyn Network + Send + Sync>,
         db_path: Option<String>,
     ) -> Result<Self> {
         let node_name = Arc::new(NodeInfo { id, serial });
@@ -52,7 +52,7 @@ impl Node {
             stats: stats.clone(),
         });
         // Spawn tonic server
-        network.lock().await.spawn_server(replica).await?;
+        network.spawn_server(replica).await?;
 
         // If no config / persistence -> default
         Ok(Node {
@@ -66,13 +66,13 @@ impl Node {
 
     #[instrument(level = "trace", skip(self))]
     pub async fn add_member(&mut self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
-        self.network.lock().await.add_member(id, serial, host).await
+        self.network.add_member(id, serial, host).await
     }
 
     #[instrument(level = "trace", skip(self))]
     pub async fn transaction(&self, transaction: Bytes) -> Result<()> {
         let _permit = self.semaphore.clone().acquire_owned().await?;
-        let interface = self.network.lock().await.get_interface();
+        let interface = self.network.get_interface().await;
         let mut coordinator_iter = CoordinatorIterator::new(
             self.info.clone(),
             self.event_store.clone(),
@@ -124,7 +124,6 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn recovery_single() {
@@ -133,9 +132,9 @@ mod tests {
 
         for (i, m) in node_names.iter().enumerate() {
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13100 + i)).unwrap();
-            let network = Arc::new(Mutex::new(
+            let network = Arc::new(
                 consensus_transport::network::NetworkConfig::new(socket_addr),
-            ));
+            );
             let node = Node::new_with_parameters(*m, i as u16, network, None)
                 .await
                 .unwrap();
@@ -154,7 +153,7 @@ mod tests {
         let arc_coordinator = Arc::new(coordinator);
 
         let coordinator = arc_coordinator.clone();
-        let interface = coordinator.network.lock().await.get_interface();
+        let interface = coordinator.network.get_interface().await;
         let mut coordinator_iter = CoordinatorIterator::new(
             coordinator.info.clone(),
             coordinator.event_store.clone(),
@@ -192,9 +191,9 @@ mod tests {
 
         for (i, m) in node_names.iter().enumerate() {
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13000 + i)).unwrap();
-            let network = Arc::new(Mutex::new(
+            let network = Arc::new(
                 consensus_transport::network::NetworkConfig::new(socket_addr),
-            ));
+            );
             let node = Node::new_with_parameters(*m, i as u16, network, None)
                 .await
                 .unwrap();
@@ -219,17 +218,15 @@ mod tests {
 
         // Working coordinator
         for _ in 0..10 {
-            let interface = coordinator.network.lock().await;
             // Working coordinator
             let mut coordinator_iter = CoordinatorIterator::new(
                 coordinator.info.clone(),
                 coordinator.event_store.clone(),
-                interface.get_interface(),
+                coordinator.network.get_interface().await,
                 Bytes::from("Recovery transaction"),
                 coordinator.stats.clone(),
             )
             .await;
-            drop(interface);
             while coordinator_iter.next().await.unwrap().is_some() {
                 let throw = die.sample(&mut rng);
                 if throw == 0 {
