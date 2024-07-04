@@ -1,6 +1,7 @@
 use crate::configure_transport::time_service_server::TimeServiceServer;
 use crate::consensus_transport::{RecoverRequest, RecoverResponse};
 use crate::error::BroadCastError;
+use crate::latency_service::get_latency;
 use crate::{
     consensus_transport::{
         consensus_transport_client::ConsensusTransportClient,
@@ -12,7 +13,9 @@ use crate::{
 };
 use anyhow::Result;
 use diesel_ulid::DieselUlid;
+use std::sync::atomic::{AtomicI64, AtomicU64};
 use std::{net::SocketAddr, sync::Arc};
+use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
 use tonic::transport::{Channel, Server};
 
@@ -26,10 +29,10 @@ pub trait NetworkInterface: std::fmt::Debug + Send + Sync {
 
 #[async_trait::async_trait]
 pub trait Network: std::fmt::Debug {
-    async fn add_members(&mut self, members: Vec<(DieselUlid, u16, String)>);
-    async fn add_member(&mut self, id: DieselUlid, serial: u16, host: String) -> Result<()>;
-    async fn spawn_server(&mut self, server: Arc<dyn Replica>) -> Result<()>;
-    fn get_interface(&self) -> Arc<dyn NetworkInterface>;
+    async fn add_members(&self, members: Vec<(DieselUlid, u16, String)>);
+    async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<()>;
+    async fn spawn_server(&self, server: Arc<dyn Replica>) -> Result<()>;
+    async fn get_interface(&self) -> Arc<dyn NetworkInterface>;
 }
 
 #[derive(Clone, Debug)]
@@ -45,11 +48,11 @@ pub struct Member {
     pub channel: Channel,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct MemberWithLatency {
     pub member: Arc<Member>,
-    pub latency: u64,
-    pub skew: i64,
+    pub latency: AtomicU64,
+    pub skew: AtomicI64,
 }
 
 #[derive(Debug, Clone)]
@@ -75,8 +78,8 @@ pub enum BroadcastResponse {
 #[derive(Debug)]
 pub struct NetworkConfig {
     pub socket_addr: SocketAddr,
-    pub members: Vec<MemberWithLatency>,
-    join_set: JoinSet<Result<()>>,
+    pub members: Arc<RwLock<Vec<MemberWithLatency>>>,
+    join_set: Mutex<JoinSet<Result<()>>>,
 }
 
 #[derive(Debug)]
@@ -88,56 +91,65 @@ impl NetworkConfig {
     pub fn new(socket_addr: SocketAddr) -> Self {
         Self {
             socket_addr,
-            members: Vec::new(),
-            join_set: JoinSet::new(),
+            members: Arc::new(RwLock::new(Vec::new())),
+            join_set: Mutex::new(JoinSet::new()),
         }
     }
 
-    pub fn create_network_set(&self) -> Arc<NetworkSet> {
+    pub async fn create_network_set(&self) -> Arc<NetworkSet> {
         Arc::new(NetworkSet {
-            members: self.members.iter().map(|e| e.member.clone()).collect(),
+            members: self
+                .members
+                .read()
+                .await
+                .iter()
+                .map(|e| e.member.clone())
+                .collect(),
         })
     }
 }
 
 #[async_trait::async_trait]
 impl Network for NetworkConfig {
-    async fn add_members(&mut self, members: Vec<(DieselUlid, u16, String)>) {
+    async fn add_members(&self, members: Vec<(DieselUlid, u16, String)>) {
         for (id, serial, host) in members {
             self.add_member(id, serial, host).await.unwrap();
         }
     }
 
-    async fn add_member(&mut self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
+    async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
         let channel = Channel::from_shared(host.clone())?.connect().await?;
-        self.members.push(MemberWithLatency {
+        self.members.write().await.push(MemberWithLatency {
             member: Arc::new(Member {
                 info: NodeInfo { id, serial },
                 host,
                 channel,
             }),
-            latency: 10,
-            skew: 0,
+            latency: AtomicU64::new(10),
+            skew: AtomicI64::new(0),
         });
 
         Ok(())
     }
 
-    async fn spawn_server(&mut self, server: Arc<dyn Replica>) -> Result<()> {
+    async fn spawn_server(&self, server: Arc<dyn Replica>) -> Result<()> {
         let new_replica_box = ReplicaBox::new(server);
         let addr = self.socket_addr;
-        self.join_set.spawn(async move {
+        self.join_set.lock().await.spawn(async move {
             let builder = Server::builder()
                 .add_service(ConsensusTransportServer::new(new_replica_box.clone()))
                 .add_service(TimeServiceServer::new(new_replica_box));
             builder.serve(addr).await?;
             Ok(())
         });
+
+        let members = self.members.clone();
+        self.join_set.lock().await.spawn(get_latency(members));
         Ok(())
     }
 
-    fn get_interface(&self) -> Arc<dyn NetworkInterface> {
-        self.create_network_set()
+    async fn get_interface(&self) -> Arc<dyn NetworkInterface> {
+        self.create_network_set().await
     }
 }
 

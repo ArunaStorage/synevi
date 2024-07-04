@@ -10,7 +10,6 @@ pub enum WaitError {
     SenderClosed,
 }
 
-
 #[derive(Error, Debug)]
 pub enum ConsensusError {
     #[error("Majority not reached")]

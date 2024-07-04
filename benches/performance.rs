@@ -3,7 +3,7 @@ use consensus::node::Node;
 use criterion::{criterion_group, criterion_main, Criterion};
 use diesel_ulid::DieselUlid;
 use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
-use tokio::{runtime, sync::Mutex};
+use tokio::runtime;
 
 async fn prepare() -> Arc<Node> {
     let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
@@ -11,9 +11,9 @@ async fn prepare() -> Arc<Node> {
 
     for (i, m) in node_names.iter().enumerate() {
         let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
-        let network = Arc::new(Mutex::new(
+        let network = Arc::new(
             consensus_transport::network::NetworkConfig::new(socket_addr),
-        ));
+        );
         let node = Node::new_with_parameters(*m, i as u16, network, None)
             .await
             .unwrap();

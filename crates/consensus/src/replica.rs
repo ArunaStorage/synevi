@@ -15,7 +15,7 @@ use tracing::instrument;
 #[derive(Debug)]
 pub struct ReplicaConfig {
     pub node_info: Arc<NodeInfo>,
-    pub network: Arc<Mutex<dyn Network + Send + Sync>>,
+    pub network: Arc<dyn Network + Send + Sync>,
     pub event_store: Arc<Mutex<EventStore>>,
     pub stats: Arc<Stats>,
     //pub reorder_buffer: Arc<Mutex<BTreeMap<T0, (Bytes, watch::Sender<Option<T0>>)>>>,
@@ -106,7 +106,7 @@ impl Replica for ReplicaConfig {
 
     #[instrument(level = "trace", skip(self))]
     async fn commit(&self, request: CommitRequest) -> Result<CommitResponse> {
-        let network_interface = self.network.lock().await.get_interface();
+        let network_interface = self.network.get_interface().await;
 
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
 
@@ -142,7 +142,7 @@ impl Replica for ReplicaConfig {
 
     #[instrument(level = "trace", skip(self))]
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse> {
-        let network_interface = self.network.lock().await.get_interface();
+        let network_interface = self.network.get_interface().await;
         let transaction: Bytes = request.event.into();
 
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
@@ -276,7 +276,7 @@ mod tests {
             })
             .await;
 
-        let network = Arc::new(Mutex::new(tests::NetworkMock::default()));
+        let network = Arc::new(tests::NetworkMock::default());
 
         let replica = ReplicaConfig {
             node_info: Arc::new(NodeInfo {
@@ -301,7 +301,7 @@ mod tests {
 
         replica.commit(request).await.unwrap();
         assert!(matches!(
-            network.lock().await.get_requests().await.first().unwrap(),
+            network.get_requests().await.first().unwrap(),
             consensus_transport::network::BroadcastRequest::Recover(_)
         ));
     }

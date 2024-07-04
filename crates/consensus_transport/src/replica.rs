@@ -1,7 +1,10 @@
-use std::{sync::Arc, time};
+use crate::{
+    configure_transport::{time_service_server::TimeService, GetTimeRequest, GetTimeResponse},
+    consensus_transport::*,
+};
 use anyhow::Result;
-use crate::{configure_transport::{time_service_server::TimeService, GetTimeRequest, GetTimeResponse}, consensus_transport::*};
 use consensus_transport_server::ConsensusTransport;
+use std::{sync::Arc, time};
 use tonic::{Request, Response, Status};
 
 #[async_trait::async_trait]
@@ -30,18 +33,24 @@ impl ReplicaBox {
 
 #[tonic::async_trait]
 impl TimeService for ReplicaBox {
-    async fn get_time(&self, request: Request<GetTimeRequest>) -> Result<Response<GetTimeResponse>, Status> {
-
+    async fn get_time(
+        &self,
+        request: Request<GetTimeRequest>,
+    ) -> Result<Response<GetTimeResponse>, Status> {
         let time_stamp = time::SystemTime::now()
-        .duration_since(time::UNIX_EPOCH)
-        .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
-        .as_nanos();
+            .duration_since(time::UNIX_EPOCH)
+            .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
+            .as_nanos();
 
         let value = request.into_inner().timestamp;
         if value.len() != 16 {
-            return Err(tonic::Status::invalid_argument("Invalid time"))
+            return Err(tonic::Status::invalid_argument("Invalid time"));
         }
-        let got_time = u128::from_be_bytes(value[0..16].try_into().map_err(|_| tonic::Status::invalid_argument("Invalid time"))?);
+        let got_time = u128::from_be_bytes(
+            value[0..16]
+                .try_into()
+                .map_err(|_| tonic::Status::invalid_argument("Invalid time"))?,
+        );
 
         let diff = time_stamp as i128 - got_time as i128;
 
