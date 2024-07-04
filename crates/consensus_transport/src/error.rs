@@ -5,8 +5,10 @@ use tokio::task::JoinError;
 pub enum BroadCastError {
     #[error("JoinError")]
     JoinError(#[from] JoinError),
-    #[error("TonicError")]
-    TonicError(#[from] tonic::Status),
+    #[error("TonicStatusError")]
+    TonicStatusError(#[from] tonic::Status),
     #[error("Majority not reached")]
     MajorityNotReached,
+    #[error("TonicMetadataError")]
+    TonicMetadataError(#[from] tonic::metadata::errors::InvalidMetadataKey),
 }

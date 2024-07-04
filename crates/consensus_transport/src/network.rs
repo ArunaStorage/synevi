@@ -17,6 +17,8 @@ use std::sync::atomic::{AtomicI64, AtomicU64};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
+use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
+use tonic::Request;
 use tonic::transport::{Channel, Server};
 
 #[async_trait::async_trait]
@@ -57,7 +59,7 @@ pub struct MemberWithLatency {
 
 #[derive(Debug, Clone)]
 pub enum BroadcastRequest {
-    PreAccept(PreAcceptRequest),
+    PreAccept(PreAcceptRequest, u16),
     Accept(AcceptRequest),
     Commit(CommitRequest),
     Apply(ApplyRequest),
@@ -168,11 +170,15 @@ impl NetworkInterface for NetworkSet {
         let mut await_majority = true;
         let mut broadcast_all = false;
         match &request {
-            BroadcastRequest::PreAccept(req) => {
+            BroadcastRequest::PreAccept(req, serial) => {
                 // ... and then iterate over every member ...
                 for replica in &self.members {
                     let channel = replica.channel.clone();
-                    let request = req.clone();
+                    let inner = req.clone();
+                    let mut request = tonic::Request::new(inner);
+                    request.metadata_mut().append(AsciiMetadataKey::from_bytes("NODE_ID".as_bytes())?,
+                                                   AsciiMetadataValue::from(*serial)
+                );
                     // ... and send a request to member
                     responses.spawn(async move {
                         let mut client = ConsensusTransportClient::new(channel);
