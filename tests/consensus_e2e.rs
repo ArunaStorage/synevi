@@ -62,6 +62,8 @@ mod tests {
             total,
             recovers
         );
+        
+        assert_eq!(recovers, 0);
 
         let coordinator_store: BTreeMap<T0, T> = arc_coordinator
             .get_event_store()

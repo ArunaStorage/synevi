@@ -10,3 +10,4 @@ license.workspace = true
 anyhow = {workspace = true}
 bytes = {workspace = true}
 rocksdb = "0.22.0"
+tokio = {workspace = true}

@@ -33,7 +33,8 @@ pub struct EventStore {
 #[derive(Clone, Debug)]
 pub struct Event {
     pub t_zero: T0,
-    pub t: T, // maybe this should be changed to an actual timestamp
+    pub t: T,
+
     // This holds the state and can be used by waiters to watch for a state change
     // In contrast to notify this can also be used if the state is already reached
     pub state: watch::Sender<(State, T)>,
