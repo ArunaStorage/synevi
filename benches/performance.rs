@@ -11,9 +11,9 @@ async fn prepare() -> Arc<Node> {
 
     for (i, m) in node_names.iter().enumerate() {
         let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
-        let network = Arc::new(
-            consensus_transport::network::NetworkConfig::new(socket_addr),
-        );
+        let network = Arc::new(consensus_transport::network::NetworkConfig::new(
+            socket_addr,
+        ));
         let node = Node::new_with_parameters(*m, i as u16, network, None)
             .await
             .unwrap();

@@ -420,7 +420,10 @@ impl Coordinator<Initialized> {
 
         let pre_accepted_responses = self
             .network_interface
-            .broadcast(BroadcastRequest::PreAccept(pre_accepted_request, self.node.serial))
+            .broadcast(BroadcastRequest::PreAccept(
+                pre_accepted_request,
+                self.node.serial,
+            ))
             .await?;
 
         let pa_responses = pre_accepted_responses

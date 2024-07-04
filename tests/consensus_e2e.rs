@@ -19,9 +19,9 @@ mod tests {
         for (i, m) in node_names.iter().enumerate() {
             let path = format!("../tests/database/{}_test_db", i);
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
-            let network = Arc::new(
-                consensus_transport::network::NetworkConfig::new(socket_addr),
-            );
+            let network = Arc::new(consensus_transport::network::NetworkConfig::new(
+                socket_addr,
+            ));
             let node = Node::new_with_parameters(*m, i as u16, network, Some(path))
                 .await
                 .unwrap();
@@ -61,7 +61,7 @@ mod tests {
             total,
             recovers
         );
-        
+
         assert_eq!(recovers, 0);
 
         let coordinator_store: BTreeMap<T0, T> = arc_coordinator
@@ -131,9 +131,9 @@ mod tests {
 
             for (i, m) in node_names.iter().enumerate() {
                 let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 11000 + i)).unwrap();
-                let network = Arc::new(
-                    consensus_transport::network::NetworkConfig::new(socket_addr),
-                );
+                let network = Arc::new(consensus_transport::network::NetworkConfig::new(
+                    socket_addr,
+                ));
                 let node = Node::new_with_parameters(*m, i as u16, network, None)
                     .await
                     .unwrap();
@@ -199,9 +199,9 @@ mod tests {
             let mut nodes: Vec<Node> = vec![];
             for (i, m) in node_names.iter().enumerate() {
                 let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 12000 + i)).unwrap();
-                let network = Arc::new(
-                    consensus_transport::network::NetworkConfig::new(socket_addr),
-                );
+                let network = Arc::new(consensus_transport::network::NetworkConfig::new(
+                    socket_addr,
+                ));
                 let node = Node::new_with_parameters(*m, i as u16, network, None)
                     .await
                     .unwrap();

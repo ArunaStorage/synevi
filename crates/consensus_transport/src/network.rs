@@ -18,8 +18,8 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
 use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
-use tonic::Request;
 use tonic::transport::{Channel, Server};
+use tonic::Request;
 
 #[async_trait::async_trait]
 pub trait NetworkInterface: std::fmt::Debug + Send + Sync {
@@ -176,9 +176,10 @@ impl NetworkInterface for NetworkSet {
                     let channel = replica.channel.clone();
                     let inner = req.clone();
                     let mut request = tonic::Request::new(inner);
-                    request.metadata_mut().append(AsciiMetadataKey::from_bytes("NODE_ID".as_bytes())?,
-                                                   AsciiMetadataValue::from(*serial)
-                );
+                    request.metadata_mut().append(
+                        AsciiMetadataKey::from_bytes("NODE_ID".as_bytes())?,
+                        AsciiMetadataValue::from(*serial),
+                    );
                     // ... and send a request to member
                     responses.spawn(async move {
                         let mut client = ConsensusTransportClient::new(channel);
