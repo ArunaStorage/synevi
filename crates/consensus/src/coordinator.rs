@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Mutex;
 use tracing::instrument;
 
 /// An iterator that goes through the different states of the coordinator
@@ -214,6 +214,7 @@ impl Coordinator<Recover> {
         stats: Arc<Stats>,
         wait_handler: Arc<WaitHandler>,
     ) -> Result<CoordinatorIterator> {
+        panic!();
         let mut event_store_lock = event_store.lock().await;
         let event = event_store_lock.get_or_insert(t0_recover).await;
         if matches!(event.state, State::Undefined) {
@@ -586,8 +587,8 @@ impl Coordinator<Accepted> {
             network_interface_clone.broadcast(BroadcastRequest::Commit(committed_request))
         );
 
-        committed_result?;
-        broadcast_result?; // TODO Recovery
+        committed_result.unwrap();
+        broadcast_result.unwrap(); // TODO Recovery
 
         Ok(Coordinator::<Committed> {
             node: self.node,
@@ -604,8 +605,7 @@ impl Coordinator<Accepted> {
     async fn commit_consensus(&mut self) -> Result<()> {
         self.transaction.state = State::Commited;
 
-        let notify = Arc::new(Notify::new());
-        let notify_future = notify.notified();
+        let (sx, rx) = tokio::sync::oneshot::channel();
         self.wait_handler
             .send_msg(
                 self.transaction.t_zero,
@@ -613,10 +613,10 @@ impl Coordinator<Accepted> {
                 self.transaction.dependencies.clone(),
                 self.transaction.transaction.clone(),
                 WaitAction::CommitBefore,
-                notify.clone(),
+                sx,
             )
             .await?;
-        notify_future.await;
+        let _ = rx.await;
 
         Ok(())
     }
@@ -654,11 +654,17 @@ impl Coordinator<Committed> {
     async fn execute_consensus(&mut self) -> Result<()> {
         // TODO: Apply in backend
         self.transaction.state = State::Applied;
-        self.event_store
-            .lock()
-            .await
-            .upsert((&self.transaction).into())
-            .await;
+        let (sx, _) = tokio::sync::oneshot::channel();
+        self.wait_handler
+            .send_msg(
+                self.transaction.t_zero,
+                self.transaction.t,
+                self.transaction.dependencies.clone(),
+                self.transaction.transaction.clone(),
+                WaitAction::ApplyAfter,
+                sx,
+            )
+            .await?;
 
         Ok(())
     }

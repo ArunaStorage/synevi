@@ -11,7 +11,8 @@ use consensus_transport::replica::Replica;
 use monotime::MonoTime;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tokio::sync::{oneshot, Mutex, Notify};
+use std::time::Instant;
+use tokio::sync::{oneshot, Mutex};
 use tracing::instrument;
 
 #[derive(Debug)]
@@ -107,8 +108,7 @@ impl Replica for ReplicaConfig {
         //println!("Commit: {:?} @ {:?}", t_zero, self.node_info.serial);
         let t = T(MonoTime::try_from(request.timestamp.as_slice())?);
         let deps = from_dependency(request.dependencies.clone())?;
-        let notify = Arc::new(Notify::new());
-        let notify_future = notify.notified();
+        let (sx, rx) = tokio::sync::oneshot::channel();
         self.wait_handler
             .send_msg(
                 t_zero,
@@ -116,11 +116,10 @@ impl Replica for ReplicaConfig {
                 deps,
                 request.event.into(),
                 WaitAction::CommitBefore,
-                notify.clone(),
+                sx,
             )
             .await?;
-        notify_future.await;
-
+        let _ = rx.await;
         Ok(CommitResponse {})
     }
 
@@ -129,23 +128,15 @@ impl Replica for ReplicaConfig {
         let transaction: Bytes = request.event.into();
 
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
-        //println!("Apply: {:?} @ {:?}", t_zero, self.node_info.serial);
         let t = T(MonoTime::try_from(request.timestamp.as_slice())?);
         let deps = from_dependency(request.dependencies.clone())?;
 
-        let notify = Arc::new(Notify::new());
-        let notify_future = notify.notified();
+        let (sx, rx) = tokio::sync::oneshot::channel();
+
         self.wait_handler
-            .send_msg(
-                t_zero,
-                t,
-                deps,
-                transaction,
-                WaitAction::ApplyAfter,
-                notify.clone(),
-            )
+            .send_msg(t_zero, t, deps, transaction, WaitAction::ApplyAfter, sx)
             .await?;
-        notify_future.await;
+        let _ = rx.await;
 
         Ok(ApplyResponse {})
     }

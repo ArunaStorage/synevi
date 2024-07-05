@@ -9,6 +9,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
+    use std::time::Duration;
     use tokio::runtime::Builder;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -36,14 +37,13 @@ mod tests {
                 }
             }
         }
-        //tokio::time::sleep(Duration::from_secs(11)).await;
 
         let coordinator = nodes.pop().unwrap();
         let arc_coordinator = Arc::new(coordinator);
 
         let mut joinset = tokio::task::JoinSet::new();
 
-        for _ in 0..2 {
+        for _ in 0..1000 {
             let coordinator = arc_coordinator.clone();
             joinset.spawn(async move {
                 coordinator
@@ -74,8 +74,8 @@ mod tests {
             .clone()
             .into_values()
             .map(|e| (e.t_zero, e.t))
-            .collect(); 
-        
+            .collect();
+
         assert!(arc_coordinator
             .get_event_store()
             .lock()

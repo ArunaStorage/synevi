@@ -61,7 +61,7 @@ impl ReorderBuffer {
     pub async fn run(&self) -> Result<()> {
         let mut buffer = BTreeMap::new();
         let mut current_transaction = (Instant::now(), T0::default());
-        let mut next_latency = 300;
+        let mut next_latency = 500;
         loop {
             match timeout(
                 Duration::from_micros(next_latency * 2),

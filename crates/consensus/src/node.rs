@@ -77,7 +77,7 @@ impl Node {
             event_store,
             network,
             stats,
-            semaphore: Arc::new(tokio::sync::Semaphore::new(1000)),
+            semaphore: Arc::new(tokio::sync::Semaphore::new(100)),
             wait_handler,
         })
     }

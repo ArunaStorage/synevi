@@ -1,6 +1,5 @@
 use crate::{
     coordinator::TransactionStateMachine,
-    error::WaitError,
     utils::{from_dependency, Ballot, T, T0},
 };
 use anyhow::Result;
@@ -8,8 +7,6 @@ use bytes::{BufMut, Bytes, BytesMut};
 use consensus_transport::consensus_transport::{Dependency, State};
 use persistence::Database;
 use std::collections::{BTreeMap, HashMap};
-use tokio::sync::watch;
-use tokio::task::JoinSet;
 use tracing::instrument;
 
 #[derive(Debug)]
@@ -70,8 +67,6 @@ impl PartialEq for Event {
             && self.dependencies == other.dependencies
     }
 }
-
-type WaitHandleResult = Result<JoinSet<std::result::Result<(), WaitError>>>;
 
 #[derive(Debug, Default)]
 pub(crate) struct RecoverDependencies {
@@ -194,7 +189,7 @@ impl EventStore {
             self.latest_t0 = event.t_zero;
         }
 
-        //println!("T0: {:?}, Old: {:?} new: {:?} @ {}", event.t_zero, old_event.state, event.state, self.node_serial);        
+        //println!("T0: {:?}, Old: {:?} new: {:?} @ {}", event.t_zero, old_event.state, event.state, self.node_serial);
         if event.state < old_event.state {
             return;
         }
