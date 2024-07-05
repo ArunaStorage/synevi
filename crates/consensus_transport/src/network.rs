@@ -127,7 +127,7 @@ impl Network for NetworkConfig {
                 host,
                 channel,
             }),
-            latency: AtomicU64::new(500),
+            latency: AtomicU64::new(10000),
             skew: AtomicI64::new(0),
         });
         Ok(())

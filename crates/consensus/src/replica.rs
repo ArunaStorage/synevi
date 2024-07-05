@@ -1,7 +1,8 @@
 use crate::event_store::{Event, EventStore};
 use crate::node::Stats;
 use crate::reorder_buffer::ReorderBuffer;
-use crate::utils::{await_dependencies, from_dependency, Ballot, T, T0};
+use crate::utils::{from_dependency, Ballot, T, T0};
+use crate::wait_handler::{WaitAction, WaitHandler};
 use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::*;
@@ -10,16 +11,17 @@ use consensus_transport::replica::Replica;
 use monotime::MonoTime;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tokio::sync::{oneshot, watch, Mutex};
+use tokio::sync::{oneshot, Mutex, Notify};
 use tracing::instrument;
 
 #[derive(Debug)]
 pub struct ReplicaConfig {
-    pub node_info: Arc<NodeInfo>,
+    pub _node_info: Arc<NodeInfo>, // For tracing
     pub network: Arc<dyn Network + Send + Sync>,
     pub event_store: Arc<Mutex<EventStore>>,
     pub stats: Arc<Stats>,
     pub reorder_buffer: Arc<ReorderBuffer>,
+    pub wait_handler: Arc<WaitHandler>,
 }
 
 #[async_trait::async_trait]
@@ -31,6 +33,8 @@ impl Replica for ReplicaConfig {
         node_serial: u16,
     ) -> Result<PreAcceptResponse> {
         let t0 = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
+
+        //println!("PreAccept: {:?} @ {:?}", t0, self.node_info.serial);
 
         // TODO(perf): Remove the lock here
         // Creates contention on the event store
@@ -65,10 +69,10 @@ impl Replica for ReplicaConfig {
     #[instrument(level = "trace", skip(self))]
     async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse> {
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
+        //println!("Accept: {:?} @ {:?}", t_zero, self.node_info.serial);
+
         let t = T(MonoTime::try_from(request.timestamp.as_slice())?);
         let request_ballot = Ballot(MonoTime::try_from(request.ballot.as_slice())?);
-
-        let (tx, _) = watch::channel((State::Accepted, t));
 
         let dependencies = {
             let mut store = self.event_store.lock().await;
@@ -82,7 +86,7 @@ impl Replica for ReplicaConfig {
                 .upsert(Event {
                     t_zero,
                     t,
-                    state: tx,
+                    state: State::Accepted,
                     event: request.event.into(),
                     dependencies: from_dependency(request.dependencies.clone())?,
                     ballot: request_ballot,
@@ -99,73 +103,52 @@ impl Replica for ReplicaConfig {
 
     #[instrument(level = "trace", skip(self))]
     async fn commit(&self, request: CommitRequest) -> Result<CommitResponse> {
-        let network_interface = self.network.get_interface().await;
-
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
-
+        //println!("Commit: {:?} @ {:?}", t_zero, self.node_info.serial);
         let t = T(MonoTime::try_from(request.timestamp.as_slice())?);
-        let dependencies = from_dependency(request.dependencies.clone())?;
-        let (tx, _) = watch::channel((State::Commited, t));
-
-        self.event_store
-            .lock()
-            .await
-            .upsert(Event {
+        let deps = from_dependency(request.dependencies.clone())?;
+        let notify = Arc::new(Notify::new());
+        let notify_future = notify.notified();
+        self.wait_handler
+            .send_msg(
                 t_zero,
                 t,
-                state: tx,
-                event: request.event.clone().into(),
-                dependencies: dependencies.clone(),
-                ballot: Ballot::default(), // Will keep the highest ballot
-            })
-            .await;
-        await_dependencies(
-            self.node_info.clone(),
-            self.event_store.clone(),
-            &dependencies,
-            network_interface,
-            t,
-            self.stats.clone(),
-            false,
-        )
-        .await?;
+                deps,
+                request.event.into(),
+                WaitAction::CommitBefore,
+                notify.clone(),
+                10000,
+            )
+            .await?;
+        notify_future.await;
+
         Ok(CommitResponse {})
     }
 
     #[instrument(level = "trace", skip(self))]
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse> {
-        let network_interface = self.network.get_interface().await;
         let transaction: Bytes = request.event.into();
 
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
+        //println!("Apply: {:?} @ {:?}", t_zero, self.node_info.serial);
         let t = T(MonoTime::try_from(request.timestamp.as_slice())?);
+        let deps = from_dependency(request.dependencies.clone())?;
 
-        let dependencies = from_dependency(request.dependencies.clone())?;
-
-        await_dependencies(
-            self.node_info.clone(),
-            self.event_store.clone(),
-            &dependencies,
-            network_interface,
-            t,
-            self.stats.clone(),
-            false,
-        )
-        .await?;
-
-        let (tx, _) = watch::channel((State::Applied, t));
-        self.event_store
-            .lock()
-            .await
-            .upsert(Event {
+        let notify = Arc::new(Notify::new());
+        let notify_future = notify.notified();
+        self.wait_handler
+            .send_msg(
                 t_zero,
                 t,
-                state: tx,
-                event: transaction,
-                dependencies,
-                ballot: Ballot::default(),
-            })
-            .await;
+                deps,
+                transaction,
+                WaitAction::CommitBefore,
+                notify.clone(),
+                10000,
+            )
+            .await?;
+        notify_future.await;
+
         Ok(ApplyResponse {})
     }
 
@@ -186,7 +169,7 @@ impl Replica for ReplicaConfig {
 
             event_store_lock.update_ballot(&t_zero, request_ballot);
 
-            if matches!(event.state.borrow().0, State::Undefined) {
+            if matches!(event.state, State::Undefined) {
                 event.t = event_store_lock
                     .pre_accept(t_zero, request.event.into())
                     .await?
@@ -197,7 +180,7 @@ impl Replica for ReplicaConfig {
             self.stats.total_recovers.fetch_add(1, Ordering::Relaxed);
 
             Ok(RecoverResponse {
-                local_state: event.state.borrow().0.into(),
+                local_state: event.state.into(),
                 wait: recover_deps.wait,
                 superseding: recover_deps.superseding,
                 dependencies: recover_deps.dependencies,
@@ -230,13 +213,13 @@ mod tests {
     use crate::replica::ReplicaConfig;
     use crate::tests;
     use crate::utils::{Ballot, T, T0};
+    use crate::wait_handler::WaitHandler;
     use consensus_transport::consensus_transport::{CommitRequest, Dependency, State};
     use consensus_transport::network::NodeInfo;
     use consensus_transport::replica::Replica;
     use monotime::MonoTime;
-    use std::collections::BTreeMap;
+    use std::collections::HashMap;
     use std::sync::Arc;
-    use tokio::sync::watch::Sender;
     use tokio::sync::Mutex;
 
     #[tokio::test]
@@ -250,9 +233,9 @@ mod tests {
             .upsert(Event {
                 t_zero: T0(conflicting_t0),
                 t: T(conflicting_t0),
-                state: Sender::new((State::PreAccepted, T(conflicting_t0))),
+                state: State::PreAccepted,
                 event: Default::default(),
-                dependencies: BTreeMap::new(), // No deps
+                dependencies: HashMap::new(), // No deps
                 ballot: Ballot::default(),
             })
             .await;
@@ -260,7 +243,7 @@ mod tests {
         let network = Arc::new(tests::NetworkMock::default());
 
         let replica = ReplicaConfig {
-            node_info: Arc::new(NodeInfo {
+            _node_info: Arc::new(NodeInfo {
                 id: Default::default(),
                 serial: 0,
             }),
@@ -268,6 +251,7 @@ mod tests {
             event_store: event_store.clone(),
             stats: Arc::new(Default::default()),
             reorder_buffer: ReorderBuffer::new(event_store.clone()),
+            wait_handler: WaitHandler::new(event_store.clone(), network.clone()),
         };
 
         let t0 = conflicting_t0.next().into_time();

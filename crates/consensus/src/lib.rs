@@ -5,6 +5,7 @@ pub mod node;
 mod reorder_buffer;
 mod replica;
 pub mod utils;
+mod wait_handler;
 
 #[cfg(test)]
 pub mod tests {

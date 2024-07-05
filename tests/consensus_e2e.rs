@@ -9,7 +9,6 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
-    use std::time::Duration;
     use tokio::runtime::Builder;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -37,14 +36,14 @@ mod tests {
                 }
             }
         }
-        tokio::time::sleep(Duration::from_secs(11)).await;
+        //tokio::time::sleep(Duration::from_secs(11)).await;
 
         let coordinator = nodes.pop().unwrap();
         let arc_coordinator = Arc::new(coordinator);
 
         let mut joinset = tokio::task::JoinSet::new();
 
-        for _ in 0..100 {
+        for _ in 0..500 {
             let coordinator = arc_coordinator.clone();
             joinset.spawn(async move {
                 coordinator
@@ -83,7 +82,7 @@ mod tests {
             .events
             .clone()
             .iter()
-            .all(|(_, e)| (e.state.borrow()).0 == State::Applied));
+            .all(|(_, e)| e.state == State::Applied));
 
         let mut got_mismatch = false;
         for node in nodes {
@@ -103,7 +102,7 @@ mod tests {
                 .events
                 .clone()
                 .iter()
-                .all(|(_, e)| (e.state.borrow()).0 == State::Applied));
+                .all(|(_, e)| e.state == State::Applied));
             assert_eq!(coordinator_store.len(), node_store.len());
             if coordinator_store != node_store {
                 println!("Node: {:?}", node.get_info());

@@ -1,4 +1,7 @@
-use crate::{event_store::EventStore, utils::{T, T0}};
+use crate::{
+    event_store::EventStore,
+    utils::{T, T0},
+};
 use anyhow::Result;
 use async_channel::{Receiver, Sender};
 use bytes::Bytes;
@@ -8,7 +11,10 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::{sync::{oneshot, Mutex}, time::timeout};
+use tokio::{
+    sync::{oneshot, Mutex},
+    time::timeout,
+};
 
 pub struct ReorderMessage {
     pub t0: T0,
@@ -19,7 +25,7 @@ pub struct ReorderMessage {
 
 #[derive(Clone, Debug)]
 pub struct ReorderBuffer {
-    channel: Sender<ReorderMessage>,
+    sender: Sender<ReorderMessage>,
     receiver: Receiver<ReorderMessage>,
     event_store: Arc<Mutex<EventStore>>,
 }
@@ -28,15 +34,21 @@ impl ReorderBuffer {
     pub fn new(event_store: Arc<Mutex<EventStore>>) -> Arc<Self> {
         let (sender, receiver) = async_channel::bounded(1000);
         Arc::new(Self {
-            channel: sender,
+            sender,
             receiver,
             event_store,
         })
     }
 
-    pub async fn send_msg(&self, t0: T0, notify: oneshot::Sender<(T, Vec<Dependency>)>, event: Bytes, latency: u64) -> Result<()> {
+    pub async fn send_msg(
+        &self,
+        t0: T0,
+        notify: oneshot::Sender<(T, Vec<Dependency>)>,
+        event: Bytes,
+        latency: u64,
+    ) -> Result<()> {
         Ok(self
-            .channel
+            .sender
             .send(ReorderMessage {
                 t0,
                 notify,
@@ -78,7 +90,7 @@ impl ReorderBuffer {
                     while let Some(entry) = buffer.first_entry() {
                         if entry.key() <= &current_transaction.1 {
                             let (t0_buffer, (notify, event)) = entry.remove_entry();
-                            
+
                             let (deps, t) = self
                                 .event_store
                                 .lock()

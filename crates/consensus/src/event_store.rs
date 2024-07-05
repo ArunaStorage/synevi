@@ -1,13 +1,13 @@
 use crate::{
     coordinator::TransactionStateMachine,
     error::WaitError,
-    utils::{from_dependency, wait_for, Ballot, T, T0},
+    utils::{from_dependency, Ballot, T, T0},
 };
 use anyhow::Result;
 use bytes::{BufMut, Bytes, BytesMut};
 use consensus_transport::consensus_transport::{Dependency, State};
 use persistence::Database;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tracing::instrument;
@@ -37,9 +37,9 @@ pub struct Event {
 
     // This holds the state and can be used by waiters to watch for a state change
     // In contrast to notify this can also be used if the state is already reached
-    pub state: watch::Sender<(State, T)>,
+    pub state: State,
     pub event: Bytes,
-    pub dependencies: BTreeMap<T, T0>, // t and t_zero
+    pub dependencies: HashMap<T0, T>, // t and t_zero
     pub ballot: Ballot,
 }
 
@@ -48,7 +48,7 @@ impl Event {
         let mut new: BytesMut = BytesMut::new();
 
         new.put(<[u8; 16]>::from(*self.t).as_slice());
-        let state: i32 = self.state.borrow().0.into();
+        let state: i32 = self.state.into();
         new.put(state.to_be_bytes().as_slice());
         new.put(<[u8; 16]>::from(*self.ballot).as_slice());
 
@@ -65,13 +65,13 @@ impl PartialEq for Event {
     fn eq(&self, other: &Self) -> bool {
         self.t_zero == other.t_zero
             && self.t == other.t
-            && *self.state.borrow() == *other.state.borrow()
+            && self.state == other.state
             && self.event == other.event
             && self.dependencies == other.dependencies
     }
 }
 
-type WaitHandleResult = Result<(JoinSet<std::result::Result<(), WaitError>>, Vec<(T0, T)>)>;
+type WaitHandleResult = Result<JoinSet<std::result::Result<(), WaitError>>>;
 
 #[derive(Debug, Default)]
 pub(crate) struct RecoverDependencies {
@@ -111,7 +111,7 @@ impl EventStore {
             transaction: body,
             t_zero: T0(t0),
             t: T(t0),
-            dependencies: BTreeMap::default(),
+            dependencies: HashMap::default(),
             ballot: Ballot::default(),
         }
     }
@@ -123,13 +123,12 @@ impl EventStore {
 
     #[instrument(level = "trace")]
     pub async fn get_or_insert(&mut self, t_zero: T0) -> Event {
-        let (tx, _) = watch::channel((State::Undefined, T(*t_zero)));
         let entry = self.events.entry(t_zero).or_insert(Event {
             t_zero,
             t: T(*t_zero),
-            state: tx,
+            state: State::Undefined,
             event: Default::default(),
-            dependencies: BTreeMap::default(),
+            dependencies: HashMap::default(),
             ballot: Ballot::default(),
         });
         entry.clone()
@@ -161,12 +160,11 @@ impl EventStore {
         };
 
         // This is OK because on pre_accept T == T0
-        let (tx, _) = watch::channel((State::PreAccepted, T(*t_zero)));
 
         let event = Event {
             t_zero,
             t,
-            state: tx,
+            state: State::PreAccepted,
             event: transaction,
             dependencies: from_dependency(deps.clone())?,
             ballot: Ballot::default(),
@@ -196,6 +194,10 @@ impl EventStore {
             self.latest_t0 = event.t_zero;
         }
 
+        if event.state < old_event.state {
+            return;
+        }
+
         // assert!(&old_event.t <= &event.t ); Can happen if minority is left behind
         let mut update = false;
         if old_event != &event {
@@ -210,9 +212,7 @@ impl EventStore {
         }
 
         self.mappings.insert(event.t, event.t_zero);
-        let new_state: (State, T) = *event.state.borrow();
-        old_event.state.send_modify(|old| *old = new_state);
-        if old_event.state.borrow().0 == State::Applied {
+        if old_event.state == State::Applied {
             self.last_applied = event.t;
         }
 
@@ -234,7 +234,7 @@ impl EventStore {
             self.events
                 .range(..&T0(**t))
                 .filter_map(|(_, v)| {
-                    if v.t_zero == *t_zero || v.state.borrow().0 == State::Undefined {
+                    if v.t_zero == *t_zero || v.state == State::Undefined {
                         None
                     } else {
                         Some(Dependency {
@@ -253,7 +253,7 @@ impl EventStore {
                 self.events
                     .range(last_t0..&T0(**t))
                     .filter_map(|(_, v)| {
-                        if v.t_zero == *t_zero || v.state.borrow().0 == State::Undefined {
+                        if v.t_zero == *t_zero || v.state == State::Undefined {
                             None
                         } else {
                             Some(Dependency {
@@ -276,12 +276,12 @@ impl EventStore {
             let dep_event = self.events.get(t_zero_dep).ok_or_else(|| {
                 anyhow::anyhow!("Dependency not found for t_zero: {:?}", t_zero_dep)
             })?;
-            match dep_event.state.borrow().0 {
+            match dep_event.state {
                 State::Accepted => {
                     if dep_event
                         .dependencies
                         .iter()
-                        .any(|(_, t_zero_dep_dep)| t_zero == t_zero_dep_dep)
+                        .any(|(t_zero_dep_dep, _)| t_zero == t_zero_dep_dep)
                     {
                         // Wait -> Accord p19 l7 + l9
                         if t_zero_dep < t_zero && **t_dep > **t_zero {
@@ -303,7 +303,7 @@ impl EventStore {
                     if dep_event
                         .dependencies
                         .iter()
-                        .any(|(_, t_zero_dep_dep)| t_zero == t_zero_dep_dep)
+                        .any(|(t_zero_dep_dep, _)| t_zero == t_zero_dep_dep)
                     {
                         // Superseding -> Accord: p19 l11
                         if **t_dep > **t_zero {
@@ -325,44 +325,5 @@ impl EventStore {
             }
         }
         Ok(recover_deps)
-    }
-
-    #[instrument(level = "trace")]
-    pub async fn create_wait_handles(
-        &mut self,
-        dependencies: &BTreeMap<T, T0>,
-        t: T,
-    ) -> WaitHandleResult {
-        // TODO: Create custom error
-        // Collect notifies
-        let mut notifies = JoinSet::new();
-        let mut result_vec = vec![];
-        for (dep_t, dep_t_zero) in dependencies.iter() {
-            let dep: Option<&Event> = self.events.get(dep_t_zero);
-
-            // Check if dep is known
-            if let Some(dep) = dep {
-                // Dependency known
-                if dep.state.borrow().0 != State::Applied {
-                    result_vec.push((*dep_t_zero, *dep_t));
-                    notifies.spawn(wait_for(t, dep.t_zero, dep.state.clone()));
-                }
-            } else {
-                // Dependency unknown
-                result_vec.push((*dep_t_zero, *dep_t));
-                let (tx, _) = watch::channel((State::Undefined, *dep_t));
-                notifies.spawn(wait_for(t, *dep_t_zero, tx.clone()));
-                self.insert(Event {
-                    t_zero: *dep_t_zero,
-                    t: *dep_t,
-                    state: tx,
-                    event: Default::default(),
-                    dependencies: BTreeMap::default(),
-                    ballot: Ballot::default(),
-                })
-                .await;
-            }
-        }
-        Ok((notifies, result_vec))
     }
 }

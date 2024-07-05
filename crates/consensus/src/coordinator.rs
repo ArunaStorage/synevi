@@ -1,7 +1,8 @@
 use crate::error::ConsensusError;
 use crate::event_store::EventStore;
 use crate::node::Stats;
-use crate::utils::{await_dependencies, from_dependency, into_dependency, Ballot, T, T0};
+use crate::utils::{from_dependency, into_dependency, Ballot, T, T0};
+use crate::wait_handler::WaitHandler;
 use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::{
@@ -11,13 +12,12 @@ use consensus_transport::consensus_transport::{
 use consensus_transport::network::{BroadcastRequest, NetworkInterface, NodeInfo};
 use consensus_transport::utils::IntoInner;
 use monotime::MonoTime;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tokio::time::timeout;
 use tracing::instrument;
 
 /// An iterator that goes through the different states of the coordinator
@@ -39,6 +39,7 @@ impl CoordinatorIterator {
         network_interface: Arc<dyn NetworkInterface>,
         transaction: Bytes,
         stats: Arc<Stats>,
+        wait_handler: Arc<WaitHandler>,
     ) -> Self {
         CoordinatorIterator::Initialized(Some(
             Coordinator::<Initialized>::new(
@@ -47,6 +48,7 @@ impl CoordinatorIterator {
                 network_interface,
                 transaction,
                 stats,
+                wait_handler,
             )
             .await,
         ))
@@ -117,6 +119,7 @@ impl CoordinatorIterator {
         network_interface: Arc<dyn NetworkInterface>,
         t0_recover: T0,
         stats: Arc<Stats>,
+        wait_handler: Arc<WaitHandler>,
     ) -> Result<()> {
         let mut backoff_counter: u8 = 0;
         while backoff_counter <= MAX_RETRIES {
@@ -126,6 +129,7 @@ impl CoordinatorIterator {
                 network_interface.clone(),
                 t0_recover,
                 stats.clone(),
+                wait_handler.clone(),
             )
             .await?;
             if let CoordinatorIterator::RestartRecovery = coordinator_iter {
@@ -157,15 +161,16 @@ pub struct Coordinator<X> {
     pub transaction: TransactionStateMachine,
     pub phantom: PhantomData<X>,
     pub stats: Arc<Stats>,
+    pub wait_handler: Arc<WaitHandler>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TransactionStateMachine {
     pub state: State,
     pub transaction: Bytes,
     pub t_zero: T0,
     pub t: T,
-    pub dependencies: BTreeMap<T, T0>, // T -> T0
+    pub dependencies: HashMap<T0, T>,
     pub ballot: Ballot,
 }
 
@@ -177,6 +182,7 @@ impl<X> Coordinator<X> {
         network_interface: Arc<dyn NetworkInterface>,
         transaction: Bytes,
         stats: Arc<Stats>,
+        wait_handler: Arc<WaitHandler>,
     ) -> Coordinator<Initialized> {
         // Create struct
         let transaction = event_store
@@ -191,6 +197,7 @@ impl<X> Coordinator<X> {
             transaction,
             phantom: PhantomData,
             stats,
+            wait_handler,
         }
     }
 }
@@ -205,10 +212,11 @@ impl Coordinator<Recover> {
         network_interface: Arc<dyn NetworkInterface>,
         t0_recover: T0,
         stats: Arc<Stats>,
+        wait_handler: Arc<WaitHandler>,
     ) -> Result<CoordinatorIterator> {
         let mut event_store_lock = event_store.lock().await;
         let event = event_store_lock.get_or_insert(t0_recover).await;
-        if matches!(event.state.borrow().0, State::Undefined) {
+        if matches!(event.state, State::Undefined) {
             tracing::debug!("Node {} with undefined recovery", node.serial);
             return Ok(CoordinatorIterator::Recovering);
         }
@@ -239,6 +247,7 @@ impl Coordinator<Recover> {
             t0_recover,
             stats,
             ballot,
+            wait_handler,
         )
         .await
     }
@@ -252,10 +261,11 @@ impl Coordinator<Recover> {
         t0: T0,
         stats: Arc<Stats>,
         ballot: Ballot,
+        wait_handler: Arc<WaitHandler>,
     ) -> Result<CoordinatorIterator> {
         // Query the newest state
         let event = event_store.lock().await.get_or_insert(t0).await;
-        let previous_state = event.state.borrow().0;
+        let previous_state = event.state;
 
         let mut state_machine = TransactionStateMachine {
             transaction: event.event,
@@ -350,6 +360,7 @@ impl Coordinator<Recover> {
                 event_store,
                 transaction: state_machine,
                 stats,
+                wait_handler,
                 phantom: Default::default(),
             })),
             State::Commited => CoordinatorIterator::Accepted(Some(Coordinator::<Accepted> {
@@ -358,6 +369,7 @@ impl Coordinator<Recover> {
                 event_store,
                 transaction: state_machine,
                 stats,
+                wait_handler,
                 phantom: Default::default(),
             })),
             State::Accepted => CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted> {
@@ -366,6 +378,7 @@ impl Coordinator<Recover> {
                 event_store,
                 transaction: state_machine,
                 stats,
+                wait_handler,
                 phantom: Default::default(),
             })),
 
@@ -377,15 +390,17 @@ impl Coordinator<Recover> {
                         event_store,
                         transaction: state_machine,
                         stats,
+                        wait_handler,
                         phantom: Default::default(),
                     }))
                 } else if !waiting.is_empty() {
-                    let mut rx = event.state.subscribe();
-                    timeout(
-                        Duration::from_millis(RECOVER_TIMEOUT),
-                        rx.wait_for(|(s, _)| *s > previous_state),
-                    )
-                    .await??;
+                    todo!();
+                    //let mut rx = event.state.subscribe();
+                    // timeout(
+                    //     Duration::from_millis(RECOVER_TIMEOUT),
+                    //     rx.wait_for(|(s, _)| *s > previous_state),
+                    // )
+                    // .await??;
                     return Ok(CoordinatorIterator::RestartRecovery);
                 } else {
                     state_machine.t = T(*state_machine.t_zero);
@@ -395,6 +410,7 @@ impl Coordinator<Recover> {
                         event_store,
                         transaction: state_machine,
                         stats,
+                        wait_handler,
                         phantom: Default::default(),
                     }))
                 }
@@ -446,6 +462,7 @@ impl Coordinator<Initialized> {
             event_store: self.event_store,
             transaction: self.transaction,
             stats: self.stats,
+            wait_handler: self.wait_handler,
             phantom: PhantomData,
         })
     }
@@ -453,7 +470,6 @@ impl Coordinator<Initialized> {
     #[instrument(level = "trace", skip(self))]
     async fn pre_accept_consensus(&mut self, responses: &[PreAcceptResponse]) -> Result<()> {
         // Collect deps by t_zero and only keep the max t
-        let mut dependencies_inverted = HashMap::new(); // TZero -> MaxT
         for response in responses {
             let t_response = T(MonoTime::try_from(response.timestamp.as_slice())?);
             if t_response > self.transaction.t {
@@ -463,18 +479,13 @@ impl Coordinator<Initialized> {
                 let t = T(MonoTime::try_from(dep.timestamp.as_slice())?);
                 let t_zero = T0(MonoTime::try_from(dep.timestamp_zero.as_slice())?);
                 if t_zero != self.transaction.t_zero {
-                    let entry = dependencies_inverted.entry(t_zero).or_insert(t);
+                    let entry = self.transaction.dependencies.entry(t_zero).or_insert(t);
                     if t > *entry {
                         *entry = t;
                     }
                 }
             }
         }
-        // Invert map to BTreeMap with t -> t_zero
-        self.transaction.dependencies = dependencies_inverted
-            .iter()
-            .map(|(t_zero, t)| (*t, *t_zero))
-            .collect();
 
         // Upsert store
         self.event_store
@@ -525,6 +536,7 @@ impl Coordinator<PreAccepted> {
             event_store: self.event_store,
             transaction: self.transaction,
             stats: self.stats,
+            wait_handler: self.wait_handler,
             phantom: PhantomData,
         })
     }
@@ -533,24 +545,18 @@ impl Coordinator<PreAccepted> {
     async fn accept_consensus(&mut self, responses: &[AcceptResponse]) -> Result<()> {
         // A little bit redundant, but I think the alternative to create a common behavior between responses may be even worse
         // Handle returned dependencies
-        let mut dependencies_inverted = HashMap::new(); // TZero -> MaxT
         for response in responses {
             for dep in response.dependencies.iter() {
                 let t = T(MonoTime::try_from(dep.timestamp.as_slice())?);
                 let t_zero = T0(MonoTime::try_from(dep.timestamp_zero.as_slice())?);
                 if t_zero != self.transaction.t_zero {
-                    let entry = dependencies_inverted.entry(t_zero).or_insert(t);
+                    let entry = self.transaction.dependencies.entry(t_zero).or_insert(t);
                     if t > *entry {
                         *entry = t;
                     }
                 }
             }
         }
-        // Invert map to BTreeMap with t -> t_zero
-        self.transaction.dependencies = dependencies_inverted
-            .iter()
-            .map(|(t_zero, t)| (*t, *t_zero))
-            .collect();
 
         // Mut state and update entry
         self.transaction.state = State::Accepted;
@@ -589,6 +595,7 @@ impl Coordinator<Accepted> {
             event_store: self.event_store,
             transaction: self.transaction,
             stats: self.stats,
+            wait_handler: self.wait_handler,
             phantom: PhantomData,
         })
     }
@@ -602,16 +609,17 @@ impl Coordinator<Accepted> {
             .upsert((&self.transaction).into())
             .await;
 
-        Box::pin(await_dependencies(
-            self.node.clone(),
-            self.event_store.clone(),
-            &self.transaction.dependencies,
-            self.network_interface.clone(),
-            self.transaction.t,
-            self.stats.clone(),
-            true,
-        ))
-        .await?;
+        todo!();
+        // Box::pin(await_dependencies(
+        //     self.node.clone(),
+        //     self.event_store.clone(),
+        //     &self.transaction.dependencies,
+        //     self.network_interface.clone(),
+        //     self.transaction.t,
+        //     self.stats.clone(),
+        //     true,
+        // ))
+        // .await?;
 
         Ok(())
     }
@@ -640,6 +648,7 @@ impl Coordinator<Committed> {
             event_store: self.event_store,
             transaction: self.transaction,
             stats: self.stats,
+            wait_handler: self.wait_handler,
             phantom: PhantomData,
         })
     }
@@ -666,29 +675,33 @@ mod tests {
         event_store::{Event, EventStore},
         tests::NetworkMock,
         utils::{Ballot, T, T0},
+        wait_handler::WaitHandler,
     };
     use bytes::Bytes;
     use consensus_transport::{
         consensus_transport::{Dependency, PreAcceptResponse, State},
-        network::NodeInfo,
+        network::{self, NodeInfo},
     };
     use diesel_ulid::DieselUlid;
     use monotime::MonoTime;
-    use std::{collections::BTreeMap, sync::Arc, vec};
+    use std::{collections::HashMap, sync::Arc, vec};
     use tokio::sync::Mutex;
 
     #[tokio::test]
     async fn init_test() {
         let event_store = Arc::new(Mutex::new(EventStore::init(None, 1)));
+
+        let network = Arc::new(NetworkMock::default());
         let coordinator = Coordinator::<Initialized>::new(
             Arc::new(NodeInfo {
                 id: DieselUlid::generate(),
                 serial: 0,
             }),
-            event_store,
-            Arc::new(NetworkMock::default()),
+            event_store.clone(),
+            network.clone(),
             Bytes::from("test"),
             Arc::new(Default::default()),
+            WaitHandler::new(event_store, network),
         )
         .await;
         assert_eq!(coordinator.transaction.state, State::PreAccepted);
@@ -708,18 +721,21 @@ mod tests {
             transaction: Bytes::new(),
             t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
             t: T(MonoTime::new_with_time(10u128, 0, 0)),
-            dependencies: BTreeMap::default(),
+            dependencies: HashMap::default(),
             ballot: Ballot::default(),
         };
+
+        let network = Arc::new(NetworkMock::default());
         let mut coordinator = Coordinator::<Initialized> {
             node: Arc::new(NodeInfo {
                 id: DieselUlid::generate(),
                 serial: 0,
             }),
-            network_interface: Arc::new(NetworkMock::default()),
+            network_interface: network.clone(),
             event_store: event_store.clone(),
             transaction: state_machine.clone(),
             stats: Arc::new(Default::default()),
+            wait_handler: WaitHandler::new(event_store.clone(), network),
             phantom: Default::default(),
         };
 
@@ -743,14 +759,11 @@ mod tests {
         assert_eq!(
             event_store.lock().await.events.iter().next().unwrap().1,
             &Event {
-                state: tokio::sync::watch::Sender::new((
-                    State::PreAccepted,
-                    T(MonoTime::new_with_time(10u128, 0, 0))
-                )),
+                state: State::PreAccepted,
                 event: Bytes::new(),
                 t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
                 t: T(MonoTime::new_with_time(10u128, 0, 0)),
-                dependencies: BTreeMap::default(),
+                dependencies: HashMap::default(),
                 ballot: Ballot::default(),
             }
         );
@@ -806,19 +819,19 @@ mod tests {
             transaction: Bytes::new(),
             t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
             t: T(MonoTime::new_with_time(10u128, 0, 0)),
-            dependencies: BTreeMap::from_iter(
+            dependencies: HashMap::from_iter(
                 [
                     (
-                        T(MonoTime::new_with_time(1u128, 0, 0)),
                         T0(MonoTime::new_with_time(1u128, 0, 0)),
+                        T(MonoTime::new_with_time(1u128, 0, 0)),
                     ),
                     (
-                        T(MonoTime::new_with_time(2u128, 0, 0)),
                         T0(MonoTime::new_with_time(2u128, 0, 0)),
+                        T(MonoTime::new_with_time(2u128, 0, 0)),
                     ),
                     (
-                        T(MonoTime::new_with_time(3u128, 0, 0)),
                         T0(MonoTime::new_with_time(3u128, 0, 0)),
+                        T(MonoTime::new_with_time(3u128, 0, 0)),
                     ),
                 ]
                 .iter()
@@ -834,27 +847,24 @@ mod tests {
         assert_eq!(
             event_store.lock().await.events.iter().next().unwrap().1,
             &Event {
-                state: tokio::sync::watch::Sender::new((
-                    State::PreAccepted,
-                    T(MonoTime::new_with_time(10u128, 0, 0))
-                )),
+                state: State::PreAccepted,
                 event: Bytes::new(),
                 t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
                 t: T(MonoTime::new_with_time(10u128, 0, 0)),
-                dependencies: BTreeMap::from_iter(
+                dependencies: HashMap::from_iter(
                     [
                         (
+                            T0(MonoTime::new_with_time(1u128, 0, 0)),
                             T(MonoTime::new_with_time(1u128, 0, 0)),
-                            T0(MonoTime::new_with_time(1u128, 0, 0))
                         ),
                         (
+                            T0(MonoTime::new_with_time(2u128, 0, 0)),
                             T(MonoTime::new_with_time(2u128, 0, 0)),
-                            T0(MonoTime::new_with_time(2u128, 0, 0))
                         ),
                         (
+                            T0(MonoTime::new_with_time(3u128, 0, 0)),
                             T(MonoTime::new_with_time(3u128, 0, 0)),
-                            T0(MonoTime::new_with_time(3u128, 0, 0))
-                        )
+                        ),
                     ]
                     .iter()
                     .cloned()
@@ -866,25 +876,28 @@ mod tests {
 
     #[tokio::test]
     async fn pre_accepted_slow_path_test() {
-        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1 )));
+        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1)));
 
         let state_machine = TransactionStateMachine {
             state: State::PreAccepted,
             transaction: Bytes::new(),
             t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
             t: T(MonoTime::new_with_time(10u128, 0, 0)),
-            dependencies: BTreeMap::default(),
+            dependencies: HashMap::default(),
             ballot: Ballot::default(),
         };
+
+        let network = Arc::new(NetworkMock::default());
         let mut coordinator = Coordinator {
             node: Arc::new(NodeInfo {
                 id: DieselUlid::generate(),
                 serial: 0,
             }),
-            network_interface: Arc::new(NetworkMock::default()),
+            network_interface: network.clone(),
             event_store: event_store.clone(),
             transaction: state_machine.clone(),
             stats: Arc::new(Default::default()),
+            wait_handler: WaitHandler::new(event_store.clone(), network),
             phantom: Default::default(),
         };
 
@@ -919,16 +932,13 @@ mod tests {
         assert_eq!(
             event_store.lock().await.events.iter().next().unwrap().1,
             &Event {
-                state: tokio::sync::watch::Sender::new((
-                    State::PreAccepted,
-                    T(MonoTime::new_with_time(12u128, 0, 1))
-                )),
+                state: State::PreAccepted,
                 event: Bytes::new(),
                 t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
                 t: T(MonoTime::new_with_time(12u128, 0, 1)),
-                dependencies: BTreeMap::from_iter([(
+                dependencies: HashMap::from_iter([(
+                    T0(MonoTime::new_with_time(11u128, 0, 1)),
                     T(MonoTime::new_with_time(13u128, 0, 1)),
-                    T0(MonoTime::new_with_time(11u128, 0, 1))
                 ),]),
                 ballot: Ballot::default(),
             }

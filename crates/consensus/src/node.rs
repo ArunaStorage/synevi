@@ -1,7 +1,7 @@
-use crate::coordinator::CoordinatorIterator;
 use crate::event_store::EventStore;
 use crate::reorder_buffer::ReorderBuffer;
 use crate::replica::ReplicaConfig;
+use crate::{coordinator::CoordinatorIterator, wait_handler::WaitHandler};
 use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::network::{Network, NodeInfo};
@@ -21,6 +21,7 @@ pub struct Node {
     info: Arc<NodeInfo>,
     network: Arc<dyn Network + Send + Sync>,
     event_store: Arc<Mutex<EventStore>>,
+    wait_handler: Arc<WaitHandler>,
     stats: Arc<Stats>,
     semaphore: Arc<tokio::sync::Semaphore>,
 }
@@ -53,12 +54,15 @@ impl Node {
             reorder_clone.run().await.unwrap();
         });
 
+        let wait_handler = WaitHandler::new(event_store.clone(), network.clone());
+
         let replica = Arc::new(ReplicaConfig {
-            node_info: node_name.clone(),
+            _node_info: node_name.clone(),
             event_store: event_store.clone(),
             network: network.clone(),
             stats: stats.clone(),
             reorder_buffer,
+            wait_handler: wait_handler.clone(),
         });
         // Spawn tonic server
         network.spawn_server(replica).await?;
@@ -70,6 +74,7 @@ impl Node {
             network,
             stats,
             semaphore: Arc::new(tokio::sync::Semaphore::new(1000)),
+            wait_handler,
         })
     }
 
@@ -88,6 +93,7 @@ impl Node {
             interface,
             transaction,
             self.stats.clone(),
+            self.wait_handler.clone(),
         )
         .await;
 
@@ -169,6 +175,7 @@ mod tests {
             interface,
             Bytes::from("Recovery transaction"),
             coordinator.stats.clone(),
+            coordinator.wait_handler.clone(),
         )
         .await;
         coordinator_iter.next().await.unwrap();
@@ -234,6 +241,7 @@ mod tests {
                 coordinator.network.get_interface().await,
                 Bytes::from("Recovery transaction"),
                 coordinator.stats.clone(),
+                coordinator.wait_handler.clone(),
             )
             .await;
             while coordinator_iter.next().await.unwrap().is_some() {
@@ -264,7 +272,7 @@ mod tests {
             .events
             .clone()
             .iter()
-            .all(|(_, e)| (e.state.borrow()).0 == State::Applied));
+            .all(|(_, e)| e.state == State::Applied));
 
         let mut got_mismatch = false;
         for node in nodes {
@@ -284,7 +292,7 @@ mod tests {
                 .events
                 .clone()
                 .iter()
-                .all(|(_, e)| (e.state.borrow()).0 == State::Applied));
+                .all(|(_, e)| e.state == State::Applied));
             assert_eq!(coordinator_store.len(), node_store.len());
             if coordinator_store != node_store {
                 println!("Node: {:?}", node.get_info());
