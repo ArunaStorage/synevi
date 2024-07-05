@@ -1,5 +1,6 @@
 use crate::event_store::{Event, EventStore};
 use crate::node::Stats;
+use crate::reorder_buffer::ReorderBuffer;
 use crate::utils::{await_dependencies, from_dependency, Ballot, T, T0};
 use anyhow::Result;
 use bytes::Bytes;
@@ -7,12 +8,9 @@ use consensus_transport::consensus_transport::*;
 use consensus_transport::network::{Network, NodeInfo};
 use consensus_transport::replica::Replica;
 use monotime::MonoTime;
-use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{watch, Mutex, Notify};
-use tokio::time::timeout;
+use tokio::sync::{oneshot, watch, Mutex};
 use tracing::instrument;
 
 #[derive(Debug)]
@@ -21,7 +19,7 @@ pub struct ReplicaConfig {
     pub network: Arc<dyn Network + Send + Sync>,
     pub event_store: Arc<Mutex<EventStore>>,
     pub stats: Arc<Stats>,
-    pub reorder_buffer: Arc<Mutex<BTreeMap<T0, Arc<Notify>>>>,
+    pub reorder_buffer: Arc<ReorderBuffer>,
 }
 
 #[async_trait::async_trait]
@@ -32,11 +30,11 @@ impl Replica for ReplicaConfig {
         request: PreAcceptRequest,
         node_serial: u16,
     ) -> Result<PreAcceptResponse> {
-        let ballot = self
-            .event_store
-            .lock()
-            .await
-            .get_ballot(&T0(MonoTime::try_from(request.timestamp_zero.as_slice())?));
+        let t0 = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
+
+        // TODO(perf): Remove the lock here
+        // Creates contention on the event store
+        let ballot = self.event_store.lock().await.get_ballot(&t0);
         if ballot != Ballot::default() {
             return Ok(PreAcceptResponse {
                 nack: true,
@@ -45,48 +43,14 @@ impl Replica for ReplicaConfig {
         }
 
         let waiting_time = self.network.get_waiting_time(node_serial).await;
-        
-        let notify = Arc::new(Notify::new());
-        let notify_future = notify.notified();
 
-        let t0 = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
-        self.reorder_buffer.lock().await.insert(t0, notify.clone());
+        let (sx, rx) = oneshot::channel();
 
-        if timeout(Duration::from_micros(waiting_time), notify_future)
-            .await
-            .is_err()
-        {
-            for (_, notify) in self
-                .reorder_buffer
-                .lock()
-                .await
-                .iter()
-                .take_while(|(other_t0, _)| other_t0 <= &&t0)
-            {
-                notify.notify_waiters();
-            }
-        };
-        //self.reorder_buffer.lock().await.pop_first()
-
-        // Put request into_reorder buffer
-        // Wait (max latency of majority + skew) - (latency from node)/2
-        // Calculate deps -> all from event_store + deps that would result from the reorder buffer
-
-        // t0-2, t0-4, t-06, t-01, t-03, t-05, t-07
-        //
-
-        // timeout || wait_for(|inner| inner.is_some())
-        // ? timeout oder aufgeweckt..
-        // Wenn timeout -> Wecke buffer[0] und sag dem ich wars (T0)
-        // wait_for(|inner| inner.is_some())
-        
-
-        let (deps, t) = self
-            .event_store
-            .lock()
-            .await
-            .pre_accept(t0, request.event.into(), self.node_info.serial)
+        self.reorder_buffer
+            .send_msg(t0, sx, request.event.into(), waiting_time)
             .await?;
+
+        let (t, deps) = rx.await?;
 
         // Remove mich aus buffer
         // wenn ich geweckt wurde && T0 != Ich -> buffer[0].awake
@@ -165,7 +129,6 @@ impl Replica for ReplicaConfig {
             false,
         )
         .await?;
-
         Ok(CommitResponse {})
     }
 
@@ -225,7 +188,7 @@ impl Replica for ReplicaConfig {
 
             if matches!(event.state.borrow().0, State::Undefined) {
                 event.t = event_store_lock
-                    .pre_accept(t_zero, request.event.into(), self.node_info.serial)
+                    .pre_accept(t_zero, request.event.into())
                     .await?
                     .1;
             };
@@ -243,7 +206,7 @@ impl Replica for ReplicaConfig {
             })
         } else {
             let (_, t) = event_store_lock
-                .pre_accept(t_zero, request.event.into(), self.node_info.serial)
+                .pre_accept(t_zero, request.event.into())
                 .await?;
             let recover_deps = event_store_lock.get_recover_deps(&t, &t_zero).await?;
             self.stats.total_recovers.fetch_add(1, Ordering::Relaxed);
@@ -263,6 +226,7 @@ impl Replica for ReplicaConfig {
 #[cfg(test)]
 mod tests {
     use crate::event_store::{Event, EventStore};
+    use crate::reorder_buffer::ReorderBuffer;
     use crate::replica::ReplicaConfig;
     use crate::tests;
     use crate::utils::{Ballot, T, T0};
@@ -277,7 +241,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_recovery() {
-        let event_store = Arc::new(Mutex::new(EventStore::init(None)));
+        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1)));
 
         let conflicting_t0 = MonoTime::new(0, 0);
         event_store
@@ -303,7 +267,7 @@ mod tests {
             network: network.clone(),
             event_store: event_store.clone(),
             stats: Arc::new(Default::default()),
-            reorder_buffer: Arc::new(Mutex::new(BTreeMap::new())),
+            reorder_buffer: ReorderBuffer::new(event_store.clone()),
         };
 
         let t0 = conflicting_t0.next().into_time();

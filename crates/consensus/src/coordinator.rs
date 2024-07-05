@@ -679,7 +679,7 @@ mod tests {
 
     #[tokio::test]
     async fn init_test() {
-        let event_store = Arc::new(Mutex::new(EventStore::init(None)));
+        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1)));
         let coordinator = Coordinator::<Initialized>::new(
             Arc::new(NodeInfo {
                 id: DieselUlid::generate(),
@@ -701,7 +701,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_accepted_fast_path_test() {
-        let event_store = Arc::new(Mutex::new(EventStore::init(None)));
+        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1)));
 
         let state_machine = TransactionStateMachine {
             state: State::PreAccepted,
@@ -866,7 +866,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_accepted_slow_path_test() {
-        let event_store = Arc::new(Mutex::new(EventStore::init(None)));
+        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1 )));
 
         let state_machine = TransactionStateMachine {
             state: State::PreAccepted,

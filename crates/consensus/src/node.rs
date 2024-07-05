@@ -1,11 +1,11 @@
 use crate::coordinator::CoordinatorIterator;
 use crate::event_store::EventStore;
+use crate::reorder_buffer::ReorderBuffer;
 use crate::replica::ReplicaConfig;
 use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::network::{Network, NodeInfo};
 use diesel_ulid::DieselUlid;
-use std::collections::BTreeMap;
 use std::sync::{atomic::AtomicU64, Arc};
 use tokio::sync::Mutex;
 use tracing::instrument;
@@ -38,7 +38,7 @@ impl Node {
         db_path: Option<String>,
     ) -> Result<Self> {
         let node_name = Arc::new(NodeInfo { id, serial });
-        let event_store = Arc::new(Mutex::new(EventStore::init(db_path)));
+        let event_store = Arc::new(Mutex::new(EventStore::init(db_path, serial)));
 
         let stats = Arc::new(Stats {
             total_requests: AtomicU64::new(0),
@@ -46,12 +46,19 @@ impl Node {
             total_recovers: AtomicU64::new(0),
         });
 
+        let reorder_buffer = ReorderBuffer::new(event_store.clone());
+
+        let reorder_clone = reorder_buffer.clone();
+        tokio::spawn(async move {
+            reorder_clone.run().await.unwrap();
+        });
+
         let replica = Arc::new(ReplicaConfig {
             node_info: node_name.clone(),
             event_store: event_store.clone(),
             network: network.clone(),
             stats: stats.clone(),
-            reorder_buffer: Arc::new(Mutex::new(BTreeMap::default())),
+            reorder_buffer,
         });
         // Spawn tonic server
         network.spawn_server(replica).await?;
@@ -62,7 +69,7 @@ impl Node {
             event_store,
             network,
             stats,
-            semaphore: Arc::new(tokio::sync::Semaphore::new(20)),
+            semaphore: Arc::new(tokio::sync::Semaphore::new(1000)),
         })
     }
 

@@ -73,8 +73,6 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use crate::Database;
-    use bytes::Bytes;
 
     #[test]
     fn test_db() {

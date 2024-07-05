@@ -15,6 +15,16 @@ impl IntoInner<PreAcceptResponse> for crate::network::BroadcastResponse {
         }
     }
 }
+
+impl IntoInner<PreAcceptResponse> for &crate::network::BroadcastResponse {
+    fn into_inner(self) -> anyhow::Result<PreAcceptResponse> {
+        if let crate::network::BroadcastResponse::PreAccept(response) = self {
+            Ok(response.clone())
+        } else {
+            Err(anyhow!("Invalid conversion"))
+        }
+    }
+}
 impl IntoInner<AcceptResponse> for crate::network::BroadcastResponse {
     fn into_inner(self) -> anyhow::Result<AcceptResponse> {
         if let crate::network::BroadcastResponse::Accept(response) = self {

@@ -27,6 +27,7 @@ pub struct EventStore {
     pub(crate) mappings: BTreeMap<T, T0>, // Key: t, value t0
     pub last_applied: T,                  // t of last applied entry
     pub(crate) latest_t0: T0,             // last created or recognized t0
+    pub node_serial: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -81,13 +82,14 @@ pub(crate) struct RecoverDependencies {
 
 impl EventStore {
     #[instrument(level = "trace")]
-    pub fn init(path: Option<String>) -> Self {
+    pub fn init(path: Option<String>, node_serial: u16) -> Self {
         EventStore {
             events: BTreeMap::default(),
             mappings: BTreeMap::default(),
             last_applied: T::default(),
             latest_t0: T0::default(),
             database: path.map(|p| Database::new(p).unwrap()),
+            node_serial,
         }
     }
 
@@ -138,14 +140,13 @@ impl EventStore {
         &mut self,
         t_zero: T0,
         transaction: Bytes,
-        node_serial: u16,
     ) -> Result<(Vec<Dependency>, T)> {
         let (t, deps) = {
             let t = T(if let Some((last_t, _)) = self.mappings.last_key_value() {
                 if **last_t > *t_zero {
                     // This unwrap will not panic
                     t_zero
-                        .next_with_guard_and_node(last_t, node_serial)
+                        .next_with_guard_and_node(last_t, self.node_serial)
                         .into_time()
                 } else {
                     *t_zero
