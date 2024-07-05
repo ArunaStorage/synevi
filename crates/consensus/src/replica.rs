@@ -117,7 +117,6 @@ impl Replica for ReplicaConfig {
                 request.event.into(),
                 WaitAction::CommitBefore,
                 notify.clone(),
-                10000,
             )
             .await?;
         notify_future.await;
@@ -142,9 +141,8 @@ impl Replica for ReplicaConfig {
                 t,
                 deps,
                 transaction,
-                WaitAction::CommitBefore,
+                WaitAction::ApplyAfter,
                 notify.clone(),
-                10000,
             )
             .await?;
         notify_future.await;

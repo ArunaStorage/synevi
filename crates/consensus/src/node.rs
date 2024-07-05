@@ -55,6 +55,10 @@ impl Node {
         });
 
         let wait_handler = WaitHandler::new(event_store.clone(), network.clone());
+        let wait_handler_clone = wait_handler.clone();
+        tokio::spawn(async move {
+            wait_handler_clone.run().await.unwrap();
+        });
 
         let replica = Arc::new(ReplicaConfig {
             _node_info: node_name.clone(),

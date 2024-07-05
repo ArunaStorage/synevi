@@ -194,6 +194,7 @@ impl EventStore {
             self.latest_t0 = event.t_zero;
         }
 
+        //println!("T0: {:?}, Old: {:?} new: {:?} @ {}", event.t_zero, old_event.state, event.state, self.node_serial);        
         if event.state < old_event.state {
             return;
         }
@@ -206,6 +207,7 @@ impl EventStore {
             old_event.t = event.t;
             old_event.dependencies = event.dependencies;
             old_event.event = event.event;
+            old_event.state = event.state;
             if event.ballot > old_event.ballot {
                 old_event.ballot = event.ballot;
             }

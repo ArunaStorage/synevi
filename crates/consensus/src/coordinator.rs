@@ -2,7 +2,7 @@ use crate::error::ConsensusError;
 use crate::event_store::EventStore;
 use crate::node::Stats;
 use crate::utils::{from_dependency, into_dependency, Ballot, T, T0};
-use crate::wait_handler::WaitHandler;
+use crate::wait_handler::{WaitAction, WaitHandler};
 use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::{
@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use tracing::instrument;
 
 /// An iterator that goes through the different states of the coordinator
@@ -603,23 +603,20 @@ impl Coordinator<Accepted> {
     #[instrument(level = "trace", skip(self))]
     async fn commit_consensus(&mut self) -> Result<()> {
         self.transaction.state = State::Commited;
-        self.event_store
-            .lock()
-            .await
-            .upsert((&self.transaction).into())
-            .await;
 
-        todo!();
-        // Box::pin(await_dependencies(
-        //     self.node.clone(),
-        //     self.event_store.clone(),
-        //     &self.transaction.dependencies,
-        //     self.network_interface.clone(),
-        //     self.transaction.t,
-        //     self.stats.clone(),
-        //     true,
-        // ))
-        // .await?;
+        let notify = Arc::new(Notify::new());
+        let notify_future = notify.notified();
+        self.wait_handler
+            .send_msg(
+                self.transaction.t_zero,
+                self.transaction.t,
+                self.transaction.dependencies.clone(),
+                self.transaction.transaction.clone(),
+                WaitAction::CommitBefore,
+                notify.clone(),
+            )
+            .await?;
+        notify_future.await;
 
         Ok(())
     }

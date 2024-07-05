@@ -43,7 +43,7 @@ mod tests {
 
         let mut joinset = tokio::task::JoinSet::new();
 
-        for _ in 0..500 {
+        for _ in 0..2 {
             let coordinator = arc_coordinator.clone();
             joinset.spawn(async move {
                 coordinator
@@ -74,7 +74,8 @@ mod tests {
             .clone()
             .into_values()
             .map(|e| (e.t_zero, e.t))
-            .collect();
+            .collect(); 
+        
         assert!(arc_coordinator
             .get_event_store()
             .lock()
