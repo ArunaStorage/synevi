@@ -89,7 +89,7 @@ impl Replica for ReplicaConfig {
                     t,
                     state: State::Accepted,
                     event: request.event.into(),
-                    dependencies: from_dependency(request.dependencies.clone())?,
+                    dependencies: from_dependency(&request.dependencies)?,
                     ballot: request_ballot,
                 })
                 .await;
@@ -107,7 +107,7 @@ impl Replica for ReplicaConfig {
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
         //println!("Commit: {:?} @ {:?}", t_zero, self.node_info.serial);
         let t = T(MonoTime::try_from(request.timestamp.as_slice())?);
-        let deps = from_dependency(request.dependencies.clone())?;
+        let deps = from_dependency(&request.dependencies)?;
         let (sx, rx) = tokio::sync::oneshot::channel();
         self.wait_handler
             .send_msg(
@@ -129,7 +129,7 @@ impl Replica for ReplicaConfig {
 
         let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
         let t = T(MonoTime::try_from(request.timestamp.as_slice())?);
-        let deps = from_dependency(request.dependencies.clone())?;
+        let deps = from_dependency(&request.dependencies)?;
 
         let (sx, rx) = tokio::sync::oneshot::channel();
 

@@ -50,7 +50,7 @@ impl From<Ballot> for Vec<u8> {
     }
 }
 
-pub fn into_dependency(map: HashMap<T0, T>) -> Vec<Dependency> {
+pub fn into_dependency(map: &HashMap<T0, T>) -> Vec<Dependency> {
     map.iter()
         .map(|(t_zero, t)| Dependency {
             timestamp: (**t).into(),
@@ -59,7 +59,7 @@ pub fn into_dependency(map: HashMap<T0, T>) -> Vec<Dependency> {
         .collect()
 }
 
-pub fn from_dependency(deps: Vec<Dependency>) -> Result<HashMap<T0, T>> {
+pub fn from_dependency(deps: &Vec<Dependency>) -> Result<HashMap<T0, T>> {
     deps.iter()
         .map(
             |Dependency {

@@ -315,25 +315,25 @@ impl Coordinator<Recover> {
                     state_machine.state = State::PreAccepted;
                     state_machine
                         .dependencies
-                        .extend(from_dependency(response.dependencies.clone())?);
+                        .extend(from_dependency(&response.dependencies)?);
                 }
                 State::Accepted if state_machine.state < State::Accepted => {
                     state_machine.t = replica_t;
                     state_machine.state = State::Accepted;
-                    state_machine.dependencies = from_dependency(response.dependencies.clone())?;
+                    state_machine.dependencies = from_dependency(&response.dependencies)?;
                 }
                 State::Accepted
                     if state_machine.state == State::Accepted && replica_t > state_machine.t =>
                 {
                     state_machine.t = replica_t;
-                    state_machine.dependencies = from_dependency(response.dependencies.clone())?;
+                    state_machine.dependencies = from_dependency(&response.dependencies)?;
                 }
                 any_state if any_state > state_machine.state => {
                     state_machine.state = any_state;
                     state_machine.t = replica_t;
                     if state_machine.state >= State::Accepted {
                         state_machine.dependencies =
-                            from_dependency(response.dependencies.clone())?;
+                            from_dependency(&response.dependencies)?;
                     }
                 }
                 _ => {}
@@ -512,7 +512,7 @@ impl Coordinator<PreAccepted> {
                 event: self.transaction.transaction.clone().into(),
                 timestamp_zero: (*self.transaction.t_zero).into(),
                 timestamp: (*self.transaction.t).into(),
-                dependencies: into_dependency(self.transaction.dependencies.clone()),
+                dependencies: into_dependency(&self.transaction.dependencies),
             };
             let accepted_responses = self
                 .network_interface
@@ -578,7 +578,7 @@ impl Coordinator<Accepted> {
             event: self.transaction.transaction.to_vec(),
             timestamp_zero: (*self.transaction.t_zero).into(),
             timestamp: (*self.transaction.t).into(),
-            dependencies: into_dependency(self.transaction.dependencies.clone()),
+            dependencies: into_dependency(&self.transaction.dependencies),
         };
         let network_interface_clone = self.network_interface.clone();
 
@@ -631,7 +631,7 @@ impl Coordinator<Committed> {
             event: self.transaction.transaction.to_vec(),
             timestamp: (*self.transaction.t).into(),
             timestamp_zero: (*self.transaction.t_zero).into(),
-            dependencies: into_dependency(self.transaction.dependencies.clone()),
+            dependencies: into_dependency(&self.transaction.dependencies),
             //result: vec![], // Theoretically not needed right?
         };
 

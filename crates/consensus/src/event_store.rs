@@ -161,7 +161,7 @@ impl EventStore {
             t,
             state: State::PreAccepted,
             event: transaction,
-            dependencies: from_dependency(deps.clone())?,
+            dependencies: from_dependency(&deps)?,
             ballot: Ballot::default(),
         };
         self.upsert(event).await;
