@@ -4,7 +4,6 @@ use crate::{
 };
 use anyhow::Result;
 use async_channel::{Receiver, Sender};
-use bytes::Bytes;
 use std::{
     collections::BTreeMap,
     sync::Arc,

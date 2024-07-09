@@ -1,6 +1,5 @@
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
     use consensus::node::Node;
     use consensus::utils::{T, T0};
     use consensus_transport::consensus_transport::State;
@@ -9,7 +8,6 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
-    use std::time::Duration;
     use tokio::runtime::Builder;
 
     #[tokio::test(flavor = "multi_thread")]

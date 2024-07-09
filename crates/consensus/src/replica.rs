@@ -4,7 +4,6 @@ use crate::reorder_buffer::ReorderBuffer;
 use crate::utils::{from_dependency, into_dependency, Ballot, T, T0};
 use crate::wait_handler::{WaitAction, WaitHandler};
 use anyhow::Result;
-use bytes::Bytes;
 use consensus_transport::consensus_transport::*;
 use consensus_transport::network::{Network, NodeInfo};
 use consensus_transport::replica::Replica;
@@ -50,7 +49,7 @@ impl Replica for ReplicaConfig {
         let (sx, rx) = oneshot::channel();
 
         self.reorder_buffer
-            .send_msg(t0, sx, request.event.into(), waiting_time)
+            .send_msg(t0, sx, request.event, waiting_time)
             .await?;
 
         let (t, deps) = rx.await?;
@@ -86,7 +85,7 @@ impl Replica for ReplicaConfig {
                     t_zero,
                     t,
                     state: State::Accepted,
-                    event: request.event.into(),
+                    event: request.event,
                     dependencies: from_dependency(request.dependencies)?,
                     ballot: request_ballot,
                 })
@@ -112,7 +111,7 @@ impl Replica for ReplicaConfig {
                 t_zero,
                 t,
                 deps,
-                request.event.into(),
+                request.event,
                 WaitAction::CommitBefore,
                 sx,
             )
@@ -158,7 +157,7 @@ impl Replica for ReplicaConfig {
 
             if matches!(event.state, State::Undefined) {
                 event.t = event_store_lock
-                    .pre_accept(t_zero, request.event.into())
+                    .pre_accept(t_zero, request.event)
                     .await?
                     .1;
             };
@@ -176,7 +175,7 @@ impl Replica for ReplicaConfig {
             })
         } else {
             let (_, t) = event_store_lock
-                .pre_accept(t_zero, request.event.into())
+                .pre_accept(t_zero, request.event)
                 .await?;
             let recover_deps = event_store_lock.get_recover_deps(&t, &t_zero).await?;
             self.stats.total_recovers.fetch_add(1, Ordering::Relaxed);

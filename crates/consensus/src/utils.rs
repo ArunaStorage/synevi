@@ -18,13 +18,13 @@ impl TryFrom<Bytes> for T0 {
 impl TryFrom<&[u8]> for T0 {
     type Error = anyhow::Error;
     fn try_from(value: &[u8]) -> Result<Self> {
-        Ok(T0(MonoTime::try_from(value.as_ref())?))
+        Ok(T0(MonoTime::try_from(value)?))
     }
 }
 
-impl Into<Bytes> for T0 {
-    fn into(self) -> Bytes {
-        self.0.into()
+impl From<T0> for Bytes {
+    fn from(val: T0) -> Self {
+        val.0.into()
     }
 }
 
@@ -61,13 +61,13 @@ impl TryFrom<Bytes> for T {
 impl TryFrom<&[u8]> for T {
     type Error = anyhow::Error;
     fn try_from(value: &[u8]) -> Result<Self> {
-        Ok(T(MonoTime::try_from(value.as_ref())?))
+        Ok(T(MonoTime::try_from(value)?))
     }
 }
 
-impl Into<Bytes> for T {
-    fn into(self) -> Bytes {
-        self.0.into()
+impl From<T> for Bytes {
+    fn from(val: T) -> Self {
+        val.0.into()
     }
 }
 
@@ -93,9 +93,9 @@ impl TryFrom<Bytes> for Ballot {
     }
 }
 
-impl Into<Bytes> for Ballot {
-    fn into(self) -> Bytes {
-        self.0.into()
+impl From<Ballot> for Bytes {
+    fn from(val: Ballot) -> Self {
+        val.0.into()
     }
 }
 
@@ -103,7 +103,7 @@ impl Into<Bytes> for Ballot {
 impl TryFrom<&[u8]> for Ballot {
     type Error = anyhow::Error;
     fn try_from(value: &[u8]) -> Result<Self> {
-        Ok(Ballot(MonoTime::try_from(value.as_ref())?))
+        Ok(Ballot(MonoTime::try_from(value)?))
     }
 }
 

@@ -5,7 +5,6 @@ use crate::utils::{from_dependency, into_dependency, Ballot, T, T0};
 use crate::wait_handler::{WaitAction, WaitHandler};
 use ahash::RandomState;
 use anyhow::Result;
-use bytes::Bytes;
 use consensus_transport::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, CommitRequest, PreAcceptRequest,
     PreAcceptResponse, RecoverRequest, RecoverResponse, State,
@@ -502,7 +501,7 @@ impl Coordinator<PreAccepted> {
             self.stats.total_accepts.fetch_add(1, Ordering::Relaxed);
             let accepted_request = AcceptRequest {
                 ballot: self.transaction.ballot.into(),
-                event: self.transaction.transaction.clone().into(),
+                event: self.transaction.transaction.clone(),
                 timestamp_zero: (*self.transaction.t_zero).into(),
                 timestamp: (*self.transaction.t).into(),
                 dependencies: into_dependency(&self.transaction.dependencies),

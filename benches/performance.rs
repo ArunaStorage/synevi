@@ -1,4 +1,3 @@
-use bytes::Bytes;
 use consensus::node::Node;
 use criterion::{criterion_group, criterion_main, Criterion};
 use diesel_ulid::DieselUlid;
@@ -34,7 +33,7 @@ async fn prepare() -> Arc<Node> {
 async fn parallel_execution(coordinator: Arc<Node>) {
     let mut joinset = tokio::task::JoinSet::new();
 
-    for _ in 0..100 {
+    for _ in 0..1000 {
         let coordinator = coordinator.clone();
         joinset.spawn(async move {
             coordinator

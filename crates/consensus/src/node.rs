@@ -3,7 +3,6 @@ use crate::reorder_buffer::ReorderBuffer;
 use crate::replica::ReplicaConfig;
 use crate::{coordinator::CoordinatorIterator, wait_handler::WaitHandler};
 use anyhow::Result;
-use bytes::Bytes;
 use consensus_transport::network::{Network, NodeInfo};
 use diesel_ulid::DieselUlid;
 use std::sync::{atomic::AtomicU64, Arc};

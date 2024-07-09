@@ -5,7 +5,6 @@ use crate::{
 use ahash::RandomState;
 use anyhow::Result;
 use async_channel::{Receiver, Sender};
-use bytes::Bytes;
 use consensus_transport::{consensus_transport::State, network::Network};
 use std::{
     collections::{HashMap, HashSet},
@@ -103,7 +102,7 @@ impl WaitHandler {
                         self.upsert_event(&msg).await;
                         waiter_state
                             .committed
-                            .insert(msg.t_zero.clone(), msg.t.clone());
+                            .insert(msg.t_zero, msg.t);
                         let mut to_apply =
                             waiter_state.remove_from_waiter_commit(&msg.t_zero, &msg.t);
                         while let Some(mut apply) = to_apply.pop() {
@@ -202,10 +201,8 @@ impl WaiterState {
                         if let Some(sender) = msg.notify.take() {
                             let _ = sender.send(());
                         }
-                    } else {
-                        if let Some(msg) = event.wait_message.take() {
-                            apply_deps.push(msg);
-                        }
+                    } else if let Some(msg) = event.wait_message.take() {
+                        apply_deps.push(msg);
                     }
                     return false;
                 }
@@ -228,10 +225,8 @@ impl WaiterState {
                         if let Some(sender) = msg.notify.take() {
                             let _ = sender.send(());
                         }
-                    } else {
-                        if let Some(msg) = event.wait_message.take() {
-                            to_apply.push(msg);
-                        }
+                    } else if let Some(msg) = event.wait_message.take() {
+                        to_apply.push(msg);
                     }
                     return false;
                 }
@@ -254,8 +249,8 @@ impl WaiterState {
         };
         if let Some(wait_message) = &mut wait_dep.wait_message {
             for dep_t0 in wait_message.deps.iter() {
-                if !self.applied.contains(&dep_t0) {
-                    if let Some(stored_t) = self.committed.get(&dep_t0) {
+                if !self.applied.contains(dep_t0) {
+                    if let Some(stored_t) = self.committed.get(dep_t0) {
                         // Your T is lower than the dep commited t -> no wait necessary
                         if &wait_message.t < stored_t {
                             continue;
@@ -298,8 +293,8 @@ impl WaiterState {
         };
         if let Some(wait_message) = &wait_dep.wait_message {
             for dep_t0 in wait_message.deps.iter() {
-                if !self.applied.contains(&dep_t0) {
-                    if let Some(stored_t) = self.committed.get(&dep_t0) {
+                if !self.applied.contains(dep_t0) {
+                    if let Some(stored_t) = self.committed.get(dep_t0) {
                         // Your T is lower than the dep commited t -> no wait necessary
                         if &wait_message.t < stored_t {
                             continue;
@@ -349,11 +344,11 @@ mod tests {
         let t0_2 = T0(MonoTime::new_with_time(2u128, 0, 0));
         let t_1 = T(MonoTime::new_with_time(1u128, 0, 0));
         let t_2 = T(MonoTime::new_with_time(2u128, 0, 0));
-        let deps_2 = HashSet::from_iter([t0_1.clone()]);
+        let deps_2 = HashSet::from_iter([t0_1]);
         wait_handler
             .send_msg(
-                t0_2.clone(),
-                t_2.clone(),
+                t0_2,
+                t_2,
                 deps_2.clone(),
                 Vec::new(),
                 WaitAction::CommitBefore,
