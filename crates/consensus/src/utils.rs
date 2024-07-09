@@ -1,11 +1,32 @@
 use crate::{coordinator::TransactionStateMachine, event_store::Event};
+use ahash::RandomState;
 use anyhow::Result;
-use consensus_transport::consensus_transport::Dependency;
+use bytes::{BufMut, Bytes};
 use monotime::MonoTime;
-use std::{collections::HashMap, ops::Deref};
+use std::{collections::HashSet, ops::Deref};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
 pub struct T0(pub MonoTime);
+
+impl TryFrom<Bytes> for T0 {
+    type Error = anyhow::Error;
+    fn try_from(value: Bytes) -> Result<Self> {
+        Ok(T0(MonoTime::try_from(value.as_ref())?))
+    }
+}
+
+impl TryFrom<&[u8]> for T0 {
+    type Error = anyhow::Error;
+    fn try_from(value: &[u8]) -> Result<Self> {
+        Ok(T0(MonoTime::try_from(value.as_ref())?))
+    }
+}
+
+impl Into<Bytes> for T0 {
+    fn into(self) -> Bytes {
+        self.0.into()
+    }
+}
 
 impl Deref for T0 {
     type Target = MonoTime;
@@ -22,10 +43,31 @@ impl From<T0> for Vec<u8> {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
 pub struct T(pub MonoTime);
+
 impl Deref for T {
     type Target = MonoTime;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl TryFrom<Bytes> for T {
+    type Error = anyhow::Error;
+    fn try_from(value: Bytes) -> Result<Self> {
+        Ok(T(MonoTime::try_from(value.as_ref())?))
+    }
+}
+
+impl TryFrom<&[u8]> for T {
+    type Error = anyhow::Error;
+    fn try_from(value: &[u8]) -> Result<Self> {
+        Ok(T(MonoTime::try_from(value.as_ref())?))
+    }
+}
+
+impl Into<Bytes> for T {
+    fn into(self) -> Bytes {
+        self.0.into()
     }
 }
 
@@ -44,36 +86,49 @@ impl Deref for Ballot {
     }
 }
 
+impl TryFrom<Bytes> for Ballot {
+    type Error = anyhow::Error;
+    fn try_from(value: Bytes) -> Result<Self> {
+        Ok(Ballot(MonoTime::try_from(value.as_ref())?))
+    }
+}
+
+impl Into<Bytes> for Ballot {
+    fn into(self) -> Bytes {
+        self.0.into()
+    }
+}
+
+
+impl TryFrom<&[u8]> for Ballot {
+    type Error = anyhow::Error;
+    fn try_from(value: &[u8]) -> Result<Self> {
+        Ok(Ballot(MonoTime::try_from(value.as_ref())?))
+    }
+}
+
+
 impl From<Ballot> for Vec<u8> {
     fn from(val: Ballot) -> Self {
         val.0.into()
     }
 }
 
-pub fn into_dependency(map: &HashMap<T0, T>) -> Vec<Dependency> {
-    map.iter()
-        .map(|(t_zero, t)| Dependency {
-            timestamp: (**t).into(),
-            timestamp_zero: (**t_zero).into(),
-        })
-        .collect()
+pub fn into_dependency(map: &HashSet<T0, RandomState>) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(map.len() * 16);
+    for t0 in map {
+        bytes.put_u128(t0.0.into());
+    }
+    bytes
 }
 
-pub fn from_dependency(deps: &Vec<Dependency>) -> Result<HashMap<T0, T>> {
-    deps.iter()
-        .map(
-            |Dependency {
-                 timestamp,
-                 timestamp_zero,
-             }|
-             -> Result<(T0, T)> {
-                Ok((
-                    T0(MonoTime::try_from(timestamp_zero.as_slice())?),
-                    T(MonoTime::try_from(timestamp.as_slice())?),
-                ))
-            },
-        )
-        .collect()
+pub fn from_dependency(deps: Vec<u8>) -> Result<HashSet<T0, RandomState>> {
+    let mut map = HashSet::default();
+    for i in (0..deps.len()).step_by(16) {
+        let t0 = T0(MonoTime::try_from(&deps[i..i + 16])?);
+        map.insert(t0);
+    }
+    Ok(map)
 }
 
 impl From<&TransactionStateMachine> for Event {

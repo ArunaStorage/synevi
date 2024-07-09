@@ -47,7 +47,7 @@ mod tests {
             let coordinator = arc_coordinator.clone();
             joinset.spawn(async move {
                 coordinator
-                    .transaction(Bytes::from("This is a transaction"))
+                    .transaction(Vec::from("This is a transaction"))
                     .await
             });
         }
@@ -63,9 +63,8 @@ mod tests {
             total,
             recovers
         );
-        return;
 
-        //assert_eq!(recovers, 0);
+        assert_eq!(recovers, 0);
 
         let coordinator_store: BTreeMap<T0, T> = arc_coordinator
             .get_event_store()
@@ -164,8 +163,8 @@ mod tests {
             for _ in 0..1000 {
                 let coordinator1 = arc_coordinator1.clone();
                 let coordinator2 = arc_coordinator2.clone();
-                joinset.spawn(async move { coordinator1.transaction(Bytes::from("C1")).await });
-                joinset.spawn(async move { coordinator2.transaction(Bytes::from("C2")).await });
+                joinset.spawn(async move { coordinator1.transaction(Vec::from("C1")).await });
+                joinset.spawn(async move { coordinator2.transaction(Vec::from("C2")).await });
             }
             while let Some(res) = joinset.join_next().await {
                 res.unwrap().unwrap();
@@ -223,7 +222,7 @@ mod tests {
 
             for _ in 0..1000 {
                 coordinator
-                    .transaction(Bytes::from("This is a transaction"))
+                    .transaction(Vec::from("This is a transaction"))
                     .await
                     .unwrap();
             }

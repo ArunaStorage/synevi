@@ -2,6 +2,7 @@ use crate::{
     event_store::{Event, EventStore},
     utils::{Ballot, T, T0},
 };
+use ahash::RandomState;
 use anyhow::Result;
 use async_channel::{Receiver, Sender};
 use bytes::Bytes;
@@ -26,8 +27,8 @@ pub enum WaitAction {
 pub struct WaitMessage {
     t_zero: T0,
     t: T,
-    deps: HashMap<T0, T>,
-    event: Bytes,
+    deps: HashSet<T0, RandomState>,
+    event: Vec<u8>,
     action: WaitAction,
     notify: Option<oneshot::Sender<()>>,
 }
@@ -43,14 +44,14 @@ pub struct WaitHandler {
 #[derive(Debug)]
 struct WaitDependency {
     wait_message: Option<WaitMessage>,
-    deps: HashSet<T0>,
+    deps: HashSet<T0, RandomState>,
     _started_at: Instant,
 }
 
 struct WaiterState {
-    events: HashMap<T0, WaitDependency>,
-    committed: HashMap<T0, T>,
-    applied: HashSet<T0>,
+    events: HashMap<T0, WaitDependency, RandomState>,
+    committed: HashMap<T0, T, RandomState>,
+    applied: HashSet<T0, RandomState>,
 }
 
 impl WaitHandler {
@@ -71,8 +72,8 @@ impl WaitHandler {
         &self,
         t_zero: T0,
         t: T,
-        deps: HashMap<T0, T>,
-        event: Bytes,
+        deps: HashSet<T0, RandomState>,
+        event: Vec<u8>,
         action: WaitAction,
         notify: oneshot::Sender<()>,
     ) -> Result<()> {
@@ -177,9 +178,9 @@ impl WaitHandler {
 impl WaiterState {
     fn new() -> Self {
         Self {
-            events: HashMap::new(),
-            committed: HashMap::new(),
-            applied: HashSet::new(),
+            events: HashMap::default(),
+            committed: HashMap::default(),
+            applied: HashSet::default(),
         }
     }
 
@@ -248,11 +249,11 @@ impl WaiterState {
         }
         let mut wait_dep = WaitDependency {
             wait_message: Some(wait_message),
-            deps: HashSet::new(),
+            deps: HashSet::default(),
             _started_at: Instant::now(),
         };
         if let Some(wait_message) = &mut wait_dep.wait_message {
-            for (dep_t0, _) in wait_message.deps.iter() {
+            for dep_t0 in wait_message.deps.iter() {
                 if !self.applied.contains(&dep_t0) {
                     if let Some(stored_t) = self.committed.get(&dep_t0) {
                         // Your T is lower than the dep commited t -> no wait necessary
@@ -292,11 +293,11 @@ impl WaiterState {
         }
         let mut wait_dep = WaitDependency {
             wait_message: Some(wait_message),
-            deps: HashSet::new(),
+            deps: HashSet::default(),
             _started_at: Instant::now(),
         };
         if let Some(wait_message) = &wait_dep.wait_message {
-            for (dep_t0, _) in wait_message.deps.iter() {
+            for dep_t0 in wait_message.deps.iter() {
                 if !self.applied.contains(&dep_t0) {
                     if let Some(stored_t) = self.committed.get(&dep_t0) {
                         // Your T is lower than the dep commited t -> no wait necessary
@@ -348,13 +349,13 @@ mod tests {
         let t0_2 = T0(MonoTime::new_with_time(2u128, 0, 0));
         let t_1 = T(MonoTime::new_with_time(1u128, 0, 0));
         let t_2 = T(MonoTime::new_with_time(2u128, 0, 0));
-        let deps_2 = HashMap::from_iter([(t0_1.clone(), t_1.clone())]);
+        let deps_2 = HashSet::from_iter([t0_1.clone()]);
         wait_handler
             .send_msg(
                 t0_2.clone(),
                 t_2.clone(),
                 deps_2.clone(),
-                Bytes::new(),
+                Vec::new(),
                 WaitAction::CommitBefore,
                 sx11,
             )
@@ -364,8 +365,8 @@ mod tests {
             .send_msg(
                 t0_1,
                 t_1,
-                HashMap::new(),
-                Bytes::new(),
+                HashSet::default(),
+                Vec::new(),
                 WaitAction::CommitBefore,
                 sx12,
             )
@@ -376,8 +377,8 @@ mod tests {
             .send_msg(
                 t0_1,
                 t_1,
-                HashMap::new(),
-                Bytes::new(),
+                HashSet::default(),
+                Vec::new(),
                 WaitAction::ApplyAfter,
                 sx21,
             )

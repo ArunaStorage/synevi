@@ -38,7 +38,7 @@ async fn parallel_execution(coordinator: Arc<Node>) {
         let coordinator = coordinator.clone();
         joinset.spawn(async move {
             coordinator
-                .transaction(Bytes::from("This is a transaction"))
+                .transaction(Vec::from("This is a transaction"))
                 .await
         });
     }

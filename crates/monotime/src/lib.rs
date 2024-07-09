@@ -1,5 +1,8 @@
 use anyhow::bail;
 use anyhow::Result;
+use bytes::BufMut;
+use bytes::Bytes;
+use bytes::BytesMut;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -132,6 +135,18 @@ impl MonoTime {
     }
 }
 
+impl From<u128> for MonoTime {
+    fn from(val: u128) -> Self {
+        MonoTime(val)
+    }
+}
+
+impl From<MonoTime> for u128 {
+    fn from(val: MonoTime) -> Self {
+        val.0
+    }
+}
+
 impl From<MonoTime> for [u8; 16] {
     fn from(val: MonoTime) -> Self {
         let mut bytes = [0u8; 16];
@@ -155,6 +170,14 @@ impl TryFrom<&[u8]> for MonoTime {
         }
         let ts = u128::from_be_bytes(value[0..16].try_into()?);
         Ok(MonoTime(ts))
+    }
+}
+
+impl From<MonoTime> for Bytes {
+    fn from(value: MonoTime) -> Self {
+        let mut bytes = BytesMut::with_capacity(16);
+        bytes.put_u128(value.0);
+        bytes.freeze()
     }
 }
 

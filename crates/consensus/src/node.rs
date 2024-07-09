@@ -77,7 +77,7 @@ impl Node {
             event_store,
             network,
             stats,
-            semaphore: Arc::new(tokio::sync::Semaphore::new(100)),
+            semaphore: Arc::new(tokio::sync::Semaphore::new(1000)),
             wait_handler,
         })
     }
@@ -88,7 +88,7 @@ impl Node {
     }
 
     #[instrument(level = "trace", skip(self))]
-    pub async fn transaction(&self, transaction: Bytes) -> Result<()> {
+    pub async fn transaction(&self, transaction: Vec<u8>) -> Result<()> {
         let _permit = self.semaphore.clone().acquire_owned().await?;
         let interface = self.network.get_interface().await;
         let mut coordinator_iter = CoordinatorIterator::new(
@@ -135,7 +135,6 @@ mod tests {
     use crate::coordinator::CoordinatorIterator;
     use crate::node::Node;
     use crate::utils::{T, T0};
-    use bytes::Bytes;
     use consensus_transport::consensus_transport::State;
     use diesel_ulid::DieselUlid;
     use rand::distributions::{Distribution, Uniform};
@@ -177,7 +176,7 @@ mod tests {
             coordinator.info.clone(),
             coordinator.event_store.clone(),
             interface,
-            Bytes::from("Recovery transaction"),
+            Vec::from("Recovery transaction"),
             coordinator.stats.clone(),
             coordinator.wait_handler.clone(),
         )
@@ -189,7 +188,7 @@ mod tests {
         // let applied = coordinator_iter.next().await.unwrap();
 
         arc_coordinator
-            .transaction(Bytes::from("First"))
+            .transaction(Vec::from("First"))
             .await
             .unwrap();
 
@@ -243,7 +242,7 @@ mod tests {
                 coordinator.info.clone(),
                 coordinator.event_store.clone(),
                 coordinator.network.get_interface().await,
-                Bytes::from("Recovery transaction"),
+                Vec::from("Recovery transaction"),
                 coordinator.stats.clone(),
                 coordinator.wait_handler.clone(),
             )
@@ -256,7 +255,7 @@ mod tests {
             }
         }
         coordinator
-            .transaction(Bytes::from("last transaction"))
+            .transaction(Vec::from("last transaction"))
             .await
             .unwrap();
 

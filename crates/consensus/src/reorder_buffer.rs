@@ -5,7 +5,6 @@ use crate::{
 use anyhow::Result;
 use async_channel::{Receiver, Sender};
 use bytes::Bytes;
-use consensus_transport::consensus_transport::Dependency;
 use std::{
     collections::BTreeMap,
     sync::Arc,
@@ -18,8 +17,8 @@ use tokio::{
 
 pub struct ReorderMessage {
     pub t0: T0,
-    pub event: Bytes,
-    pub notify: oneshot::Sender<(T, Vec<Dependency>)>,
+    pub event: Vec<u8>,
+    pub notify: oneshot::Sender<(T, Vec<u8>)>,
     pub latency: u64,
 }
 
@@ -43,8 +42,8 @@ impl ReorderBuffer {
     pub async fn send_msg(
         &self,
         t0: T0,
-        notify: oneshot::Sender<(T, Vec<Dependency>)>,
-        event: Bytes,
+        notify: oneshot::Sender<(T, Vec<u8>)>,
+        event: Vec<u8>,
         latency: u64,
     ) -> Result<()> {
         Ok(self

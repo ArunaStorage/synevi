@@ -1,4 +1,5 @@
 use anyhow::Result;
+use bytes::{BufMut, BytesMut};
 use std::{
     sync::Arc,
     time::{self, Duration, Instant},
@@ -25,9 +26,11 @@ pub async fn get_latency(members: Arc<RwLock<Vec<MemberWithLatency>>>) -> Result
                 .as_nanos();
 
             let now = time::Instant::now();
+            let mut buf = BytesMut::with_capacity(16);
+            buf.put_u128(time);
             let Ok(response) = client
                 .get_time(Request::new(GetTimeRequest {
-                    timestamp: time.to_be_bytes().to_vec(),
+                    timestamp: buf.freeze().to_vec(),
                 }))
                 .await
             else {

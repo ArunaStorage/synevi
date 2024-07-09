@@ -3,16 +3,16 @@ use crate::event_store::EventStore;
 use crate::node::Stats;
 use crate::utils::{from_dependency, into_dependency, Ballot, T, T0};
 use crate::wait_handler::{WaitAction, WaitHandler};
+use ahash::RandomState;
 use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::{
-    AcceptRequest, AcceptResponse, ApplyRequest, CommitRequest, Dependency, PreAcceptRequest,
+    AcceptRequest, AcceptResponse, ApplyRequest, CommitRequest, PreAcceptRequest,
     PreAcceptResponse, RecoverRequest, RecoverResponse, State,
 };
 use consensus_transport::network::{BroadcastRequest, NetworkInterface, NodeInfo};
 use consensus_transport::utils::IntoInner;
-use monotime::MonoTime;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -37,7 +37,7 @@ impl CoordinatorIterator {
         node: Arc<NodeInfo>,
         event_store: Arc<Mutex<EventStore>>,
         network_interface: Arc<dyn NetworkInterface>,
-        transaction: Bytes,
+        transaction: Vec<u8>,
         stats: Arc<Stats>,
         wait_handler: Arc<WaitHandler>,
     ) -> Self {
@@ -167,10 +167,10 @@ pub struct Coordinator<X> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TransactionStateMachine {
     pub state: State,
-    pub transaction: Bytes,
+    pub transaction: Vec<u8>,
     pub t_zero: T0,
     pub t: T,
-    pub dependencies: HashMap<T0, T>,
+    pub dependencies: HashSet<T0, RandomState>,
     pub ballot: Ballot,
 }
 
@@ -180,7 +180,7 @@ impl<X> Coordinator<X> {
         node: Arc<NodeInfo>,
         event_store: Arc<Mutex<EventStore>>,
         network_interface: Arc<dyn NetworkInterface>,
-        transaction: Bytes,
+        transaction: Vec<u8>,
         stats: Arc<Stats>,
         wait_handler: Arc<WaitHandler>,
     ) -> Coordinator<Initialized> {
@@ -232,7 +232,7 @@ impl Coordinator<Recover> {
         let recover_responses = network_interface
             .broadcast(BroadcastRequest::Recover(RecoverRequest {
                 ballot: ballot.into(),
-                event: event.event.to_vec(),
+                event: event.event,
                 timestamp_zero: t0_recover.into(),
             }))
             .await?;
@@ -280,10 +280,10 @@ impl Coordinator<Recover> {
         // Keep track of values to replace
         let mut highest_ballot: Option<Ballot> = None;
         let mut superseding = false;
-        let mut waiting: Vec<Dependency> = Vec::new();
+        let mut waiting: HashSet<T0> = HashSet::new();
 
         for response in responses.iter_mut() {
-            let response_ballot = Ballot(MonoTime::try_from(response.nack.as_slice())?);
+            let response_ballot = Ballot::try_from(response.nack.clone().as_slice())?;
             if response_ballot > Ballot::default() || highest_ballot.is_some() {
                 match highest_ballot.as_mut() {
                     None => {
@@ -297,12 +297,12 @@ impl Coordinator<Recover> {
                 continue;
             }
 
-            let replica_t = T(MonoTime::try_from(response.timestamp.as_slice())?);
+            let replica_t = T::try_from(response.timestamp.clone().as_slice())?;
 
-            if !response.superseding.is_empty() {
+            if response.superseding {
                 superseding = true;
             }
-            waiting.extend(std::mem::take(&mut response.wait));
+            waiting.extend(from_dependency(response.wait.clone())?);
 
             // Update state
             let replica_state = response.local_state();
@@ -315,25 +315,25 @@ impl Coordinator<Recover> {
                     state_machine.state = State::PreAccepted;
                     state_machine
                         .dependencies
-                        .extend(from_dependency(&response.dependencies)?);
+                        .extend(from_dependency(response.dependencies.clone())?);
                 }
                 State::Accepted if state_machine.state < State::Accepted => {
                     state_machine.t = replica_t;
                     state_machine.state = State::Accepted;
-                    state_machine.dependencies = from_dependency(&response.dependencies)?;
+                    state_machine.dependencies = from_dependency(response.dependencies.clone())?;
                 }
                 State::Accepted
                     if state_machine.state == State::Accepted && replica_t > state_machine.t =>
                 {
                     state_machine.t = replica_t;
-                    state_machine.dependencies = from_dependency(&response.dependencies)?;
+                    state_machine.dependencies = from_dependency(response.dependencies.clone())?;
                 }
                 any_state if any_state > state_machine.state => {
                     state_machine.state = any_state;
                     state_machine.t = replica_t;
                     if state_machine.state >= State::Accepted {
                         state_machine.dependencies =
-                            from_dependency(&response.dependencies)?;
+                            from_dependency(response.dependencies.clone())?;
                     }
                 }
                 _ => {}
@@ -431,7 +431,7 @@ impl Coordinator<Initialized> {
 
         // Create the PreAccepted msg
         let pre_accepted_request = PreAcceptRequest {
-            event: self.transaction.transaction.to_vec(),
+            event: self.transaction.transaction.clone(),
             timestamp_zero: (*self.transaction.t_zero).into(),
         };
 
@@ -472,20 +472,13 @@ impl Coordinator<Initialized> {
     async fn pre_accept_consensus(&mut self, responses: &[PreAcceptResponse]) -> Result<()> {
         // Collect deps by t_zero and only keep the max t
         for response in responses {
-            let t_response = T(MonoTime::try_from(response.timestamp.as_slice())?);
+            let t_response = T::try_from(response.timestamp.as_slice())?;
             if t_response > self.transaction.t {
                 self.transaction.t = t_response;
             }
-            for dep in response.dependencies.iter() {
-                let t = T(MonoTime::try_from(dep.timestamp.as_slice())?);
-                let t_zero = T0(MonoTime::try_from(dep.timestamp_zero.as_slice())?);
-                if t_zero != self.transaction.t_zero {
-                    let entry = self.transaction.dependencies.entry(t_zero).or_insert(t);
-                    if t > *entry {
-                        *entry = t;
-                    }
-                }
-            }
+            self.transaction
+                .dependencies
+                .extend(from_dependency(response.dependencies.clone())?);
         }
 
         // Upsert store
@@ -547,14 +540,9 @@ impl Coordinator<PreAccepted> {
         // A little bit redundant, but I think the alternative to create a common behavior between responses may be even worse
         // Handle returned dependencies
         for response in responses {
-            for dep in response.dependencies.iter() {
-                let t = T(MonoTime::try_from(dep.timestamp.as_slice())?);
-                let t_zero = T0(MonoTime::try_from(dep.timestamp_zero.as_slice())?);
-                if t_zero != self.transaction.t_zero {
-                    let entry = self.transaction.dependencies.entry(t_zero).or_insert(t);
-                    if t > *entry {
-                        *entry = t;
-                    }
+            for dep in from_dependency(response.dependencies.clone())?.iter() {
+                if !self.transaction.dependencies.contains(dep) {
+                    self.transaction.dependencies.insert(*dep);
                 }
             }
         }
@@ -575,7 +563,7 @@ impl Coordinator<Accepted> {
     #[instrument(level = "trace", skip(self))]
     pub async fn commit(mut self) -> Result<Coordinator<Committed>> {
         let committed_request = CommitRequest {
-            event: self.transaction.transaction.to_vec(),
+            event: self.transaction.transaction.clone(),
             timestamp_zero: (*self.transaction.t_zero).into(),
             timestamp: (*self.transaction.t).into(),
             dependencies: into_dependency(&self.transaction.dependencies),
@@ -628,7 +616,7 @@ impl Coordinator<Committed> {
         self.execute_consensus().await?;
 
         let applied_request = ApplyRequest {
-            event: self.transaction.transaction.to_vec(),
+            event: self.transaction.transaction.clone(),
             timestamp: (*self.transaction.t).into(),
             timestamp_zero: (*self.transaction.t_zero).into(),
             dependencies: into_dependency(&self.transaction.dependencies),
@@ -677,17 +665,21 @@ mod tests {
         coordinator::{Initialized, TransactionStateMachine},
         event_store::{Event, EventStore},
         tests::NetworkMock,
-        utils::{Ballot, T, T0},
+        utils::{from_dependency, Ballot, T, T0},
         wait_handler::WaitHandler,
     };
-    use bytes::Bytes;
+    use bytes::{BufMut, Bytes};
     use consensus_transport::{
-        consensus_transport::{Dependency, PreAcceptResponse, State},
-        network::{self, NodeInfo},
+        consensus_transport::{PreAcceptResponse, State},
+        network::NodeInfo,
     };
     use diesel_ulid::DieselUlid;
     use monotime::MonoTime;
-    use std::{collections::HashMap, sync::Arc, vec};
+    use std::{
+        collections::HashSet,
+        sync::Arc,
+        vec,
+    };
     use tokio::sync::Mutex;
 
     #[tokio::test]
@@ -702,7 +694,7 @@ mod tests {
             }),
             event_store.clone(),
             network.clone(),
-            Bytes::from("test"),
+            Vec::from("test"),
             Arc::new(Default::default()),
             WaitHandler::new(event_store, network),
         )
@@ -721,10 +713,10 @@ mod tests {
 
         let state_machine = TransactionStateMachine {
             state: State::PreAccepted,
-            transaction: Bytes::new(),
+            transaction: Vec::new(),
             t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
             t: T(MonoTime::new_with_time(10u128, 0, 0)),
-            dependencies: HashMap::default(),
+            dependencies: HashSet::default(),
             ballot: Ballot::default(),
         };
 
@@ -745,7 +737,7 @@ mod tests {
         let pre_accepted_ok = vec![
             PreAcceptResponse {
                 timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
-                dependencies: vec![],
+                dependencies: Vec::new(),
                 nack: false,
             };
             3
@@ -763,51 +755,39 @@ mod tests {
             event_store.lock().await.events.iter().next().unwrap().1,
             &Event {
                 state: State::PreAccepted,
-                event: Bytes::new(),
+                event: Vec::new(),
                 t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
                 t: T(MonoTime::new_with_time(10u128, 0, 0)),
-                dependencies: HashMap::default(),
+                dependencies: HashSet::default(),
                 ballot: Ballot::default(),
             }
         );
 
         // FastPath with dependencies
 
+        let mut deps = Vec::with_capacity(16);
+        deps.put_u128(MonoTime::new_with_time(1u128, 0, 0).into());
+
+        let mut deps_2 = deps.clone();
+        deps_2.put_u128(MonoTime::new_with_time(3u128, 0, 0).into());
+
+        let mut deps_3 = deps.clone();
+        deps_3.put_u128(MonoTime::new_with_time(2u128, 0, 0).into());
+
         let pre_accepted_ok = vec![
             PreAcceptResponse {
                 timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
-                dependencies: vec![Dependency {
-                    timestamp_zero: MonoTime::new_with_time(1u128, 0, 0).into(),
-                    timestamp: MonoTime::new_with_time(1u128, 0, 0).into(),
-                }],
+                dependencies: deps,
                 nack: false,
             },
             PreAcceptResponse {
                 timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
-                dependencies: vec![
-                    Dependency {
-                        timestamp_zero: MonoTime::new_with_time(1u128, 0, 0).into(),
-                        timestamp: MonoTime::new_with_time(1u128, 0, 0).into(),
-                    },
-                    Dependency {
-                        timestamp_zero: MonoTime::new_with_time(3u128, 0, 0).into(),
-                        timestamp: MonoTime::new_with_time(3u128, 0, 0).into(),
-                    },
-                ],
+                dependencies: deps_2,
                 nack: false,
             },
             PreAcceptResponse {
                 timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
-                dependencies: vec![
-                    Dependency {
-                        timestamp_zero: MonoTime::new_with_time(1u128, 0, 0).into(),
-                        timestamp: MonoTime::new_with_time(1u128, 0, 0).into(),
-                    },
-                    Dependency {
-                        timestamp_zero: MonoTime::new_with_time(2u128, 0, 0).into(),
-                        timestamp: MonoTime::new_with_time(2u128, 0, 0).into(),
-                    },
-                ],
+                dependencies: deps_3,
                 nack: false,
             },
         ];
@@ -819,23 +799,14 @@ mod tests {
 
         let state_machine = TransactionStateMachine {
             state: State::PreAccepted,
-            transaction: Bytes::new(),
+            transaction: Vec::new(),
             t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
             t: T(MonoTime::new_with_time(10u128, 0, 0)),
-            dependencies: HashMap::from_iter(
+            dependencies: HashSet::from_iter(
                 [
-                    (
-                        T0(MonoTime::new_with_time(1u128, 0, 0)),
-                        T(MonoTime::new_with_time(1u128, 0, 0)),
-                    ),
-                    (
-                        T0(MonoTime::new_with_time(2u128, 0, 0)),
-                        T(MonoTime::new_with_time(2u128, 0, 0)),
-                    ),
-                    (
-                        T0(MonoTime::new_with_time(3u128, 0, 0)),
-                        T(MonoTime::new_with_time(3u128, 0, 0)),
-                    ),
+                    T0(MonoTime::new_with_time(1u128, 0, 0)),
+                    T0(MonoTime::new_with_time(2u128, 0, 0)),
+                    T0(MonoTime::new_with_time(3u128, 0, 0)),
                 ]
                 .iter()
                 .cloned(),
@@ -851,23 +822,14 @@ mod tests {
             event_store.lock().await.events.iter().next().unwrap().1,
             &Event {
                 state: State::PreAccepted,
-                event: Bytes::new(),
+                event: Vec::new(),
                 t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
                 t: T(MonoTime::new_with_time(10u128, 0, 0)),
-                dependencies: HashMap::from_iter(
+                dependencies: HashSet::from_iter(
                     [
-                        (
-                            T0(MonoTime::new_with_time(1u128, 0, 0)),
-                            T(MonoTime::new_with_time(1u128, 0, 0)),
-                        ),
-                        (
-                            T0(MonoTime::new_with_time(2u128, 0, 0)),
-                            T(MonoTime::new_with_time(2u128, 0, 0)),
-                        ),
-                        (
-                            T0(MonoTime::new_with_time(3u128, 0, 0)),
-                            T(MonoTime::new_with_time(3u128, 0, 0)),
-                        ),
+                        T0(MonoTime::new_with_time(1u128, 0, 0)),
+                        T0(MonoTime::new_with_time(2u128, 0, 0)),
+                        T0(MonoTime::new_with_time(3u128, 0, 0)),
                     ]
                     .iter()
                     .cloned()
@@ -883,10 +845,10 @@ mod tests {
 
         let state_machine = TransactionStateMachine {
             state: State::PreAccepted,
-            transaction: Bytes::new(),
+            transaction: Vec::new(),
             t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
             t: T(MonoTime::new_with_time(10u128, 0, 0)),
-            dependencies: HashMap::default(),
+            dependencies: HashSet::default(),
             ballot: Ballot::default(),
         };
 
@@ -904,23 +866,23 @@ mod tests {
             phantom: Default::default(),
         };
 
+        let mut deps = Vec::with_capacity(16);
+        deps.put_u128(MonoTime::new_with_time(11u128, 0, 0).into());
+
         let pre_accepted_ok = vec![
             PreAcceptResponse {
                 timestamp: MonoTime::new_with_time(12u128, 0, 1).into(),
-                dependencies: vec![Dependency {
-                    timestamp_zero: T(MonoTime::new_with_time(11u128, 0, 1)).into(),
-                    timestamp: T0(MonoTime::new_with_time(13u128, 0, 1)).into(),
-                }],
+                dependencies: deps.clone(),
                 nack: false,
             },
             PreAcceptResponse {
                 timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
-                dependencies: vec![],
+                dependencies: Vec::new(),
                 nack: false,
             },
             PreAcceptResponse {
                 timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
-                dependencies: vec![],
+                dependencies: Vec::new(),
                 nack: false,
             },
         ];
@@ -936,13 +898,10 @@ mod tests {
             event_store.lock().await.events.iter().next().unwrap().1,
             &Event {
                 state: State::PreAccepted,
-                event: Bytes::new(),
+                event: Vec::new(),
                 t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
                 t: T(MonoTime::new_with_time(12u128, 0, 1)),
-                dependencies: HashMap::from_iter([(
-                    T0(MonoTime::new_with_time(11u128, 0, 1)),
-                    T(MonoTime::new_with_time(13u128, 0, 1)),
-                ),]),
+                dependencies: from_dependency(deps).unwrap(),
                 ballot: Ballot::default(),
             }
         );

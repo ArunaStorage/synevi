@@ -3,6 +3,7 @@ use crate::{
     consensus_transport::*,
 };
 use anyhow::Result;
+use bytes::{BufMut, BytesMut};
 use consensus_transport_server::ConsensusTransport;
 use std::str::FromStr;
 use std::{sync::Arc, time};
@@ -42,10 +43,14 @@ impl TimeService for ReplicaBox {
         &self,
         request: Request<GetTimeRequest>,
     ) -> Result<Response<GetTimeResponse>, Status> {
+        let mut full_buf = BytesMut::with_capacity(32);
+
         let time_stamp = time::SystemTime::now()
             .duration_since(time::UNIX_EPOCH)
             .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
             .as_nanos();
+
+        full_buf.put_u128(time_stamp);
 
         let value = request.into_inner().timestamp;
         if value.len() != 16 {
@@ -57,11 +62,11 @@ impl TimeService for ReplicaBox {
                 .map_err(|_| tonic::Status::invalid_argument("Invalid time"))?,
         );
 
-        let diff = time_stamp as i128 - got_time as i128;
+        full_buf.put_i128(time_stamp as i128 - got_time as i128);
 
         Ok(Response::new(GetTimeResponse {
-            local_timestamp: time_stamp.to_be_bytes().to_vec(),
-            diff: diff.to_be_bytes().to_vec(),
+            local_timestamp: full_buf.split_to(16).freeze().to_vec(),
+            diff: full_buf.freeze().to_vec(),
         }))
     }
 }

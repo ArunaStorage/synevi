@@ -10,11 +10,6 @@ service ConsensusTransport {
   rpc Recover(RecoverRequest) returns (RecoverResponse) {}
 }
 
-message Dependency {
-  bytes timestamp = 1;
-  bytes timestamp_zero = 2;
-}
-
 message PreAcceptRequest {
   bytes event = 1;
   bytes timestamp_zero = 2;
@@ -22,7 +17,7 @@ message PreAcceptRequest {
 
 message PreAcceptResponse {
   bytes timestamp = 1;
-  repeated Dependency dependencies = 2;
+  bytes dependencies = 2;
   bool nack = 3;
 }
 
@@ -31,11 +26,11 @@ message AcceptRequest {
   bytes event = 2;
   bytes timestamp_zero = 3;
   bytes timestamp = 4;
-  repeated Dependency dependencies = 5;
+  bytes dependencies = 5;
 }
 
 message AcceptResponse {
-  repeated Dependency dependencies = 1;
+  bytes dependencies = 1;
   bool nack = 2;
 }
 
@@ -43,7 +38,7 @@ message CommitRequest {
   bytes event = 1;
   bytes timestamp_zero = 2;
   bytes timestamp = 3;
-  repeated Dependency dependencies = 4;
+  bytes dependencies = 4;
 }
 
 message CommitResponse {
@@ -55,7 +50,7 @@ message ApplyRequest {
   // This is extra to make it easier to identify the event
   bytes timestamp_zero = 2;
   bytes timestamp = 3;
-  repeated Dependency dependencies = 4;
+  bytes dependencies = 4;
   // bytes result = 5; // Theoretically not needed?
 }
 
@@ -77,9 +72,9 @@ enum State {
 
 message RecoverResponse {
   State local_state = 1;
-  repeated Dependency wait = 2;
-  repeated Dependency superseding = 3;
-  repeated Dependency dependencies = 4;
+  bytes wait = 2;
+  bool superseding = 3;
+  bytes dependencies = 4;
   bytes timestamp = 5;
   bytes nack = 6;
 }

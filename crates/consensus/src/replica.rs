@@ -1,17 +1,15 @@
 use crate::event_store::{Event, EventStore};
 use crate::node::Stats;
 use crate::reorder_buffer::ReorderBuffer;
-use crate::utils::{from_dependency, Ballot, T, T0};
+use crate::utils::{from_dependency, into_dependency, Ballot, T, T0};
 use crate::wait_handler::{WaitAction, WaitHandler};
 use anyhow::Result;
 use bytes::Bytes;
 use consensus_transport::consensus_transport::*;
 use consensus_transport::network::{Network, NodeInfo};
 use consensus_transport::replica::Replica;
-use monotime::MonoTime;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::{oneshot, Mutex};
 use tracing::instrument;
 
@@ -33,7 +31,7 @@ impl Replica for ReplicaConfig {
         request: PreAcceptRequest,
         node_serial: u16,
     ) -> Result<PreAcceptResponse> {
-        let t0 = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
+        let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
 
         //println!("PreAccept: {:?} @ {:?}", t0, self.node_info.serial);
 
@@ -62,24 +60,24 @@ impl Replica for ReplicaConfig {
 
         Ok(PreAcceptResponse {
             timestamp: t.into(),
-            dependencies: deps,
+            dependencies: deps.to_vec(),
             nack: false,
         })
     }
 
     #[instrument(level = "trace", skip(self))]
     async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse> {
-        let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
+        let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         //println!("Accept: {:?} @ {:?}", t_zero, self.node_info.serial);
 
-        let t = T(MonoTime::try_from(request.timestamp.as_slice())?);
-        let request_ballot = Ballot(MonoTime::try_from(request.ballot.as_slice())?);
+        let t = T::try_from(request.timestamp.as_slice())?;
+        let request_ballot = Ballot::try_from(request.ballot.as_slice())?;
 
         let dependencies = {
             let mut store = self.event_store.lock().await;
             if request_ballot < store.get_ballot(&t_zero) {
                 return Ok(AcceptResponse {
-                    dependencies: vec![],
+                    dependencies: Vec::new(),
                     nack: true,
                 });
             }
@@ -89,7 +87,7 @@ impl Replica for ReplicaConfig {
                     t,
                     state: State::Accepted,
                     event: request.event.into(),
-                    dependencies: from_dependency(&request.dependencies)?,
+                    dependencies: from_dependency(request.dependencies)?,
                     ballot: request_ballot,
                 })
                 .await;
@@ -104,10 +102,10 @@ impl Replica for ReplicaConfig {
 
     #[instrument(level = "trace", skip(self))]
     async fn commit(&self, request: CommitRequest) -> Result<CommitResponse> {
-        let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
+        let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         //println!("Commit: {:?} @ {:?}", t_zero, self.node_info.serial);
-        let t = T(MonoTime::try_from(request.timestamp.as_slice())?);
-        let deps = from_dependency(&request.dependencies)?;
+        let t = T::try_from(request.timestamp.as_slice())?;
+        let deps = from_dependency(request.dependencies)?;
         let (sx, rx) = tokio::sync::oneshot::channel();
         self.wait_handler
             .send_msg(
@@ -125,11 +123,11 @@ impl Replica for ReplicaConfig {
 
     #[instrument(level = "trace", skip(self))]
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse> {
-        let transaction: Bytes = request.event.into();
+        let transaction: Vec<u8> = request.event;
 
-        let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
-        let t = T(MonoTime::try_from(request.timestamp.as_slice())?);
-        let deps = from_dependency(&request.dependencies)?;
+        let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
+        let t = T::try_from(request.timestamp.as_slice())?;
+        let deps = from_dependency(request.dependencies)?;
 
         let (sx, rx) = tokio::sync::oneshot::channel();
 
@@ -143,12 +141,12 @@ impl Replica for ReplicaConfig {
 
     #[instrument(level = "trace", skip(self))]
     async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse> {
-        let t_zero = T0(MonoTime::try_from(request.timestamp_zero.as_slice())?);
+        let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         let mut event_store_lock = self.event_store.lock().await;
         if let Some(mut event) = event_store_lock.get_event(t_zero).await {
             // If another coordinator has started recovery with a higher ballot
             // Return NACK with the higher ballot number
-            let request_ballot = Ballot(MonoTime::try_from(request.ballot.as_slice())?);
+            let request_ballot = Ballot::try_from(request.ballot.as_slice())?;
             if event.ballot > request_ballot {
                 return Ok(RecoverResponse {
                     nack: event.ballot.into(),
@@ -170,9 +168,9 @@ impl Replica for ReplicaConfig {
 
             Ok(RecoverResponse {
                 local_state: event.state.into(),
-                wait: recover_deps.wait,
+                wait: into_dependency(&recover_deps.wait),
                 superseding: recover_deps.superseding,
-                dependencies: recover_deps.dependencies,
+                dependencies: into_dependency(&recover_deps.dependencies),
                 timestamp: event.t.into(),
                 nack: Ballot::default().into(),
             })
@@ -185,9 +183,9 @@ impl Replica for ReplicaConfig {
 
             Ok(RecoverResponse {
                 local_state: State::PreAccepted.into(),
-                wait: recover_deps.wait,
+                wait: into_dependency(&recover_deps.wait),
                 superseding: recover_deps.superseding,
-                dependencies: recover_deps.dependencies,
+                dependencies: into_dependency(&recover_deps.dependencies),
                 timestamp: t.into(),
                 nack: Ballot::default().into(),
             })
@@ -203,11 +201,12 @@ mod tests {
     use crate::tests;
     use crate::utils::{Ballot, T, T0};
     use crate::wait_handler::WaitHandler;
-    use consensus_transport::consensus_transport::{CommitRequest, Dependency, State};
+    use bytes::{BufMut, BytesMut};
+    use consensus_transport::consensus_transport::{CommitRequest, State};
     use consensus_transport::network::NodeInfo;
     use consensus_transport::replica::Replica;
     use monotime::MonoTime;
-    use std::collections::HashMap;
+    use std::collections::HashSet;
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
@@ -224,7 +223,7 @@ mod tests {
                 t: T(conflicting_t0),
                 state: State::PreAccepted,
                 event: Default::default(),
-                dependencies: HashMap::new(), // No deps
+                dependencies: HashSet::default(), // No deps
                 ballot: Ballot::default(),
             })
             .await;
@@ -244,14 +243,14 @@ mod tests {
         };
 
         let t0 = conflicting_t0.next().into_time();
+
+        let mut buf = BytesMut::with_capacity(16);
+        buf.put_u128(conflicting_t0.into());
         let request = CommitRequest {
-            event: vec![],
+            event: Vec::new(),
             timestamp_zero: t0.into(),
             timestamp: t0.into(),
-            dependencies: vec![Dependency {
-                timestamp: conflicting_t0.into(),
-                timestamp_zero: conflicting_t0.into(),
-            }],
+            dependencies: buf.freeze().to_vec(),
         };
 
         replica.commit(request).await.unwrap();

@@ -2,11 +2,12 @@ use crate::{
     coordinator::TransactionStateMachine,
     utils::{from_dependency, Ballot, T, T0},
 };
+use ahash::RandomState;
 use anyhow::Result;
 use bytes::{BufMut, Bytes, BytesMut};
-use consensus_transport::consensus_transport::{Dependency, State};
+use consensus_transport::consensus_transport::State;
 use persistence::Database;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashSet};
 use tracing::instrument;
 
 #[derive(Debug)]
@@ -35,8 +36,8 @@ pub struct Event {
     // This holds the state and can be used by waiters to watch for a state change
     // In contrast to notify this can also be used if the state is already reached
     pub state: State,
-    pub event: Bytes,
-    pub dependencies: HashMap<T0, T>, // t and t_zero
+    pub event: Vec<u8>,
+    pub dependencies: HashSet<T0, RandomState>, // t and t_zero
     pub ballot: Ballot,
 }
 
@@ -50,8 +51,7 @@ impl Event {
         new.put(<[u8; 16]>::from(*self.ballot).as_slice());
 
         for dep in &self.dependencies {
-            new.put(<[u8; 16]>::from(**dep.0).as_slice());
-            new.put(<[u8; 16]>::from(**dep.1).as_slice());
+            new.put::<Bytes>((*dep).into());
         }
 
         new.freeze()
@@ -70,9 +70,9 @@ impl PartialEq for Event {
 
 #[derive(Debug, Default)]
 pub(crate) struct RecoverDependencies {
-    pub dependencies: Vec<Dependency>,
-    pub wait: Vec<Dependency>,
-    pub superseding: Vec<Dependency>,
+    pub dependencies: HashSet<T0, RandomState>,
+    pub wait: HashSet<T0, RandomState>,
+    pub superseding: bool,
 }
 
 impl EventStore {
@@ -97,7 +97,7 @@ impl EventStore {
     #[instrument(level = "trace")]
     pub async fn init_transaction(
         &mut self,
-        body: Bytes,
+        body: Vec<u8>,
         node_serial: u16,
     ) -> TransactionStateMachine {
         let t0 = self.latest_t0.next_with_node(node_serial).into_time();
@@ -106,7 +106,7 @@ impl EventStore {
             transaction: body,
             t_zero: T0(t0),
             t: T(t0),
-            dependencies: HashMap::default(),
+            dependencies: HashSet::default(),
             ballot: Ballot::default(),
         }
     }
@@ -123,18 +123,14 @@ impl EventStore {
             t: T(*t_zero),
             state: State::Undefined,
             event: Default::default(),
-            dependencies: HashMap::default(),
+            dependencies: HashSet::default(),
             ballot: Ballot::default(),
         });
         entry.clone()
     }
 
     #[instrument(level = "trace")]
-    pub async fn pre_accept(
-        &mut self,
-        t_zero: T0,
-        transaction: Bytes,
-    ) -> Result<(Vec<Dependency>, T)> {
+    pub async fn pre_accept(&mut self, t_zero: T0, transaction: Vec<u8>) -> Result<(Vec<u8>, T)> {
         let (t, deps) = {
             let t = T(if let Some((last_t, _)) = self.mappings.last_key_value() {
                 if **last_t > *t_zero {
@@ -150,7 +146,7 @@ impl EventStore {
                 *t_zero
             });
             // This might not be necessary to re-use the write lock here
-            let deps: Vec<Dependency> = self.get_dependencies(&t, &t_zero).await;
+            let deps: Vec<u8> = self.get_dependencies(&t, &t_zero).await;
             (t, deps)
         };
 
@@ -161,7 +157,7 @@ impl EventStore {
             t,
             state: State::PreAccepted,
             event: transaction,
-            dependencies: from_dependency(&deps)?,
+            dependencies: from_dependency(deps.clone())?,
             ballot: Ballot::default(),
         };
         self.upsert(event).await;
@@ -184,6 +180,7 @@ impl EventStore {
 
     #[instrument(level = "trace")]
     pub async fn upsert(&mut self, event: Event) {
+
         let old_event = self.events.entry(event.t_zero).or_insert(event.clone());
         if self.latest_t0 < event.t_zero {
             self.latest_t0 = event.t_zero;
@@ -218,7 +215,7 @@ impl EventStore {
             if update {
                 db.update(t.into(), old_event.as_bytes()).await.unwrap()
             } else {
-                db.init(t.into(), old_event.event.clone(), old_event.as_bytes())
+                db.init(t.into(), Bytes::from(old_event.event.clone()), old_event.as_bytes())
                     .await
                     .unwrap()
             }
@@ -226,44 +223,26 @@ impl EventStore {
     }
 
     #[instrument(level = "trace")]
-    pub async fn get_dependencies(&self, t: &T, t_zero: &T0) -> Vec<Dependency> {
+    pub async fn get_dependencies(&self, t: &T, t_zero: &T0) -> Vec<u8> {
+        let mut deps = Vec::new();
         if self.last_applied == T::default() {
-            self.events
-                .range(..&T0(**t))
-                .filter_map(|(_, v)| {
-                    if v.t_zero == *t_zero || v.state == State::Undefined {
-                        None
-                    } else {
-                        Some(Dependency {
-                            timestamp: (*v.t).into(),
-                            timestamp_zero: (*v.t_zero).into(),
-                        })
-                    }
-                })
-                .collect()
+            for (t0, event) in self.events.range(..&T0(**t)) {
+                if event.state != State::Undefined && t0 != t_zero {
+                    deps.put::<Bytes>((*t0).into());
+                }
+            }
         } else if let Some(last_t0) = self.mappings.get(&self.last_applied) {
-            if **last_t0 == **t {
-                vec![]
-            } else {
+            if **last_t0 != **t {
                 // Range from last applied t0 to T
                 // -> Get all T0s that are before our T
-                self.events
-                    .range(last_t0..&T0(**t))
-                    .filter_map(|(_, v)| {
-                        if v.t_zero == *t_zero || v.state == State::Undefined {
-                            None
-                        } else {
-                            Some(Dependency {
-                                timestamp: (*v.t).into(),
-                                timestamp_zero: (*v.t_zero).into(),
-                            })
-                        }
-                    })
-                    .collect()
+                for (t0, event) in self.events.range(last_t0..&T0(**t)) {
+                    if event.state != State::Undefined && t0 != t_zero {
+                        deps.put::<Bytes>((*t0).into());
+                    }
+                }
             }
-        } else {
-            vec![]
         }
+        deps
     }
 
     #[instrument(level = "trace")]
@@ -278,21 +257,15 @@ impl EventStore {
                     if dep_event
                         .dependencies
                         .iter()
-                        .any(|(t_zero_dep_dep, _)| t_zero == t_zero_dep_dep)
+                        .any(|t_zero_dep_dep| t_zero == t_zero_dep_dep)
                     {
                         // Wait -> Accord p19 l7 + l9
                         if t_zero_dep < t_zero && **t_dep > **t_zero {
-                            recover_deps.wait.push(Dependency {
-                                timestamp: (*t_dep).into(),
-                                timestamp_zero: (*t_zero_dep).into(),
-                            });
+                            recover_deps.wait.insert(*t_zero_dep);
                         }
                         // Superseding -> Accord: p19 l10
                         if t_zero_dep > t_zero {
-                            recover_deps.superseding.push(Dependency {
-                                timestamp: (*t_dep).into(),
-                                timestamp_zero: (*t_zero_dep).into(),
-                            });
+                            recover_deps.superseding = true;
                         }
                     }
                 }
@@ -300,14 +273,11 @@ impl EventStore {
                     if dep_event
                         .dependencies
                         .iter()
-                        .any(|(t_zero_dep_dep, _)| t_zero == t_zero_dep_dep)
+                        .any(|t_zero_dep_dep| t_zero == t_zero_dep_dep)
                     {
                         // Superseding -> Accord: p19 l11
                         if **t_dep > **t_zero {
-                            recover_deps.superseding.push(Dependency {
-                                timestamp: (*t_dep).into(),
-                                timestamp_zero: (*t_zero_dep).into(),
-                            });
+                            recover_deps.superseding = true;
                         }
                     }
                 }
@@ -315,10 +285,7 @@ impl EventStore {
             }
             // Collect "normal" deps -> Accord: p19 l16
             if t_zero_dep < t_zero {
-                recover_deps.dependencies.push(Dependency {
-                    timestamp: (*t_dep).into(),
-                    timestamp_zero: (*t_zero_dep).into(),
-                });
+                recover_deps.dependencies.insert(*t_zero_dep);
             }
         }
         Ok(recover_deps)
