@@ -4,7 +4,7 @@ use diesel_ulid::DieselUlid;
 use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 use tokio::runtime;
 
-async fn prepare() -> Arc<Node> {
+async fn prepare() -> Vec<Arc<Node>> {
     let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
     let mut nodes: Vec<Node> = vec![];
 
@@ -27,8 +27,7 @@ async fn prepare() -> Arc<Node> {
             }
         }
     }
-    let coordinator = nodes.pop().unwrap();
-    Arc::new(coordinator)
+    nodes.into_iter().map(Arc::new).collect()
 }
 async fn parallel_execution(coordinator: Arc<Node>) {
     let mut joinset = tokio::task::JoinSet::new();
@@ -46,16 +45,39 @@ async fn parallel_execution(coordinator: Arc<Node>) {
     }
 }
 
+async fn contention_execution(coordinators: Vec<Arc<Node>>) {
+    let mut joinset = tokio::task::JoinSet::new();
+
+    for _ in 0..200 {
+        for coordinator in coordinators.iter() {
+            let coordinator = coordinator.clone();
+            joinset.spawn(async move {
+                coordinator
+                    .transaction(Vec::from("This is a transaction"))
+                    .await
+            });
+        }
+    }
+    while let Some(res) = joinset.join_next().await {
+        res.unwrap().unwrap();
+    }
+}
+
 pub fn criterion_benchmark(c: &mut Criterion) {
     let runtime = runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
 
-    let coordinator = runtime.block_on(async { prepare().await });
+    let nodes = runtime.block_on(async { prepare().await });
     c.bench_function("parallel", |b| {
         b.to_async(&runtime)
-            .iter(|| parallel_execution(coordinator.clone()))
+            .iter(|| parallel_execution(nodes.first().unwrap().clone()))
+    });
+
+    c.bench_function("contention", |b| {
+        b.to_async(&runtime)
+            .iter(|| contention_execution(nodes.clone()))
     });
 }
 
