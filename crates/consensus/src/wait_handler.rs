@@ -1,10 +1,16 @@
 use crate::{
-    coordinator::CoordinatorIterator, event_store::{Event, EventStore}, node::Stats, utils::{Ballot, T, T0}
+    coordinator::CoordinatorIterator,
+    event_store::{Event, EventStore},
+    node::Stats,
+    utils::{Ballot, T, T0},
 };
 use ahash::RandomState;
 use anyhow::Result;
 use async_channel::{Receiver, Sender};
-use consensus_transport::{consensus_transport::State, network::{Network, NodeInfo}};
+use consensus_transport::{
+    consensus_transport::State,
+    network::{Network, NodeInfo},
+};
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
@@ -142,7 +148,7 @@ impl WaitHandler {
                 },
                 _ => {
                     if let Some(t0_recover) = self.check_recovery(&waiter_state) {
-                        println!("Recovering: {:?}", t0_recover);
+                        //println!("Recovering: {:?}", t0_recover);
                         let wait_handler = self.clone();
                         wait_handler.recover(t0_recover, &mut waiter_state).await;
                     }
@@ -192,10 +198,15 @@ impl WaitHandler {
         });
     }
 
-    fn check_recovery(&self, waiter_state: &WaiterState ) -> Option<T0> {
-        for (_, WaitDependency { deps, started_at, .. }) in &waiter_state.events{
+    fn check_recovery(&self, waiter_state: &WaiterState) -> Option<T0> {
+        for (
+            _,
+            WaitDependency {
+                deps, started_at, ..
+            },
+        ) in &waiter_state.events
+        {
             if started_at.elapsed() > Duration::from_secs(1) {
-
                 let sorted_deps: BTreeSet<T0> = deps.iter().cloned().collect();
 
                 let mut min_dep = None;
@@ -208,10 +219,10 @@ impl WaitHandler {
                                 *t0_min = t0_dep;
                                 *t_min = *t_dep;
                             }
-                        }else{
+                        } else {
                             min_dep = Some((t0_dep, *t_dep));
                         }
-                    }else{
+                    } else {
                         // Lowest T0 is not commited -> Recover lowest t0 to ensure commit
                         // Recover t0_dep
                         return Some(t0_dep);
@@ -383,7 +394,7 @@ mod tests {
         let wait_handler = WaitHandler {
             sender,
             receiver,
-            event_store: Arc::new(Mutex::new(EventStore::init(None, 0))),
+            event_store: Arc::new(Mutex::new(EventStore::init(None, 0).unwrap())),
             network: Arc::new(crate::tests::NetworkMock::default()),
             stats: Arc::new(Stats::default()),
             node_info: Arc::new(NodeInfo::default()),

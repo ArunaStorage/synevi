@@ -272,13 +272,17 @@ mod tests {
                         if let Some(next) = node_store_iter.next() {
                             if next != (k, v) {
                                 println!("Diff: Got {:?}, Expected: {:?}", next, (k, v));
-                                println!("Nanos: {:?} | {:?}", next.1 .0.get_nanos(), v.0.get_nanos());
+                                println!(
+                                    "Nanos: {:?} | {:?}",
+                                    next.1 .0.get_nanos(),
+                                    v.0.get_nanos()
+                                );
                             }
                         }
                     }
                     got_mismatch = true;
                 }
-    
+
                 assert!(!got_mismatch);
             }
         });

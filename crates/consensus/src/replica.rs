@@ -203,7 +203,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_recovery() {
-        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1)));
+        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1).unwrap()));
 
         let conflicting_t0 = MonoTime::new(0, 0);
         event_store
@@ -227,12 +227,17 @@ mod tests {
 
         let stats = Arc::new(Stats::default());
 
-        let wait_handler = WaitHandler::new(event_store.clone(), network.clone(), stats.clone(), node_info.clone());
+        let wait_handler = WaitHandler::new(
+            event_store.clone(),
+            network.clone(),
+            stats.clone(),
+            node_info.clone(),
+        );
 
         let wh_clone = wait_handler.clone();
         tokio::spawn(async move {
             wh_clone.run().await.unwrap();
-        }); 
+        });
 
         let replica = ReplicaConfig {
             _node_info: node_info.clone(),

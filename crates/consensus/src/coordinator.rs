@@ -112,10 +112,7 @@ impl CoordinatorIterator {
         }
     }
 
-    pub async fn recover(
-        t0_recover: T0,
-        wait_handler: Arc<WaitHandler>,
-    ) -> Result<()> {
+    pub async fn recover(t0_recover: T0, wait_handler: Arc<WaitHandler>) -> Result<()> {
         let mut backoff_counter: u8 = 0;
         while backoff_counter <= MAX_RETRIES {
             let mut coordinator_iter = Coordinator::<Recover>::recover(
@@ -132,7 +129,10 @@ impl CoordinatorIterator {
                 tokio::time::sleep(Duration::from_millis(1000)).await;
                 continue;
             }
-            wait_handler.stats.total_recovers.fetch_add(1, Ordering::Relaxed);
+            wait_handler
+                .stats
+                .total_recovers
+                .fetch_add(1, Ordering::Relaxed);
             while coordinator_iter.next().await?.is_some() {}
             break;
         }
@@ -648,7 +648,12 @@ impl Coordinator<Committed> {
 mod tests {
     use super::Coordinator;
     use crate::{
-        coordinator::{Initialized, TransactionStateMachine}, event_store::{Event, EventStore}, node::Stats, tests::NetworkMock, utils::{from_dependency, Ballot, T, T0}, wait_handler::WaitHandler
+        coordinator::{Initialized, TransactionStateMachine},
+        event_store::{Event, EventStore},
+        node::Stats,
+        tests::NetworkMock,
+        utils::{from_dependency, Ballot, T, T0},
+        wait_handler::WaitHandler,
     };
     use bytes::{BufMut, Bytes};
     use consensus_transport::{
@@ -662,7 +667,7 @@ mod tests {
 
     #[tokio::test]
     async fn init_test() {
-        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1)));
+        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1).unwrap()));
 
         let network = Arc::new(NetworkMock::default());
         let coordinator = Coordinator::<Initialized>::new(
@@ -687,7 +692,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_accepted_fast_path_test() {
-        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1)));
+        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1).unwrap()));
 
         let state_machine = TransactionStateMachine {
             state: State::PreAccepted,
@@ -700,7 +705,7 @@ mod tests {
 
         let network = Arc::new(NetworkMock::default());
 
-        let node_info =  Arc::new(NodeInfo {
+        let node_info = Arc::new(NodeInfo {
             id: DieselUlid::generate(),
             serial: 0,
         });
@@ -711,7 +716,12 @@ mod tests {
             event_store: event_store.clone(),
             transaction: state_machine.clone(),
             stats: Arc::new(Default::default()),
-            wait_handler: WaitHandler::new(event_store.clone(), network,  Arc::new(Stats::default()), node_info),
+            wait_handler: WaitHandler::new(
+                event_store.clone(),
+                network,
+                Arc::new(Stats::default()),
+                node_info,
+            ),
             phantom: Default::default(),
         };
 
@@ -822,7 +832,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_accepted_slow_path_test() {
-        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1)));
+        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1).unwrap()));
 
         let state_machine = TransactionStateMachine {
             state: State::PreAccepted,
@@ -845,7 +855,12 @@ mod tests {
             event_store: event_store.clone(),
             transaction: state_machine.clone(),
             stats: Arc::new(Default::default()),
-            wait_handler: WaitHandler::new(event_store.clone(), network,  Arc::new(Stats::default()), node_info),
+            wait_handler: WaitHandler::new(
+                event_store.clone(),
+                network,
+                Arc::new(Stats::default()),
+                node_info,
+            ),
             phantom: Default::default(),
         };
 

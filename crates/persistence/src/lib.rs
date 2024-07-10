@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
-use rocksdb::{ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options};
+use rocksdb::{ColumnFamilyDescriptor, DBWithThreadMode, IteratorMode, MultiThreaded, Options};
 use std::sync::Arc;
 use tokio::task::spawn_blocking;
 
@@ -9,10 +9,14 @@ pub struct Database {
     db: Arc<DBWithThreadMode<MultiThreaded>>,
 }
 
+pub struct SplitEvent {
+    pub key: Bytes,
+    pub event: Bytes,
+    pub state: Bytes,
+}
+
 impl Database {
     pub fn new(path: String) -> Result<Database> {
-        //let db = DBWithThreadMode::open_default(path)?;
-
         // Setup column families
         let mut cf_opts = Options::default();
         cf_opts.set_max_write_buffer_number(16);
@@ -33,7 +37,31 @@ impl Database {
         Ok(Database { db })
     }
 
-    pub async fn init(&self, key: Bytes, transaction: Bytes, state: Bytes) -> Result<()> {
+    pub fn read_all(&self) -> Result<Vec<SplitEvent>> {
+        let event_cf = self
+            .db
+            .cf_handle("events")
+            .ok_or_else(|| anyhow!("ColumnFamily for events not found"))?;
+        let state_cf = self
+            .db
+            .cf_handle("states")
+            .ok_or_else(|| anyhow!("ColumnFamily for states not found"))?;
+        let event_iter = self.db.iterator_cf(&event_cf, IteratorMode::Start);
+        let mut result = Vec::new();
+        for event in event_iter {
+            let (key, event) =
+                event.map(|(k, v)| (Bytes::from(k.to_vec()), Bytes::from(v.to_vec())))?;
+            let state = if let Some(exists) = self.db.get_cf(&state_cf, &key)? {
+                Bytes::from(exists)
+            } else {
+                Bytes::new()
+            };
+            result.push(SplitEvent { key, event, state });
+        }
+        Ok(result)
+    }
+
+    pub async fn init_object(&self, key: Bytes, transaction: Bytes, state: Bytes) -> Result<()> {
         let db = self.clone();
         spawn_blocking(move || -> Result<()> {
             let event_cf = db
@@ -55,7 +83,7 @@ impl Database {
         .await?
     }
 
-    pub async fn update(&self, key: Bytes, state: Bytes) -> Result<()> {
+    pub async fn update_object(&self, key: Bytes, state: Bytes) -> Result<()> {
         let db = self.clone();
         spawn_blocking(move || -> Result<()> {
             let state_cf = db

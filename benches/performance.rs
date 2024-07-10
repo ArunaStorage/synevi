@@ -1,10 +1,11 @@
+use bytes::{Bytes, BytesMut};
 use consensus::node::Node;
 use criterion::{criterion_group, criterion_main, Criterion};
 use diesel_ulid::DieselUlid;
 use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 use tokio::runtime;
 
-async fn prepare() -> Vec<Arc<Node>> {
+async fn prepare() -> (Vec<Arc<Node>>, Vec<u8>) {
     let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
     let mut nodes: Vec<Node> = vec![];
 
@@ -13,7 +14,8 @@ async fn prepare() -> Vec<Arc<Node>> {
         let network = Arc::new(consensus_transport::network::NetworkConfig::new(
             socket_addr,
         ));
-        let node = Node::new_with_parameters(*m, i as u16, network, None)
+        let path = format!("../tests/database/{}_test_db", i);
+        let node = Node::new_with_parameters(*m, i as u16, network, Some(path))
             .await
             .unwrap();
         nodes.push(node);
@@ -27,7 +29,13 @@ async fn prepare() -> Vec<Arc<Node>> {
             }
         }
     }
-    nodes.into_iter().map(Arc::new).collect()
+    let size = 536870912;
+    let mut payload = Vec::with_capacity(size);
+    for _ in 0..size {
+        payload.push(u8::MAX);
+    }
+    println!("Size: {}", payload.capacity());
+    (nodes.into_iter().map(Arc::new).collect(), payload.clone())
 }
 async fn parallel_execution(coordinator: Arc<Node>) {
     let mut joinset = tokio::task::JoinSet::new();
@@ -63,13 +71,29 @@ async fn contention_execution(coordinators: Vec<Arc<Node>>) {
     }
 }
 
+async fn bigger_payloads_execution(coordinator: Arc<Node>, payload: Vec<u8>) {
+    let mut joinset = tokio::task::JoinSet::new();
+
+    for _ in 0..1000 {
+        let coordinator = coordinator.clone();
+        joinset.spawn(async move {
+            coordinator
+                .transaction(Vec::from("This is a transaction"))
+                .await
+        });
+    }
+    while let Some(res) = joinset.join_next().await {
+        res.unwrap().unwrap();
+    }
+}
+
 pub fn criterion_benchmark(c: &mut Criterion) {
     let runtime = runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
 
-    let nodes = runtime.block_on(async { prepare().await });
+    let (nodes, payload) = runtime.block_on(async { prepare().await });
     c.bench_function("parallel", |b| {
         b.to_async(&runtime)
             .iter(|| parallel_execution(nodes.first().unwrap().clone()))
@@ -78,6 +102,11 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("contention", |b| {
         b.to_async(&runtime)
             .iter(|| contention_execution(nodes.clone()))
+    });
+
+    c.bench_function("bigger_payloads", |b| {
+        b.to_async(&runtime)
+            .iter(|| bigger_payloads_execution(nodes.first().unwrap().clone(), payload.clone()))
     });
 }
 

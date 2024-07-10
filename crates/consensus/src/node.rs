@@ -38,7 +38,7 @@ impl Node {
         db_path: Option<String>,
     ) -> Result<Self> {
         let node_name = Arc::new(NodeInfo { id, serial });
-        let event_store = Arc::new(Mutex::new(EventStore::init(db_path, serial)));
+        let event_store = Arc::new(Mutex::new(EventStore::init(db_path, serial)?));
 
         let stats = Arc::new(Stats {
             total_requests: AtomicU64::new(0),
@@ -53,7 +53,12 @@ impl Node {
             reorder_clone.run().await.unwrap();
         });
 
-        let wait_handler = WaitHandler::new(event_store.clone(), network.clone(), stats.clone(), node_name.clone());
+        let wait_handler = WaitHandler::new(
+            event_store.clone(),
+            network.clone(),
+            stats.clone(),
+            node_name.clone(),
+        );
         let wait_handler_clone = wait_handler.clone();
         tokio::spawn(async move {
             wait_handler_clone.run().await.unwrap();

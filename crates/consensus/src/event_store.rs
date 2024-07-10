@@ -6,7 +6,8 @@ use ahash::RandomState;
 use anyhow::Result;
 use bytes::{BufMut, Bytes, BytesMut};
 use consensus_transport::consensus_transport::State;
-use persistence::Database;
+use monotime::MonoTime;
+use persistence::{Database, SplitEvent};
 use std::collections::{BTreeMap, HashSet};
 use tracing::instrument;
 
@@ -28,7 +29,7 @@ pub struct EventStore {
     pub node_serial: u16,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Event {
     pub t_zero: T0,
     pub t: T,
@@ -48,7 +49,7 @@ impl Event {
 
         new.put(<[u8; 16]>::from(*self.t).as_slice());
         let state: i32 = self.state.into();
-        new.put(state.to_be_bytes().as_slice());
+        new.put(state.to_be_bytes().as_slice()); // -> [u8: 4]
         new.put(<[u8; 16]>::from(*self.ballot).as_slice());
 
         for dep in &self.dependencies {
@@ -56,6 +57,23 @@ impl Event {
         }
 
         new.freeze()
+    }
+    pub fn from_bytes(input: SplitEvent) -> Result<Self> {
+        let mut state = input.state;
+        let mut event = Event::default();
+        event.t_zero = T0(MonoTime::try_from(input.key.iter().as_slice())?);
+        event.event = input.event.into();
+        event.t = T::try_from(state.split_to(16))?;
+        event.state = State::try_from(i32::from_be_bytes(<[u8; 4]>::try_from(
+            state.split_to(4).iter().as_slice(),
+        )?))?;
+        event.ballot = Ballot::try_from(state.split_to(16))?;
+        while !state.is_empty() {
+            let dep = state.split_to(16);
+            let t0_dep = T0::try_from(dep)?;
+            event.dependencies.insert(t0_dep);
+        }
+        Ok(event)
     }
 }
 
@@ -66,6 +84,7 @@ impl PartialEq for Event {
             && self.state == other.state
             && self.event == other.event
             && self.dependencies == other.dependencies
+            && self.ballot == other.ballot
     }
 }
 
@@ -78,14 +97,44 @@ pub(crate) struct RecoverDependencies {
 
 impl EventStore {
     #[instrument(level = "trace")]
-    pub fn init(path: Option<String>, node_serial: u16) -> Self {
-        EventStore {
-            events: BTreeMap::default(),
-            mappings: BTreeMap::default(),
-            last_applied: T::default(),
-            latest_t0: T0::default(),
-            database: path.map(|p| Database::new(p).unwrap()),
-            node_serial,
+    pub fn init(path: Option<String>, node_serial: u16) -> Result<Self> {
+        match path {
+            Some(path) => {
+                // TODO: Read all from DB and fill event store
+                let mut events = BTreeMap::default();
+                let mut mappings = BTreeMap::default();
+                let mut last_applied = T::default();
+                let mut latest_t0 = T0::default();
+                let db = Database::new(path)?;
+                let result = db.read_all()?;
+                for entry in result {
+                    let event = Event::from_bytes(entry)?;
+                    if event.state == State::Applied && event.t > last_applied {
+                        last_applied = event.t;
+                    }
+                    if latest_t0 < event.t_zero {
+                        latest_t0 = event.t_zero;
+                    }
+                    mappings.insert(event.t, event.t_zero);
+                    events.insert(event.t_zero, event);
+                }
+                Ok(EventStore {
+                    events,
+                    mappings,
+                    last_applied,
+                    latest_t0,
+                    database: Some(db),
+                    node_serial,
+                })
+            }
+            None => Ok(EventStore {
+                events: BTreeMap::default(),
+                mappings: BTreeMap::default(),
+                last_applied: T::default(),
+                latest_t0: T0::default(),
+                database: None,
+                node_serial,
+            }),
         }
     }
 
@@ -213,9 +262,11 @@ impl EventStore {
         if let Some(db) = &self.database {
             let t: Vec<u8> = (*old_event.t).into();
             if update {
-                db.update(t.into(), old_event.as_bytes()).await.unwrap()
+                db.update_object(t.into(), old_event.as_bytes())
+                    .await
+                    .unwrap()
             } else {
-                db.init(
+                db.init_object(
                     t.into(),
                     Bytes::from(old_event.event.clone()),
                     old_event.as_bytes(),
@@ -293,5 +344,47 @@ impl EventStore {
             }
         }
         Ok(recover_deps)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::event_store::Event;
+    use crate::utils::{Ballot, T, T0};
+    use bytes::Bytes;
+    use consensus_transport::consensus_transport::State;
+    use monotime::MonoTime;
+    use persistence::SplitEvent;
+    use std::collections::HashSet;
+
+    #[test]
+    fn event_conversion() {
+        let mut dependencies = HashSet::default();
+        for i in 0..3 {
+            dependencies.insert(T0(MonoTime::new(0, i)));
+        }
+        let t_zero = T0(MonoTime::new(1, 1));
+        let t = T(t_zero.next().into_time());
+
+        let event = Event {
+            t_zero,
+            t,
+            state: State::Commited,
+            event: Vec::from(b"this is a test transaction"),
+            dependencies,
+            ballot: Ballot(MonoTime::new(1, 1)),
+        };
+        let key = Bytes::from(t_zero.0);
+        let payload = Bytes::from(event.event.clone());
+        let state = event.as_bytes();
+        let event_to_bytes = SplitEvent {
+            key,
+            event: payload,
+            state,
+        };
+
+        let back_to_struct = Event::from_bytes(event_to_bytes).unwrap();
+
+        assert_eq!(event, back_to_struct)
     }
 }
