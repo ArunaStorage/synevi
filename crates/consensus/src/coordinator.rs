@@ -113,21 +113,17 @@ impl CoordinatorIterator {
     }
 
     pub async fn recover(
-        node: Arc<NodeInfo>,
-        event_store: Arc<Mutex<EventStore>>,
-        network_interface: Arc<dyn NetworkInterface>,
         t0_recover: T0,
-        stats: Arc<Stats>,
         wait_handler: Arc<WaitHandler>,
     ) -> Result<()> {
         let mut backoff_counter: u8 = 0;
         while backoff_counter <= MAX_RETRIES {
             let mut coordinator_iter = Coordinator::<Recover>::recover(
-                node.clone(),
-                event_store.clone(),
-                network_interface.clone(),
+                wait_handler.node_info.clone(),
+                wait_handler.event_store.clone(),
+                wait_handler.network.get_interface().await,
                 t0_recover,
-                stats.clone(),
+                wait_handler.stats.clone(),
                 wait_handler.clone(),
             )
             .await?;
@@ -136,7 +132,7 @@ impl CoordinatorIterator {
                 tokio::time::sleep(Duration::from_millis(1000)).await;
                 continue;
             }
-            stats.total_recovers.fetch_add(1, Ordering::Relaxed);
+            wait_handler.stats.total_recovers.fetch_add(1, Ordering::Relaxed);
             while coordinator_iter.next().await?.is_some() {}
             break;
         }
@@ -201,8 +197,6 @@ impl<X> Coordinator<X> {
     }
 }
 
-const RECOVER_TIMEOUT: u64 = 10000;
-
 impl Coordinator<Recover> {
     #[instrument(level = "trace")]
     pub async fn recover(
@@ -213,7 +207,6 @@ impl Coordinator<Recover> {
         stats: Arc<Stats>,
         wait_handler: Arc<WaitHandler>,
     ) -> Result<CoordinatorIterator> {
-        panic!();
         let mut event_store_lock = event_store.lock().await;
         let event = event_store_lock.get_or_insert(t0_recover).await;
         if matches!(event.state, State::Undefined) {
@@ -394,13 +387,7 @@ impl Coordinator<Recover> {
                         phantom: Default::default(),
                     }))
                 } else if !waiting.is_empty() {
-                    todo!();
-                    //let mut rx = event.state.subscribe();
-                    // timeout(
-                    //     Duration::from_millis(RECOVER_TIMEOUT),
-                    //     rx.wait_for(|(s, _)| *s > previous_state),
-                    // )
-                    // .await??;
+                    // We will wait anyway if RestartRecovery is returned
                     return Ok(CoordinatorIterator::RestartRecovery);
                 } else {
                     state_machine.t = T(*state_machine.t_zero);
@@ -661,11 +648,7 @@ impl Coordinator<Committed> {
 mod tests {
     use super::Coordinator;
     use crate::{
-        coordinator::{Initialized, TransactionStateMachine},
-        event_store::{Event, EventStore},
-        tests::NetworkMock,
-        utils::{from_dependency, Ballot, T, T0},
-        wait_handler::WaitHandler,
+        coordinator::{Initialized, TransactionStateMachine}, event_store::{Event, EventStore}, node::Stats, tests::NetworkMock, utils::{from_dependency, Ballot, T, T0}, wait_handler::WaitHandler
     };
     use bytes::{BufMut, Bytes};
     use consensus_transport::{
@@ -674,11 +657,7 @@ mod tests {
     };
     use diesel_ulid::DieselUlid;
     use monotime::MonoTime;
-    use std::{
-        collections::HashSet,
-        sync::Arc,
-        vec,
-    };
+    use std::{collections::HashSet, sync::Arc, vec};
     use tokio::sync::Mutex;
 
     #[tokio::test]
@@ -695,7 +674,7 @@ mod tests {
             network.clone(),
             Vec::from("test"),
             Arc::new(Default::default()),
-            WaitHandler::new(event_store, network),
+            WaitHandler::new(event_store, network, Default::default(), Default::default()),
         )
         .await;
         assert_eq!(coordinator.transaction.state, State::PreAccepted);
@@ -720,16 +699,19 @@ mod tests {
         };
 
         let network = Arc::new(NetworkMock::default());
+
+        let node_info =  Arc::new(NodeInfo {
+            id: DieselUlid::generate(),
+            serial: 0,
+        });
+
         let mut coordinator = Coordinator::<Initialized> {
-            node: Arc::new(NodeInfo {
-                id: DieselUlid::generate(),
-                serial: 0,
-            }),
+            node: node_info.clone(),
             network_interface: network.clone(),
             event_store: event_store.clone(),
             transaction: state_machine.clone(),
             stats: Arc::new(Default::default()),
-            wait_handler: WaitHandler::new(event_store.clone(), network),
+            wait_handler: WaitHandler::new(event_store.clone(), network,  Arc::new(Stats::default()), node_info),
             phantom: Default::default(),
         };
 
@@ -851,17 +833,19 @@ mod tests {
             ballot: Ballot::default(),
         };
 
+        let node_info = Arc::new(NodeInfo {
+            id: DieselUlid::generate(),
+            serial: 0,
+        });
+
         let network = Arc::new(NetworkMock::default());
         let mut coordinator = Coordinator {
-            node: Arc::new(NodeInfo {
-                id: DieselUlid::generate(),
-                serial: 0,
-            }),
+            node: node_info.clone(),
             network_interface: network.clone(),
             event_store: event_store.clone(),
             transaction: state_machine.clone(),
             stats: Arc::new(Default::default()),
-            wait_handler: WaitHandler::new(event_store.clone(), network),
+            wait_handler: WaitHandler::new(event_store.clone(), network,  Arc::new(Stats::default()), node_info),
             phantom: Default::default(),
         };
 

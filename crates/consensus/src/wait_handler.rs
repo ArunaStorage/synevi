@@ -1,13 +1,12 @@
 use crate::{
-    event_store::{Event, EventStore},
-    utils::{Ballot, T, T0},
+    coordinator::CoordinatorIterator, event_store::{Event, EventStore}, node::Stats, utils::{Ballot, T, T0}
 };
 use ahash::RandomState;
 use anyhow::Result;
 use async_channel::{Receiver, Sender};
-use consensus_transport::{consensus_transport::State, network::Network};
+use consensus_transport::{consensus_transport::State, network::{Network, NodeInfo}};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -36,15 +35,17 @@ pub struct WaitMessage {
 pub struct WaitHandler {
     sender: Sender<WaitMessage>,
     receiver: Receiver<WaitMessage>,
-    event_store: Arc<Mutex<EventStore>>,
-    _network: Arc<dyn Network + Send + Sync>,
+    pub event_store: Arc<Mutex<EventStore>>,
+    pub stats: Arc<Stats>,
+    pub node_info: Arc<NodeInfo>,
+    pub network: Arc<dyn Network + Send + Sync>,
 }
 
 #[derive(Debug)]
 struct WaitDependency {
     wait_message: Option<WaitMessage>,
     deps: HashSet<T0, RandomState>,
-    _started_at: Instant,
+    started_at: Instant,
 }
 
 struct WaiterState {
@@ -57,13 +58,17 @@ impl WaitHandler {
     pub fn new(
         event_store: Arc<Mutex<EventStore>>,
         network: Arc<dyn Network + Send + Sync>,
+        stats: Arc<Stats>,
+        node_info: Arc<NodeInfo>,
     ) -> Arc<Self> {
         let (sender, receiver) = async_channel::bounded(1000);
         Arc::new(Self {
             sender,
             receiver,
             event_store,
-            _network: network,
+            stats,
+            node_info,
+            network,
         })
     }
 
@@ -89,7 +94,7 @@ impl WaitHandler {
             .await?)
     }
 
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run(self: Arc<Self>) -> Result<()> {
         // HashMap<T0_dep waiting_for, Vec<T0_transaction waiting>>
 
         let mut waiter_state = WaiterState::new();
@@ -100,9 +105,7 @@ impl WaitHandler {
                     WaitAction::CommitBefore => {
                         //println!("CommitBefore");
                         self.upsert_event(&msg).await;
-                        waiter_state
-                            .committed
-                            .insert(msg.t_zero, msg.t);
+                        waiter_state.committed.insert(msg.t_zero, msg.t);
                         let mut to_apply =
                             waiter_state.remove_from_waiter_commit(&msg.t_zero, &msg.t);
                         while let Some(mut apply) = to_apply.pop() {
@@ -138,7 +141,11 @@ impl WaitHandler {
                     }
                 },
                 _ => {
-                    //println!("{:?}", waiter_state.events)
+                    if let Some(t0_recover) = self.check_recovery(&waiter_state) {
+                        println!("Recovering: {:?}", t0_recover);
+                        let wait_handler = self.clone();
+                        wait_handler.recover(t0_recover, &mut waiter_state).await;
+                    }
                 }
             }
         }
@@ -171,6 +178,53 @@ impl WaitHandler {
                 ballot: Ballot::default(),
             })
             .await;
+    }
+
+    async fn recover(self: Arc<Self>, t0_recover: T0, waiter_state: &mut WaiterState) {
+        let wait_handler = self.clone();
+        if let Some(event) = waiter_state.events.get_mut(&t0_recover) {
+            event.started_at = Instant::now();
+        }
+        tokio::spawn(async move {
+            if let Err(e) = CoordinatorIterator::recover(t0_recover, wait_handler).await {
+                println!("Error during recovery: {:?}", e);
+            };
+        });
+    }
+
+    fn check_recovery(&self, waiter_state: &WaiterState ) -> Option<T0> {
+        for (_, WaitDependency { deps, started_at, .. }) in &waiter_state.events{
+            if started_at.elapsed() > Duration::from_secs(1) {
+
+                let sorted_deps: BTreeSet<T0> = deps.iter().cloned().collect();
+
+                let mut min_dep = None;
+                for t0_dep in sorted_deps {
+                    if let Some(t_dep) = waiter_state.committed.get(&t0_dep) {
+                        // Check if lowest t0 is committed
+                        // If yes -> Recover dep with lowest T
+                        if let Some((t0_min, t_min)) = min_dep.as_mut() {
+                            if t_dep < t_min {
+                                *t0_min = t0_dep;
+                                *t_min = *t_dep;
+                            }
+                        }else{
+                            min_dep = Some((t0_dep, *t_dep));
+                        }
+                    }else{
+                        // Lowest T0 is not commited -> Recover lowest t0 to ensure commit
+                        // Recover t0_dep
+                        return Some(t0_dep);
+                    }
+                }
+
+                // Recover min_dep
+                if let Some((t0_dep, _)) = min_dep {
+                    return Some(t0_dep);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -245,7 +299,7 @@ impl WaiterState {
         let mut wait_dep = WaitDependency {
             wait_message: Some(wait_message),
             deps: HashSet::default(),
-            _started_at: Instant::now(),
+            started_at: Instant::now(),
         };
         if let Some(wait_message) = &mut wait_dep.wait_message {
             for dep_t0 in wait_message.deps.iter() {
@@ -289,7 +343,7 @@ impl WaiterState {
         let mut wait_dep = WaitDependency {
             wait_message: Some(wait_message),
             deps: HashSet::default(),
-            _started_at: Instant::now(),
+            started_at: Instant::now(),
         };
         if let Some(wait_message) = &wait_dep.wait_message {
             for dep_t0 in wait_message.deps.iter() {
@@ -330,7 +384,9 @@ mod tests {
             sender,
             receiver,
             event_store: Arc::new(Mutex::new(EventStore::init(None, 0))),
-            _network: Arc::new(crate::tests::NetworkMock::default()),
+            network: Arc::new(crate::tests::NetworkMock::default()),
+            stats: Arc::new(Stats::default()),
+            node_info: Arc::new(NodeInfo::default()),
         };
 
         let (sx11, rx11) = tokio::sync::oneshot::channel();
@@ -401,6 +457,8 @@ mod tests {
         //     )
         //     .await
         //     .unwrap();
+
+        let wait_handler = Arc::new(wait_handler);
 
         tokio::spawn(async move { wait_handler.run().await.unwrap() });
         timeout(Duration::from_millis(10), rx11)

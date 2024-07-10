@@ -41,7 +41,7 @@ mod tests {
 
         let mut joinset = tokio::task::JoinSet::new();
 
-        for _ in 0..1000 {
+        for _ in 0..10000 {
             let coordinator = arc_coordinator.clone();
             joinset.spawn(async move {
                 coordinator
@@ -152,21 +152,37 @@ mod tests {
 
             let coordinator1 = nodes.pop().unwrap();
             let coordinator2 = nodes.pop().unwrap();
+            let coordinator3 = nodes.pop().unwrap();
+            let coordinator4 = nodes.pop().unwrap();
+            let coordinator5 = nodes.pop().unwrap();
 
             let mut joinset = tokio::task::JoinSet::new();
 
             let arc_coordinator1 = Arc::new(coordinator1);
             let arc_coordinator2 = Arc::new(coordinator2);
+            let arc_coordinator3 = Arc::new(coordinator3);
+            let arc_coordinator4 = Arc::new(coordinator4);
+            let arc_coordinator5 = Arc::new(coordinator5);
 
-            for _ in 0..1000 {
+            let start = std::time::Instant::now();
+
+            for _ in 0..10000 {
                 let coordinator1 = arc_coordinator1.clone();
                 let coordinator2 = arc_coordinator2.clone();
+                let coordinator3 = arc_coordinator3.clone();
+                let coordinator4 = arc_coordinator4.clone();
+                let coordinator5 = arc_coordinator5.clone();
                 joinset.spawn(async move { coordinator1.transaction(Vec::from("C1")).await });
                 joinset.spawn(async move { coordinator2.transaction(Vec::from("C2")).await });
+                joinset.spawn(async move { coordinator3.transaction(Vec::from("C3")).await });
+                joinset.spawn(async move { coordinator4.transaction(Vec::from("C4")).await });
+                joinset.spawn(async move { coordinator5.transaction(Vec::from("C5")).await });
             }
             while let Some(res) = joinset.join_next().await {
                 res.unwrap().unwrap();
             }
+
+            println!("Time: {:?}", start.elapsed());
 
             let (total, accepts, recovers) = arc_coordinator1.get_stats();
             println!(
@@ -185,7 +201,86 @@ mod tests {
                 recovers
             );
 
-            println!("Done");
+            let (total, accepts, recovers) = arc_coordinator3.get_stats();
+            println!(
+                "C3: Fast: {:?}, Slow: {:?} Paths / {:?} Total / {:?} Recovers",
+                total - accepts,
+                accepts,
+                total,
+                recovers
+            );
+
+            let (total, accepts, recovers) = arc_coordinator4.get_stats();
+            println!(
+                "C4: Fast: {:?}, Slow: {:?} Paths / {:?} Total / {:?} Recovers",
+                total - accepts,
+                accepts,
+                total,
+                recovers
+            );
+
+            let (total, accepts, recovers) = arc_coordinator5.get_stats();
+            println!(
+                "C5: Fast: {:?}, Slow: {:?} Paths / {:?} Total / {:?} Recovers",
+                total - accepts,
+                accepts,
+                total,
+                recovers
+            );
+
+            assert_eq!(recovers, 0);
+
+            let coordinator_store: BTreeMap<T0, T> = arc_coordinator1
+                .get_event_store()
+                .lock()
+                .await
+                .events
+                .clone()
+                .into_values()
+                .map(|e| (e.t_zero, e.t))
+                .collect();
+
+            nodes.push(Arc::<Node>::into_inner(arc_coordinator2).unwrap());
+            nodes.push(Arc::<Node>::into_inner(arc_coordinator3).unwrap());
+            nodes.push(Arc::<Node>::into_inner(arc_coordinator4).unwrap());
+            nodes.push(Arc::<Node>::into_inner(arc_coordinator5).unwrap());
+
+            let mut got_mismatch = false;
+            for node in nodes {
+                let node_store: BTreeMap<T0, T> = node
+                    .get_event_store()
+                    .lock()
+                    .await
+                    .events
+                    .clone()
+                    .into_values()
+                    .map(|e| (e.t_zero, e.t))
+                    .collect();
+                assert!(node
+                    .get_event_store()
+                    .lock()
+                    .await
+                    .events
+                    .clone()
+                    .iter()
+                    .all(|(_, e)| e.state == State::Applied));
+                assert_eq!(coordinator_store.len(), node_store.len());
+                if coordinator_store != node_store {
+                    println!("Node: {:?}", node.get_info());
+                    let mut node_store_iter = node_store.iter();
+                    for (k, v) in coordinator_store.iter() {
+                        if let Some(next) = node_store_iter.next() {
+                            if next != (k, v) {
+                                println!("Diff: Got {:?}, Expected: {:?}", next, (k, v));
+                                println!("Nanos: {:?} | {:?}", next.1 .0.get_nanos(), v.0.get_nanos());
+                            }
+                        }
+                    }
+                    got_mismatch = true;
+                }
+    
+                assert!(!got_mismatch);
+            }
         });
         runtime.shutdown_background();
     }

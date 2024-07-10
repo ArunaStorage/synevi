@@ -37,7 +37,7 @@ pub trait Network: std::fmt::Debug {
     async fn get_waiting_time(&self, node_serial: u16) -> u64;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct NodeInfo {
     pub id: DieselUlid,
     pub serial: u16,
@@ -127,7 +127,7 @@ impl Network for NetworkConfig {
                 host,
                 channel,
             }),
-            latency: AtomicU64::new(600),
+            latency: AtomicU64::new(500),
             skew: AtomicI64::new(0),
         });
         Ok(())

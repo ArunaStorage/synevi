@@ -5,20 +5,19 @@ use crate::utils::{from_dependency, into_dependency, Ballot, T, T0};
 use crate::wait_handler::{WaitAction, WaitHandler};
 use anyhow::Result;
 use consensus_transport::consensus_transport::*;
-use consensus_transport::network::{Network, NodeInfo};
+use consensus_transport::network::NodeInfo;
 use consensus_transport::replica::Replica;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::Mutex;
 use tracing::instrument;
 
 #[derive(Debug)]
 pub struct ReplicaConfig {
     pub _node_info: Arc<NodeInfo>, // For tracing
-    pub network: Arc<dyn Network + Send + Sync>,
     pub event_store: Arc<Mutex<EventStore>>,
     pub stats: Arc<Stats>,
-    pub reorder_buffer: Arc<ReorderBuffer>,
+    pub _reorder_buffer: Arc<ReorderBuffer>,
     pub wait_handler: Arc<WaitHandler>,
 }
 
@@ -28,7 +27,7 @@ impl Replica for ReplicaConfig {
     async fn pre_accept(
         &self,
         request: PreAcceptRequest,
-        node_serial: u16,
+        _node_serial: u16,
     ) -> Result<PreAcceptResponse> {
         let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
 
@@ -44,18 +43,22 @@ impl Replica for ReplicaConfig {
             });
         }
 
-        let waiting_time = self.network.get_waiting_time(node_serial).await;
+        // let waiting_time = self.network.get_waiting_time(node_serial).await;
 
-        let (sx, rx) = oneshot::channel();
+        // let (sx, rx) = oneshot::channel();
 
-        self.reorder_buffer
-            .send_msg(t0, sx, request.event, waiting_time)
+        let (deps, t) = self
+            .event_store
+            .lock()
+            .await
+            .pre_accept(t0, request.event)
             .await?;
 
-        let (t, deps) = rx.await?;
+        // self.reorder_buffer
+        //      .send_msg(t0, sx, request.event, waiting_time)
+        //      .await?;
 
-        // Remove mich aus buffer
-        // wenn ich geweckt wurde && T0 != Ich -> buffer[0].awake
+        // let (t, deps) = rx.await?;
 
         Ok(PreAcceptResponse {
             timestamp: t.into(),
@@ -107,14 +110,7 @@ impl Replica for ReplicaConfig {
         let deps = from_dependency(request.dependencies)?;
         let (sx, rx) = tokio::sync::oneshot::channel();
         self.wait_handler
-            .send_msg(
-                t_zero,
-                t,
-                deps,
-                request.event,
-                WaitAction::CommitBefore,
-                sx,
-            )
+            .send_msg(t_zero, t, deps, request.event, WaitAction::CommitBefore, sx)
             .await?;
         let _ = rx.await;
         Ok(CommitResponse {})
@@ -156,10 +152,7 @@ impl Replica for ReplicaConfig {
             event_store_lock.update_ballot(&t_zero, request_ballot);
 
             if matches!(event.state, State::Undefined) {
-                event.t = event_store_lock
-                    .pre_accept(t_zero, request.event)
-                    .await?
-                    .1;
+                event.t = event_store_lock.pre_accept(t_zero, request.event).await?.1;
             };
             let recover_deps = event_store_lock.get_recover_deps(&event.t, &t_zero).await?;
 
@@ -174,9 +167,7 @@ impl Replica for ReplicaConfig {
                 nack: Ballot::default().into(),
             })
         } else {
-            let (_, t) = event_store_lock
-                .pre_accept(t_zero, request.event)
-                .await?;
+            let (_, t) = event_store_lock.pre_accept(t_zero, request.event).await?;
             let recover_deps = event_store_lock.get_recover_deps(&t, &t_zero).await?;
             self.stats.total_recovers.fetch_add(1, Ordering::Relaxed);
 
@@ -195,6 +186,7 @@ impl Replica for ReplicaConfig {
 #[cfg(test)]
 mod tests {
     use crate::event_store::{Event, EventStore};
+    use crate::node::Stats;
     use crate::reorder_buffer::ReorderBuffer;
     use crate::replica::ReplicaConfig;
     use crate::tests;
@@ -228,17 +220,26 @@ mod tests {
             .await;
 
         let network = Arc::new(tests::NetworkMock::default());
+        let node_info = Arc::new(NodeInfo {
+            id: Default::default(),
+            serial: 0,
+        });
+
+        let stats = Arc::new(Stats::default());
+
+        let wait_handler = WaitHandler::new(event_store.clone(), network.clone(), stats.clone(), node_info.clone());
+
+        let wh_clone = wait_handler.clone();
+        tokio::spawn(async move {
+            wh_clone.run().await.unwrap();
+        }); 
 
         let replica = ReplicaConfig {
-            _node_info: Arc::new(NodeInfo {
-                id: Default::default(),
-                serial: 0,
-            }),
-            network: network.clone(),
+            _node_info: node_info.clone(),
             event_store: event_store.clone(),
-            stats: Arc::new(Default::default()),
-            reorder_buffer: ReorderBuffer::new(event_store.clone()),
-            wait_handler: WaitHandler::new(event_store.clone(), network.clone()),
+            stats: stats.clone(),
+            _reorder_buffer: ReorderBuffer::new(event_store.clone()),
+            wait_handler,
         };
 
         let t0 = conflicting_t0.next().into_time();
@@ -251,7 +252,6 @@ mod tests {
             timestamp: t0.into(),
             dependencies: buf.freeze().to_vec(),
         };
-
         replica.commit(request).await.unwrap();
         assert!(matches!(
             network.get_requests().await.first().unwrap(),

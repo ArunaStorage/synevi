@@ -99,14 +99,12 @@ impl From<Ballot> for Bytes {
     }
 }
 
-
 impl TryFrom<&[u8]> for Ballot {
     type Error = anyhow::Error;
     fn try_from(value: &[u8]) -> Result<Self> {
         Ok(Ballot(MonoTime::try_from(value)?))
     }
 }
-
 
 impl From<Ballot> for Vec<u8> {
     fn from(val: Ballot) -> Self {

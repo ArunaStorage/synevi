@@ -53,7 +53,7 @@ impl Node {
             reorder_clone.run().await.unwrap();
         });
 
-        let wait_handler = WaitHandler::new(event_store.clone(), network.clone());
+        let wait_handler = WaitHandler::new(event_store.clone(), network.clone(), stats.clone(), node_name.clone());
         let wait_handler_clone = wait_handler.clone();
         tokio::spawn(async move {
             wait_handler_clone.run().await.unwrap();
@@ -62,9 +62,8 @@ impl Node {
         let replica = Arc::new(ReplicaConfig {
             _node_info: node_name.clone(),
             event_store: event_store.clone(),
-            network: network.clone(),
             stats: stats.clone(),
-            reorder_buffer,
+            _reorder_buffer: reorder_buffer,
             wait_handler: wait_handler.clone(),
         });
         // Spawn tonic server
@@ -76,7 +75,7 @@ impl Node {
             event_store,
             network,
             stats,
-            semaphore: Arc::new(tokio::sync::Semaphore::new(1000)),
+            semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
             wait_handler,
         })
     }

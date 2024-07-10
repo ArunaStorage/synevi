@@ -23,6 +23,7 @@ pub struct ReorderMessage {
 
 #[derive(Clone, Debug)]
 pub struct ReorderBuffer {
+    #[allow(dead_code)]
     sender: Sender<ReorderMessage>,
     receiver: Receiver<ReorderMessage>,
     event_store: Arc<Mutex<EventStore>>,
@@ -38,6 +39,7 @@ impl ReorderBuffer {
         })
     }
 
+    #[allow(dead_code)]
     pub async fn send_msg(
         &self,
         t0: T0,

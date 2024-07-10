@@ -39,6 +39,7 @@ pub struct Event {
     pub event: Vec<u8>,
     pub dependencies: HashSet<T0, RandomState>, // t and t_zero
     pub ballot: Ballot,
+    //TODO: timestamp: Last updated
 }
 
 impl Event {
@@ -180,7 +181,6 @@ impl EventStore {
 
     #[instrument(level = "trace")]
     pub async fn upsert(&mut self, event: Event) {
-
         let old_event = self.events.entry(event.t_zero).or_insert(event.clone());
         if self.latest_t0 < event.t_zero {
             self.latest_t0 = event.t_zero;
@@ -215,9 +215,13 @@ impl EventStore {
             if update {
                 db.update(t.into(), old_event.as_bytes()).await.unwrap()
             } else {
-                db.init(t.into(), Bytes::from(old_event.event.clone()), old_event.as_bytes())
-                    .await
-                    .unwrap()
+                db.init(
+                    t.into(),
+                    Bytes::from(old_event.event.clone()),
+                    old_event.as_bytes(),
+                )
+                .await
+                .unwrap()
             }
         }
     }
