@@ -10,13 +10,13 @@ mod wait_handler;
 #[cfg(test)]
 pub mod tests {
     use anyhow::Result;
+    use diesel_ulid::DieselUlid;
+    use std::sync::Arc;
     use synevi_network::error::BroadCastError;
     use synevi_network::network::BroadcastResponse;
     use synevi_network::network::NetworkInterface;
     use synevi_network::network::{BroadcastRequest, Network};
     use synevi_network::replica::Replica;
-    use diesel_ulid::DieselUlid;
-    use std::sync::Arc;
     use tokio::sync::Mutex;
 
     #[derive(Debug, Default)]

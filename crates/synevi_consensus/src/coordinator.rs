@@ -5,17 +5,17 @@ use crate::utils::{from_dependency, into_dependency, Ballot, T, T0};
 use crate::wait_handler::{WaitAction, WaitHandler};
 use ahash::RandomState;
 use anyhow::Result;
+use std::collections::HashSet;
+use std::marker::PhantomData;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
 use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, CommitRequest, PreAcceptRequest,
     PreAcceptResponse, RecoverRequest, RecoverResponse, State,
 };
 use synevi_network::network::{BroadcastRequest, NetworkInterface, NodeInfo};
 use synevi_network::utils::IntoInner;
-use std::collections::HashSet;
-use std::marker::PhantomData;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::instrument;
 
@@ -656,13 +656,13 @@ mod tests {
         wait_handler::WaitHandler,
     };
     use bytes::{BufMut, Bytes};
+    use diesel_ulid::DieselUlid;
+    use monotime::MonoTime;
+    use std::{collections::HashSet, sync::Arc, vec};
     use synevi_network::{
         consensus_transport::{PreAcceptResponse, State},
         network::NodeInfo,
     };
-    use diesel_ulid::DieselUlid;
-    use monotime::MonoTime;
-    use std::{collections::HashSet, sync::Arc, vec};
     use tokio::sync::Mutex;
 
     #[tokio::test]

@@ -1,7 +1,7 @@
-use synevi_consensus::node::Node;
 use criterion::{criterion_group, criterion_main, Criterion};
 use diesel_ulid::DieselUlid;
 use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
+use synevi_consensus::node::Node;
 use tokio::runtime;
 
 async fn prepare() -> (Vec<Arc<Node>>, Vec<u8>) {
@@ -10,11 +10,9 @@ async fn prepare() -> (Vec<Arc<Node>>, Vec<u8>) {
 
     for (i, m) in node_names.iter().enumerate() {
         let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
-        let network = Arc::new(synevi_network::network::NetworkConfig::new(
-            socket_addr,
-        ));
-        let path = format!("../tests/database/{}_test_db", i);
-        let node = Node::new_with_parameters(*m, i as u16, network, Some(path))
+        let network = Arc::new(synevi_network::network::NetworkConfig::new(socket_addr));
+        //let path = format!("../tests/database/{}_test_db", i);
+        let node = Node::new_with_parameters(*m, i as u16, network, None)
             .await
             .unwrap();
         nodes.push(node);
@@ -28,11 +26,7 @@ async fn prepare() -> (Vec<Arc<Node>>, Vec<u8>) {
             }
         }
     }
-    let size = 4_004_304;
-    let mut payload = Vec::with_capacity(size);
-    for _ in 0..size {
-        payload.push(u8::MAX);
-    }
+    let payload = vec![u8::MAX; 2_000_000];
     (nodes.into_iter().map(Arc::new).collect(), payload.clone())
 }
 
@@ -76,11 +70,7 @@ async fn bigger_payloads_execution(coordinator: Arc<Node>, payload: Vec<u8>) {
     for _ in 0..10 {
         let coordinator = coordinator.clone();
         let payload = payload.clone();
-        joinset.spawn(async move {
-            coordinator
-                .transaction(payload)
-                .await
-        });
+        joinset.spawn(async move { coordinator.transaction(payload).await });
     }
     while let Some(res) = joinset.join_next().await {
         res.unwrap().unwrap();
@@ -104,10 +94,10 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             .iter(|| contention_execution(nodes.clone()))
     });
 
-    c.bench_function("bigger_payloads", |b| {
-        b.to_async(&runtime)
-            .iter(|| bigger_payloads_execution(nodes.first().unwrap().clone(), payload.clone()))
-    });
+    //c.bench_function("bigger_payloads", |b| {
+    //    b.to_async(&runtime)
+    //        .iter(|| bigger_payloads_execution(nodes.first().unwrap().clone(), payload.clone()))
+    //});
 }
 
 criterion_group! {

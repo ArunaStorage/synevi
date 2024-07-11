@@ -2,19 +2,20 @@ use crate::{
     coordinator::CoordinatorIterator,
     event_store::{Event, EventStore},
     node::Stats,
-    utils::{Ballot, T, T0},
+    utils::{T, T0},
 };
 use ahash::RandomState;
 use anyhow::Result;
 use async_channel::{Receiver, Sender};
-use synevi_network::{
-    consensus_transport::State,
-    network::{Network, NodeInfo},
-};
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
+};
+use std::collections::BTreeMap;
+use synevi_network::{
+    consensus_transport::State,
+    network::{Network, NodeInfo},
 };
 use tokio::{
     sync::{oneshot, Mutex},
@@ -114,14 +115,14 @@ impl WaitHandler {
                         waiter_state.committed.insert(msg.t_zero, msg.t);
                         let mut to_apply =
                             waiter_state.remove_from_waiter_commit(&msg.t_zero, &msg.t);
-                        while let Some(mut apply) = to_apply.pop() {
-                            apply.action = WaitAction::ApplyAfter;
-                            self.upsert_event(&apply).await;
-                            waiter_state.applied.insert(apply.t_zero);
-                            if let Some(notify) = apply.notify.take() {
+                        while let Some(mut apply) = to_apply.pop_first() {
+                            apply.1.action = WaitAction::ApplyAfter;
+                            self.upsert_event(&apply.1).await;
+                            waiter_state.applied.insert(apply.1.t_zero);
+                            if let Some(notify) = apply.1.notify.take() {
                                 let _ = notify.send(());
                             }
-                            waiter_state.remove_from_waiter_apply(&apply.t_zero, &mut to_apply);
+                            waiter_state.remove_from_waiter_apply(&apply.1.t_zero, &mut to_apply);
                         }
                         waiter_state.insert_commit(msg);
                     }
@@ -132,16 +133,16 @@ impl WaitHandler {
                                 let _ = notify.send(());
                             }
                             waiter_state.applied.insert(msg.t_zero);
-                            let mut to_apply = Vec::new();
+                            let mut to_apply = BTreeMap::new();
                             waiter_state.remove_from_waiter_apply(&msg.t_zero, &mut to_apply);
-                            while let Some(mut apply) = to_apply.pop() {
-                                apply.action = WaitAction::ApplyAfter;
-                                self.upsert_event(&apply).await;
-                                waiter_state.applied.insert(apply.t_zero);
-                                if let Some(notify) = apply.notify.take() {
+                            while let Some(mut apply) = to_apply.pop_first() {
+                                apply.1.action = WaitAction::ApplyAfter;
+                                self.upsert_event(&apply.1).await;
+                                waiter_state.applied.insert(apply.1.t_zero);
+                                if let Some(notify) = apply.1.notify.take() {
                                     let _ = notify.send(());
                                 }
-                                waiter_state.remove_from_waiter_apply(&apply.t_zero, &mut to_apply);
+                                waiter_state.remove_from_waiter_apply(&apply.1.t_zero, &mut to_apply);
                             }
                         }
                     }
@@ -248,8 +249,9 @@ impl WaiterState {
         }
     }
 
-    fn remove_from_waiter_commit(&mut self, t0_dep: &T0, t_dep: &T) -> Vec<WaitMessage> {
-        let mut apply_deps = Vec::new();
+    fn remove_from_waiter_commit(&mut self, t0_dep: &T0, t_dep: &T) -> //Vec<WaitMessage> {
+    BTreeMap<T, WaitMessage> {
+        let mut apply_deps = BTreeMap::default();
         self.events.retain(|_, event| {
             if let Some(msg) = &mut event.wait_message {
                 if msg.t_zero == *t0_dep {
@@ -267,7 +269,7 @@ impl WaiterState {
                             let _ = sender.send(());
                         }
                     } else if let Some(msg) = event.wait_message.take() {
-                        apply_deps.push(msg);
+                        apply_deps.insert(msg.t, msg);
                     }
                     return false;
                 }
@@ -277,11 +279,11 @@ impl WaiterState {
         apply_deps
     }
 
-    fn remove_from_waiter_apply(&mut self, t0_dep: &T0, to_apply: &mut Vec<WaitMessage>) {
+    fn remove_from_waiter_apply(&mut self, t0_dep: &T0, to_apply: &mut BTreeMap<T, WaitMessage>) {
         self.events.retain(|_, event| {
             event.deps.remove(t0_dep);
             for wait_dep in to_apply.iter() {
-                event.deps.remove(&wait_dep.t_zero);
+                event.deps.remove(&wait_dep.1.t_zero);
             }
 
             if let Some(msg) = &mut event.wait_message {
@@ -291,7 +293,7 @@ impl WaiterState {
                             let _ = sender.send(());
                         }
                     } else if let Some(msg) = event.wait_message.take() {
-                        to_apply.push(msg);
+                        to_apply.insert(msg.t, msg);
                     }
                     return false;
                 }

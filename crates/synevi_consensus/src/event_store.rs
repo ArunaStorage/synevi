@@ -5,12 +5,15 @@ use crate::{
 use ahash::RandomState;
 use anyhow::Result;
 use bytes::{BufMut, Bytes, BytesMut};
-use sha3::Sha3_256;
-use sha3::Digest;
-use synevi_network::consensus_transport::State;
 use monotime::MonoTime;
+use sha3::Digest;
+use sha3::Sha3_256;
+use std::{
+    collections::{BTreeMap, HashSet},
+    time::{SystemTime, UNIX_EPOCH},
+};
+use synevi_network::consensus_transport::State;
 use synevi_persistence::{Database, SplitEvent};
-use std::{collections::{BTreeMap, HashSet}, time::{SystemTime, UNIX_EPOCH}};
 use tracing::instrument;
 
 #[derive(Debug)]
@@ -30,6 +33,8 @@ pub struct EventStore {
     pub(crate) latest_t0: T0,             // last created or recognized t0
     pub node_serial: u16,
     latest_hash: [u8; 32],
+    // This is only needed for debugging purposes
+    // pub last_applied_series: Vec<T>, 
 }
 
 #[derive(Clone, Debug, Default)]
@@ -46,24 +51,27 @@ pub struct Event {
 
     pub previous_hash: Option<[u8; 32]>,
     pub last_updated: u128,
-
 }
 
 impl Event {
-
     fn hash_event(&self) -> [u8; 32] {
         let mut hasher = Sha3_256::new();
         hasher.update(Vec::<u8>::from(self.t_zero).as_slice());
         hasher.update(Vec::<u8>::from(self.t).as_slice());
-        hasher.update(self.state.into());
+        hasher.update(Vec::<u8>::from(self.ballot).as_slice());
+        hasher.update(i32::from(self.state).to_be_bytes().as_slice());
         hasher.update(self.event.as_slice());
-        for dep in &self.dependencies {
-            hasher.update(dep.into());
+        if let Some(previous_hash) = self.previous_hash {
+            hasher.update(previous_hash);
         }
+       // for dep in &self.dependencies {
+       //     hasher.update(Vec::<u8>::from(*dep).as_slice());
+       // }
+        // Do we want to include ballots in our hash?
+        // -> hasher.update(Vec::<u8>::from(self.ballot).as_slice());
 
         hasher.finalize().into()
     }
- 
 
     pub fn as_bytes(&self) -> Bytes {
         let mut new: BytesMut = BytesMut::new();
@@ -147,6 +155,7 @@ impl EventStore {
                     database: Some(db),
                     node_serial,
                     latest_hash: [0; 32], // TODO: Read from DB
+                    //last_applied_series: vec![],
                 })
             }
             None => Ok(EventStore {
@@ -156,7 +165,8 @@ impl EventStore {
                 latest_t0: T0::default(),
                 database: None,
                 node_serial,
-                latest_hash: [0; 32]
+                latest_hash: [0; 32],
+                //last_applied_series: vec![],
             }),
         }
     }
@@ -196,9 +206,9 @@ impl EventStore {
             t: T(*t_zero),
             state: State::Undefined,
             last_updated: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
-            .as_nanos(),
+                .duration_since(UNIX_EPOCH)
+                .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
+                .as_nanos(),
             ..Default::default()
         });
         entry.clone()
@@ -261,7 +271,9 @@ impl EventStore {
         }
 
         //println!("T0: {:?}, Old: {:?} new: {:?} @ {}", event.t_zero, old_event.state, event.state, self.node_serial);
-        if event.state < old_event.state || (event.state == State::Applied && old_event.state == State::Applied){
+        if event.state < old_event.state
+            || (event.state == State::Applied && old_event.state == State::Applied)
+        {
             return;
         }
 
@@ -285,11 +297,13 @@ impl EventStore {
             .as_nanos();
 
         self.mappings.insert(event.t, event.t_zero);
+
         if old_event.state == State::Applied {
+            //self.last_applied_series.push(event.t);
             self.last_applied = event.t;
             old_event.previous_hash = Some(self.latest_hash);
-
-
+            self.latest_hash = old_event.hash_event();
+            //println!("Latest hash: {:?}", self.latest_hash);
         }
 
         if let Some(db) = &self.database {
@@ -312,22 +326,31 @@ impl EventStore {
 
     #[instrument(level = "trace")]
     pub async fn get_dependencies(&self, t: &T, t_zero: &T0) -> Vec<u8> {
-        let mut deps = Vec::new();
         if &self.last_applied == t {
-            return deps;
+            return vec![]
         }
         assert!(self.last_applied < *t);
-
-        for (_, t0) in self.mappings.range(self.last_applied..*t) {
-            if t0 != t_zero {
-                deps.put::<Bytes>((*t0).into());
+        // What about deps with dep_t0 < last_applied_t0 && dep_t > t?
+        let mut deps= Vec::new();
+        if let Some(first_dep) = self.events.iter().find(|e| (e.1.state != State::Applied) && e.1.state != State::Undefined) {
+            for (t0, _) in self.events.range(*first_dep.0..T0(**t)) {
+                if t0 != t_zero {
+                    deps.put::<Bytes>((*t0).into());
+                }
             }
         }
+
+        // We need deps that have lower t0 than last applied but higher t than our t
+        //for (_, t0) in self.mappings.range(self.last_applied..*t) {
+        //    if t0 != t_zero {
+        //        deps.put::<Bytes>((*t0).into());
+        //    }
+        //}
         deps
     }
 
     #[instrument(level = "trace")]
-    pub async fn get_recover_deps(&self, t: &T, t_zero: &T0) -> Result<RecoverDependencies> {
+    pub async fn get_recover_deps(&self, _t: &T, t_zero: &T0) -> Result<RecoverDependencies> {
         let mut recover_deps = RecoverDependencies::default();
         for (t_dep, t_zero_dep) in self.mappings.range(self.last_applied..) {
             let dep_event = self.events.get(t_zero_dep).ok_or_else(|| {
@@ -378,11 +401,11 @@ mod tests {
     use crate::event_store::Event;
     use crate::utils::{Ballot, T, T0};
     use bytes::Bytes;
-    use synevi_network::consensus_transport::State;
     use monotime::MonoTime;
-    use synevi_persistence::SplitEvent;
     use std::collections::HashSet;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use synevi_network::consensus_transport::State;
+    use synevi_persistence::SplitEvent;
 
     #[test]
     fn event_conversion() {
@@ -401,9 +424,9 @@ mod tests {
             dependencies,
             ballot: Ballot(MonoTime::new(1, 1)),
             last_updated: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
-            .as_nanos(),
+                .duration_since(UNIX_EPOCH)
+                .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
+                .as_nanos(),
             previous_hash: None,
         };
         let key = Bytes::from(t_zero.0);

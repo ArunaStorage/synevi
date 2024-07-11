@@ -4,12 +4,11 @@ use crate::reorder_buffer::ReorderBuffer;
 use crate::utils::{from_dependency, into_dependency, Ballot, T, T0};
 use crate::wait_handler::{WaitAction, WaitHandler};
 use anyhow::Result;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use synevi_network::consensus_transport::*;
 use synevi_network::network::NodeInfo;
 use synevi_network::replica::Replica;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tracing::instrument;
 
@@ -196,11 +195,11 @@ mod tests {
     use crate::utils::{T, T0};
     use crate::wait_handler::WaitHandler;
     use bytes::{BufMut, BytesMut};
+    use monotime::MonoTime;
+    use std::sync::Arc;
     use synevi_network::consensus_transport::{CommitRequest, State};
     use synevi_network::network::NodeInfo;
     use synevi_network::replica::Replica;
-    use monotime::MonoTime;
-    use std::sync::Arc;
     use tokio::sync::Mutex;
 
     #[tokio::test]
