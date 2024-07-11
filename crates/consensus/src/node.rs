@@ -136,7 +136,9 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use crate::coordinator::CoordinatorIterator;
+    use crate::event_store::Event;
     use crate::node::Node;
+    use crate::tests::NetworkMock;
     use crate::utils::{T, T0};
     use consensus_transport::consensus_transport::State;
     use diesel_ulid::DieselUlid;
@@ -316,5 +318,25 @@ mod tests {
 
             assert!(!got_mismatch);
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn database_test() {
+        let network = Arc::new(NetworkMock::default());
+        let path = "../../tests/database/init_test_db".to_string();
+        let node = Node::new_with_parameters(DieselUlid::generate(), 0, network, Some(path))
+            .await
+            .unwrap();
+        node.transaction(Vec::from("this is a transaction test"))
+            .await
+            .unwrap();
+        let mut event_store = node.event_store.lock().await;
+        let db = event_store.database.clone();
+        let all = db.unwrap().read_all().unwrap();
+        let db_entry = Event::from_bytes(all.first().cloned().unwrap()).unwrap();
+        let ev_entry = event_store.events.first_entry().unwrap();
+        let ev_entry = ev_entry.get();
+
+        assert_eq!(&db_entry, ev_entry);
     }
 }

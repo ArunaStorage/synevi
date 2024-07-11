@@ -9,6 +9,7 @@ pub struct Database {
     db: Arc<DBWithThreadMode<MultiThreaded>>,
 }
 
+#[derive(Clone, Debug)]
 pub struct SplitEvent {
     pub key: Bytes,
     pub event: Bytes,

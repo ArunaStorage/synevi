@@ -61,7 +61,7 @@ impl Event {
     pub fn from_bytes(input: SplitEvent) -> Result<Self> {
         let mut state = input.state;
         let mut event = Event::default();
-        event.t_zero = T0(MonoTime::try_from(input.key.iter().as_slice())?);
+        event.t_zero = T0(MonoTime::try_from(input.key.as_ref())?);
         event.event = input.event.into();
         event.t = T::try_from(state.split_to(16))?;
         event.state = State::try_from(i32::from_be_bytes(<[u8; 4]>::try_from(
