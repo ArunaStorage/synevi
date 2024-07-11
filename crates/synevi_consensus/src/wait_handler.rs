@@ -14,7 +14,7 @@ use synevi_network::{
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     sync::{oneshot, Mutex},
@@ -181,7 +181,7 @@ impl WaitHandler {
                 state,
                 event: event.clone(),
                 dependencies: deps.clone(),
-                ballot: Ballot::default(),
+                ..Default::default()
             })
             .await;
     }

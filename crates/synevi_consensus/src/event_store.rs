@@ -5,10 +5,12 @@ use crate::{
 use ahash::RandomState;
 use anyhow::Result;
 use bytes::{BufMut, Bytes, BytesMut};
+use sha3::Sha3_256;
+use sha3::Digest;
 use synevi_network::consensus_transport::State;
 use monotime::MonoTime;
 use synevi_persistence::{Database, SplitEvent};
-use std::collections::{BTreeMap, HashSet};
+use std::{collections::{BTreeMap, HashSet}, time::{SystemTime, UNIX_EPOCH}};
 use tracing::instrument;
 
 #[derive(Debug)]
@@ -27,7 +29,7 @@ pub struct EventStore {
     pub last_applied: T,                  // t of last applied entry
     pub(crate) latest_t0: T0,             // last created or recognized t0
     pub node_serial: u16,
-    
+    latest_hash: [u8; 32],
 }
 
 #[derive(Clone, Debug, Default)]
@@ -41,10 +43,28 @@ pub struct Event {
     pub event: Vec<u8>,
     pub dependencies: HashSet<T0, RandomState>, // t and t_zero
     pub ballot: Ballot,
-    //TODO: timestamp: Last updated
+
+    pub previous_hash: Option<[u8; 32]>,
+    pub last_updated: u128,
+
 }
 
 impl Event {
+
+    fn hash_event(&self) -> [u8; 32] {
+        let mut hasher = Sha3_256::new();
+        hasher.update(Vec::<u8>::from(self.t_zero).as_slice());
+        hasher.update(Vec::<u8>::from(self.t).as_slice());
+        hasher.update(self.state.into());
+        hasher.update(self.event.as_slice());
+        for dep in &self.dependencies {
+            hasher.update(dep.into());
+        }
+
+        hasher.finalize().into()
+    }
+ 
+
     pub fn as_bytes(&self) -> Bytes {
         let mut new: BytesMut = BytesMut::new();
 
@@ -126,6 +146,7 @@ impl EventStore {
                     latest_t0,
                     database: Some(db),
                     node_serial,
+                    latest_hash: [0; 32], // TODO: Read from DB
                 })
             }
             None => Ok(EventStore {
@@ -135,6 +156,7 @@ impl EventStore {
                 latest_t0: T0::default(),
                 database: None,
                 node_serial,
+                latest_hash: [0; 32]
             }),
         }
     }
@@ -173,9 +195,11 @@ impl EventStore {
             t_zero,
             t: T(*t_zero),
             state: State::Undefined,
-            event: Default::default(),
-            dependencies: HashSet::default(),
-            ballot: Ballot::default(),
+            last_updated: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
+            .as_nanos(),
+            ..Default::default()
         });
         entry.clone()
     }
@@ -209,7 +233,7 @@ impl EventStore {
             state: State::PreAccepted,
             event: transaction,
             dependencies: from_dependency(deps.clone())?,
-            ballot: Ballot::default(),
+            ..Default::default()
         };
         self.upsert(event).await;
         Ok((deps, t))
@@ -237,7 +261,7 @@ impl EventStore {
         }
 
         //println!("T0: {:?}, Old: {:?} new: {:?} @ {}", event.t_zero, old_event.state, event.state, self.node_serial);
-        if event.state < old_event.state {
+        if event.state < old_event.state || (event.state == State::Applied && old_event.state == State::Applied){
             return;
         }
 
@@ -255,9 +279,17 @@ impl EventStore {
             }
         }
 
+        old_event.last_updated = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
+            .as_nanos();
+
         self.mappings.insert(event.t, event.t_zero);
         if old_event.state == State::Applied {
             self.last_applied = event.t;
+            old_event.previous_hash = Some(self.latest_hash);
+
+
         }
 
         if let Some(db) = &self.database {
@@ -281,21 +313,14 @@ impl EventStore {
     #[instrument(level = "trace")]
     pub async fn get_dependencies(&self, t: &T, t_zero: &T0) -> Vec<u8> {
         let mut deps = Vec::new();
-        if self.last_applied == T::default() {
-            for (t0, event) in self.events.range(..&T0(**t)) {
-                if event.state != State::Undefined && t0 != t_zero {
-                    deps.put::<Bytes>((*t0).into());
-                }
-            }
-        } else if let Some(last_t0) = self.mappings.get(&self.last_applied) {
-            if **last_t0 != **t {
-                // Range from last applied t0 to T
-                // -> Get all T0s that are before our T
-                for (t0, event) in self.events.range(last_t0..&T0(**t)) {
-                    if event.state != State::Undefined && t0 != t_zero {
-                        deps.put::<Bytes>((*t0).into());
-                    }
-                }
+        if &self.last_applied == t {
+            return deps;
+        }
+        assert!(self.last_applied < *t);
+
+        for (_, t0) in self.mappings.range(self.last_applied..*t) {
+            if t0 != t_zero {
+                deps.put::<Bytes>((*t0).into());
             }
         }
         deps
@@ -357,6 +382,7 @@ mod tests {
     use monotime::MonoTime;
     use synevi_persistence::SplitEvent;
     use std::collections::HashSet;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn event_conversion() {
@@ -374,6 +400,11 @@ mod tests {
             event: Vec::from(b"this is a test transaction"),
             dependencies,
             ballot: Ballot(MonoTime::new(1, 1)),
+            last_updated: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
+            .as_nanos(),
+            previous_hash: None,
         };
         let key = Bytes::from(t_zero.0);
         let payload = Bytes::from(event.event.clone());

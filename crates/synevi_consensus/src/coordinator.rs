@@ -751,6 +751,8 @@ mod tests {
                 t: T(MonoTime::new_with_time(10u128, 0, 0)),
                 dependencies: HashSet::default(),
                 ballot: Ballot::default(),
+                last_updated: 0,
+                previous_hash: None,
             }
         );
 
@@ -825,7 +827,7 @@ mod tests {
                     .iter()
                     .cloned()
                 ),
-                ballot: Ballot::default(),
+                ..Default::default()
             }
         );
     }
@@ -900,7 +902,7 @@ mod tests {
                 t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
                 t: T(MonoTime::new_with_time(12u128, 0, 1)),
                 dependencies: from_dependency(deps).unwrap(),
-                ballot: Ballot::default(),
+                ..Default::default()
             }
         );
     }

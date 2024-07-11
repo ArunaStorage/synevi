@@ -3,7 +3,7 @@ use ahash::RandomState;
 use anyhow::Result;
 use bytes::{BufMut, Bytes};
 use monotime::MonoTime;
-use std::{collections::HashSet, ops::Deref};
+use std::{collections::HashSet, ops::Deref, time::{SystemTime, UNIX_EPOCH}};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
 pub struct T0(pub MonoTime);
@@ -138,6 +138,7 @@ impl From<&TransactionStateMachine> for Event {
             event: value.transaction.clone(),
             dependencies: value.dependencies.clone(),
             ballot: value.ballot,
+            ..Default::default()
         }
     }
 }

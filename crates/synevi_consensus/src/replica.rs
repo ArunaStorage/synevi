@@ -9,6 +9,7 @@ use synevi_network::network::NodeInfo;
 use synevi_network::replica::Replica;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tracing::instrument;
 
@@ -91,6 +92,7 @@ impl Replica for ReplicaConfig {
                     event: request.event,
                     dependencies: from_dependency(request.dependencies)?,
                     ballot: request_ballot,
+                    ..Default::default()
                 })
                 .await;
 
@@ -122,6 +124,7 @@ impl Replica for ReplicaConfig {
 
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         let t = T::try_from(request.timestamp.as_slice())?;
+
         let deps = from_dependency(request.dependencies)?;
 
         let (sx, rx) = tokio::sync::oneshot::channel();
@@ -190,14 +193,13 @@ mod tests {
     use crate::reorder_buffer::ReorderBuffer;
     use crate::replica::ReplicaConfig;
     use crate::tests;
-    use crate::utils::{Ballot, T, T0};
+    use crate::utils::{T, T0};
     use crate::wait_handler::WaitHandler;
     use bytes::{BufMut, BytesMut};
     use synevi_network::consensus_transport::{CommitRequest, State};
     use synevi_network::network::NodeInfo;
     use synevi_network::replica::Replica;
     use monotime::MonoTime;
-    use std::collections::HashSet;
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
@@ -213,9 +215,7 @@ mod tests {
                 t_zero: T0(conflicting_t0),
                 t: T(conflicting_t0),
                 state: State::PreAccepted,
-                event: Default::default(),
-                dependencies: HashSet::default(), // No deps
-                ballot: Ballot::default(),
+                ..Default::default()
             })
             .await;
 
