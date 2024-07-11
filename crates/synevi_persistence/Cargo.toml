@@ -1,5 +1,5 @@
 [package]
-name = "persistence"
+name = "synevi_persistence"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true

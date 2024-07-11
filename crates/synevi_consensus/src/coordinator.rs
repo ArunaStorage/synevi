@@ -5,12 +5,12 @@ use crate::utils::{from_dependency, into_dependency, Ballot, T, T0};
 use crate::wait_handler::{WaitAction, WaitHandler};
 use ahash::RandomState;
 use anyhow::Result;
-use consensus_transport::consensus_transport::{
+use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, CommitRequest, PreAcceptRequest,
     PreAcceptResponse, RecoverRequest, RecoverResponse, State,
 };
-use consensus_transport::network::{BroadcastRequest, NetworkInterface, NodeInfo};
-use consensus_transport::utils::IntoInner;
+use synevi_network::network::{BroadcastRequest, NetworkInterface, NodeInfo};
+use synevi_network::utils::IntoInner;
 use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
@@ -656,7 +656,7 @@ mod tests {
         wait_handler::WaitHandler,
     };
     use bytes::{BufMut, Bytes};
-    use consensus_transport::{
+    use synevi_network::{
         consensus_transport::{PreAcceptResponse, State},
         network::NodeInfo,
     };

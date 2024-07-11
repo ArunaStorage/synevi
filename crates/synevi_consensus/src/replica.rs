@@ -4,9 +4,9 @@ use crate::reorder_buffer::ReorderBuffer;
 use crate::utils::{from_dependency, into_dependency, Ballot, T, T0};
 use crate::wait_handler::{WaitAction, WaitHandler};
 use anyhow::Result;
-use consensus_transport::consensus_transport::*;
-use consensus_transport::network::NodeInfo;
-use consensus_transport::replica::Replica;
+use synevi_network::consensus_transport::*;
+use synevi_network::network::NodeInfo;
+use synevi_network::replica::Replica;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -193,9 +193,9 @@ mod tests {
     use crate::utils::{Ballot, T, T0};
     use crate::wait_handler::WaitHandler;
     use bytes::{BufMut, BytesMut};
-    use consensus_transport::consensus_transport::{CommitRequest, State};
-    use consensus_transport::network::NodeInfo;
-    use consensus_transport::replica::Replica;
+    use synevi_network::consensus_transport::{CommitRequest, State};
+    use synevi_network::network::NodeInfo;
+    use synevi_network::replica::Replica;
     use monotime::MonoTime;
     use std::collections::HashSet;
     use std::sync::Arc;
@@ -260,7 +260,7 @@ mod tests {
         replica.commit(request).await.unwrap();
         assert!(matches!(
             network.get_requests().await.first().unwrap(),
-            consensus_transport::network::BroadcastRequest::Recover(_)
+            synevi_network::network::BroadcastRequest::Recover(_)
         ));
     }
 }

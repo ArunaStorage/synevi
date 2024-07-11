@@ -1,4 +1,4 @@
-use consensus_transport::error::BroadCastError;
+use synevi_network::error::BroadCastError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]

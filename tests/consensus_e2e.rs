@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use consensus::node::Node;
-    use consensus::utils::{T, T0};
-    use consensus_transport::consensus_transport::State;
+    use synevi_consensus::node::Node;
+    use synevi_consensus::utils::{T, T0};
+    use synevi_network::consensus_transport::State;
     use diesel_ulid::DieselUlid;
     use std::collections::BTreeMap;
     use std::net::SocketAddr;
@@ -18,7 +18,7 @@ mod tests {
         for (i, m) in node_names.iter().enumerate() {
             let _path = format!("../tests/database/{}_test_db", i);
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
-            let network = Arc::new(consensus_transport::network::NetworkConfig::new(
+            let network = Arc::new(synevi_network::network::NetworkConfig::new(
                 socket_addr,
             ));
             let node = Node::new_with_parameters(*m, i as u16, network, None)
@@ -132,7 +132,7 @@ mod tests {
 
             for (i, m) in node_names.iter().enumerate() {
                 let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 11000 + i)).unwrap();
-                let network = Arc::new(consensus_transport::network::NetworkConfig::new(
+                let network = Arc::new(synevi_network::network::NetworkConfig::new(
                     socket_addr,
                 ));
                 let node = Node::new_with_parameters(*m, i as u16, network, None)
@@ -299,7 +299,7 @@ mod tests {
             let mut nodes: Vec<Node> = vec![];
             for (i, m) in node_names.iter().enumerate() {
                 let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 12000 + i)).unwrap();
-                let network = Arc::new(consensus_transport::network::NetworkConfig::new(
+                let network = Arc::new(synevi_network::network::NetworkConfig::new(
                     socket_addr,
                 ));
                 let node = Node::new_with_parameters(*m, i as u16, network, None)

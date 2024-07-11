@@ -18,8 +18,8 @@ pub struct GetTimeResponse {
 /// Generated client implementations.
 pub mod time_service_client {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
-    use tonic::codegen::http::Uri;
     use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
     #[derive(Debug, Clone)]
     pub struct TimeServiceClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -63,8 +63,9 @@ pub mod time_service_client {
                     <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
                 >,
             >,
-            <T as tonic::codegen::Service<http::Request<tonic::body::BoxBody>>>::Error:
-                Into<StdError> + Send + Sync,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+            >>::Error: Into<StdError> + Send + Sync,
         {
             TimeServiceClient::new(InterceptedService::new(inner, interceptor))
         }
@@ -102,21 +103,26 @@ pub mod time_service_client {
         pub async fn get_time(
             &mut self,
             request: impl tonic::IntoRequest<super::GetTimeRequest>,
-        ) -> std::result::Result<tonic::Response<super::GetTimeResponse>, tonic::Status> {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::new(
-                    tonic::Code::Unknown,
-                    format!("Service was not ready: {}", e.into()),
-                )
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::GetTimeResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/configure_transport.TimeService/GetTime");
+            let path = http::uri::PathAndQuery::from_static(
+                "/configure_transport.TimeService/GetTime",
+            );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "configure_transport.TimeService",
-                "GetTime",
-            ));
+            req.extensions_mut()
+                .insert(GrpcMethod::new("configure_transport.TimeService", "GetTime"));
             self.inner.unary(req, path, codec).await
         }
     }
@@ -154,7 +160,10 @@ pub mod time_service_server {
                 max_encoding_message_size: None,
             }
         }
-        pub fn with_interceptor<F>(inner: T, interceptor: F) -> InterceptedService<Self, F>
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
         where
             F: tonic::service::Interceptor,
         {
@@ -209,16 +218,23 @@ pub mod time_service_server {
                 "/configure_transport.TimeService/GetTime" => {
                     #[allow(non_camel_case_types)]
                     struct GetTimeSvc<T: TimeService>(pub Arc<T>);
-                    impl<T: TimeService> tonic::server::UnaryService<super::GetTimeRequest> for GetTimeSvc<T> {
+                    impl<
+                        T: TimeService,
+                    > tonic::server::UnaryService<super::GetTimeRequest>
+                    for GetTimeSvc<T> {
                         type Response = super::GetTimeResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::GetTimeRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
-                            let fut =
-                                async move { <T as TimeService>::get_time(&inner, request).await };
+                            let fut = async move {
+                                <T as TimeService>::get_time(&inner, request).await
+                            };
                             Box::pin(fut)
                         }
                     }
@@ -244,17 +260,21 @@ pub mod time_service_server {
                     };
                     Box::pin(fut)
                 }
-                _ => Box::pin(async move {
-                    Ok(http::Response::builder()
-                        .status(200)
-                        .header("grpc-status", tonic::Code::Unimplemented as i32)
-                        .header(
-                            http::header::CONTENT_TYPE,
-                            tonic::metadata::GRPC_CONTENT_TYPE,
+                _ => {
+                    Box::pin(async move {
+                        Ok(
+                            http::Response::builder()
+                                .status(200)
+                                .header("grpc-status", tonic::Code::Unimplemented as i32)
+                                .header(
+                                    http::header::CONTENT_TYPE,
+                                    tonic::metadata::GRPC_CONTENT_TYPE,
+                                )
+                                .body(empty_body())
+                                .unwrap(),
                         )
-                        .body(empty_body())
-                        .unwrap())
-                }),
+                    })
+                }
             }
         }
     }

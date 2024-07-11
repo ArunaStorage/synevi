@@ -1,5 +1,4 @@
-use bytes::{Bytes, BytesMut};
-use consensus::node::Node;
+use synevi_consensus::node::Node;
 use criterion::{criterion_group, criterion_main, Criterion};
 use diesel_ulid::DieselUlid;
 use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
@@ -11,7 +10,7 @@ async fn prepare() -> (Vec<Arc<Node>>, Vec<u8>) {
 
     for (i, m) in node_names.iter().enumerate() {
         let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
-        let network = Arc::new(consensus_transport::network::NetworkConfig::new(
+        let network = Arc::new(synevi_network::network::NetworkConfig::new(
             socket_addr,
         ));
         let path = format!("../tests/database/{}_test_db", i);
@@ -29,14 +28,14 @@ async fn prepare() -> (Vec<Arc<Node>>, Vec<u8>) {
             }
         }
     }
-    let size = 536870912;
+    let size = 4_004_304;
     let mut payload = Vec::with_capacity(size);
     for _ in 0..size {
         payload.push(u8::MAX);
     }
-    println!("Size: {}", payload.capacity());
     (nodes.into_iter().map(Arc::new).collect(), payload.clone())
 }
+
 async fn parallel_execution(coordinator: Arc<Node>) {
     let mut joinset = tokio::task::JoinSet::new();
 
@@ -74,11 +73,12 @@ async fn contention_execution(coordinators: Vec<Arc<Node>>) {
 async fn bigger_payloads_execution(coordinator: Arc<Node>, payload: Vec<u8>) {
     let mut joinset = tokio::task::JoinSet::new();
 
-    for _ in 0..1000 {
+    for _ in 0..10 {
         let coordinator = coordinator.clone();
+        let payload = payload.clone();
         joinset.spawn(async move {
             coordinator
-                .transaction(Vec::from("This is a transaction"))
+                .transaction(payload)
                 .await
         });
     }

@@ -5,9 +5,9 @@ use crate::{
 use ahash::RandomState;
 use anyhow::Result;
 use bytes::{BufMut, Bytes, BytesMut};
-use consensus_transport::consensus_transport::State;
+use synevi_network::consensus_transport::State;
 use monotime::MonoTime;
-use persistence::{Database, SplitEvent};
+use synevi_persistence::{Database, SplitEvent};
 use std::collections::{BTreeMap, HashSet};
 use tracing::instrument;
 
@@ -27,6 +27,7 @@ pub struct EventStore {
     pub last_applied: T,                  // t of last applied entry
     pub(crate) latest_t0: T0,             // last created or recognized t0
     pub node_serial: u16,
+    
 }
 
 #[derive(Clone, Debug, Default)]
@@ -61,7 +62,7 @@ impl Event {
     pub fn from_bytes(input: SplitEvent) -> Result<Self> {
         let mut state = input.state;
         let mut event = Event::default();
-        event.t_zero = T0(MonoTime::try_from(input.key.as_ref())?);
+        event.t_zero = T0(MonoTime::try_from(input.key.iter().as_slice())?);
         event.event = input.event.into();
         event.t = T::try_from(state.split_to(16))?;
         event.state = State::try_from(i32::from_be_bytes(<[u8; 4]>::try_from(
@@ -352,9 +353,9 @@ mod tests {
     use crate::event_store::Event;
     use crate::utils::{Ballot, T, T0};
     use bytes::Bytes;
-    use consensus_transport::consensus_transport::State;
+    use synevi_network::consensus_transport::State;
     use monotime::MonoTime;
-    use persistence::SplitEvent;
+    use synevi_persistence::SplitEvent;
     use std::collections::HashSet;
 
     #[test]

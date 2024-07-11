@@ -7,7 +7,7 @@ use crate::{
 use ahash::RandomState;
 use anyhow::Result;
 use async_channel::{Receiver, Sender};
-use consensus_transport::{
+use synevi_network::{
     consensus_transport::State,
     network::{Network, NodeInfo},
 };

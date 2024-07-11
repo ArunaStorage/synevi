@@ -7,8 +7,8 @@ repository.workspace = true
 license.workspace = true
 
 [dev-dependencies]
-consensus = { path = "../crates/consensus" }
-consensus_transport = { path = "../crates/consensus_transport" }
+synevi_consensus = { path = "../crates/synevi_consensus" }
+synevi_network = { path = "../crates/synevi_network" }
 monotime = { path = "../crates/monotime" }
 anyhow = { workspace = true }
 bytes = "1.6.0"
@@ -21,8 +21,6 @@ tonic = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 rand = {workspace = true} 
-
-
 
 [[test]]
 name = "consensus_e2e"

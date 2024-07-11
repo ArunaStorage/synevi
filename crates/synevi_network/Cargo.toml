@@ -1,5 +1,5 @@
 [package]
-name = "consensus_transport"
+name = "synevi_network"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true

@@ -3,7 +3,7 @@ use crate::reorder_buffer::ReorderBuffer;
 use crate::replica::ReplicaConfig;
 use crate::{coordinator::CoordinatorIterator, wait_handler::WaitHandler};
 use anyhow::Result;
-use consensus_transport::network::{Network, NodeInfo};
+use synevi_network::network::{Network, NodeInfo};
 use diesel_ulid::DieselUlid;
 use std::sync::{atomic::AtomicU64, Arc};
 use tokio::sync::Mutex;
@@ -140,7 +140,7 @@ mod tests {
     use crate::node::Node;
     use crate::tests::NetworkMock;
     use crate::utils::{T, T0};
-    use consensus_transport::consensus_transport::State;
+    use synevi_network::consensus_transport::State;
     use diesel_ulid::DieselUlid;
     use rand::distributions::{Distribution, Uniform};
     use std::collections::BTreeMap;
@@ -155,7 +155,7 @@ mod tests {
 
         for (i, m) in node_names.iter().enumerate() {
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13100 + i)).unwrap();
-            let network = Arc::new(consensus_transport::network::NetworkConfig::new(
+            let network = Arc::new(synevi_network::network::NetworkConfig::new(
                 socket_addr,
             ));
             let node = Node::new_with_parameters(*m, i as u16, network, None)
@@ -215,7 +215,7 @@ mod tests {
 
         for (i, m) in node_names.iter().enumerate() {
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13000 + i)).unwrap();
-            let network = Arc::new(consensus_transport::network::NetworkConfig::new(
+            let network = Arc::new(synevi_network::network::NetworkConfig::new(
                 socket_addr,
             ));
             let node = Node::new_with_parameters(*m, i as u16, network, None)

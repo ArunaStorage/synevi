@@ -10,11 +10,11 @@ mod wait_handler;
 #[cfg(test)]
 pub mod tests {
     use anyhow::Result;
-    use consensus_transport::error::BroadCastError;
-    use consensus_transport::network::BroadcastResponse;
-    use consensus_transport::network::NetworkInterface;
-    use consensus_transport::network::{BroadcastRequest, Network};
-    use consensus_transport::replica::Replica;
+    use synevi_network::error::BroadCastError;
+    use synevi_network::network::BroadcastResponse;
+    use synevi_network::network::NetworkInterface;
+    use synevi_network::network::{BroadcastRequest, Network};
+    use synevi_network::replica::Replica;
     use diesel_ulid::DieselUlid;
     use std::sync::Arc;
     use tokio::sync::Mutex;
