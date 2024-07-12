@@ -34,7 +34,7 @@ pub struct EventStore {
     pub node_serial: u16,
     latest_hash: [u8; 32],
     // This is only needed for debugging purposes
-    // pub last_applied_series: Vec<T>, 
+    // pub last_applied_series: Vec<T>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -64,9 +64,9 @@ impl Event {
         if let Some(previous_hash) = self.previous_hash {
             hasher.update(previous_hash);
         }
-       // for dep in &self.dependencies {
-       //     hasher.update(Vec::<u8>::from(*dep).as_slice());
-       // }
+        // for dep in &self.dependencies {
+        //     hasher.update(Vec::<u8>::from(*dep).as_slice());
+        // }
         // Do we want to include ballots in our hash?
         // -> hasher.update(Vec::<u8>::from(self.ballot).as_slice());
 
@@ -155,7 +155,7 @@ impl EventStore {
                     database: Some(db),
                     node_serial,
                     latest_hash: [0; 32], // TODO: Read from DB
-                    //last_applied_series: vec![],
+                                          //last_applied_series: vec![],
                 })
             }
             None => Ok(EventStore {
@@ -327,25 +327,21 @@ impl EventStore {
     #[instrument(level = "trace")]
     pub async fn get_dependencies(&self, t: &T, t_zero: &T0) -> Vec<u8> {
         if &self.last_applied == t {
-            return vec![]
+            return vec![];
         }
         assert!(self.last_applied < *t);
         // What about deps with dep_t0 < last_applied_t0 && dep_t > t?
-        let mut deps= Vec::new();
-        if let Some(first_dep) = self.events.iter().find(|e| (e.1.state != State::Applied) && e.1.state != State::Undefined) {
-            for (t0, _) in self.events.range(*first_dep.0..T0(**t)) {
-                if t0 != t_zero {
-                    deps.put::<Bytes>((*t0).into());
-                }
+        let mut deps = Vec::new();
+
+        // Dependencies are where any of these cases match:
+        // - t_dep < t if not applied
+        // - t0_dep < t0_last_applied, if t_dep > t0
+        // - t_dep > t if t0_dep < t
+        for (_, t0_dep) in self.mappings.range(self.last_applied..) {
+            if t0_dep != t_zero && (t0_dep < &T0(**t)) {
+                deps.put::<Bytes>((*t0_dep).into());
             }
         }
-
-        // We need deps that have lower t0 than last applied but higher t than our t
-        //for (_, t0) in self.mappings.range(self.last_applied..*t) {
-        //    if t0 != t_zero {
-        //        deps.put::<Bytes>((*t0).into());
-        //    }
-        //}
         deps
     }
 
