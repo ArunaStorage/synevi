@@ -64,7 +64,7 @@ async fn contention_execution(coordinators: Vec<Arc<Node>>) {
     }
 }
 
-async fn bigger_payloads_execution(coordinator: Arc<Node>, payload: Vec<u8>) {
+async fn _bigger_payloads_execution(coordinator: Arc<Node>, payload: Vec<u8>) {
     let mut joinset = tokio::task::JoinSet::new();
 
     for _ in 0..10 {
@@ -83,7 +83,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         .build()
         .unwrap();
 
-    let (nodes, payload) = runtime.block_on(async { prepare().await });
+    let (nodes, _payload) = runtime.block_on(async { prepare().await });
     c.bench_function("parallel", |b| {
         b.to_async(&runtime)
             .iter(|| parallel_execution(nodes.first().unwrap().clone()))

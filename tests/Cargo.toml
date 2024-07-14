@@ -6,7 +6,7 @@ edition.workspace = true
 repository.workspace = true
 license.workspace = true
 
-[dev-dependencies]
+[dependencies]
 synevi_consensus = { path = "../crates/synevi_consensus" }
 synevi_network = { path = "../crates/synevi_network" }
 monotime = { path = "../crates/monotime" }
@@ -20,8 +20,13 @@ serde_json = { workspace = true }
 tonic = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-rand = {workspace = true} 
+rand = { workspace = true }
 
 [[test]]
 name = "consensus_e2e"
 path = "consensus_e2e.rs"
+
+
+[[bin]]
+name = "maelstrom_echo"
+path = "maelstrom/echo.rs"
