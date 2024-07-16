@@ -27,7 +27,7 @@ pub struct MaelstromConfig {
 }
 
 impl MaelstromConfig {
-    async fn new(node_id: String, members: Vec<String>) -> Self {
+    pub async fn new(node_id: String, members: Vec<String>) -> Self {
         MaelstromConfig {
             members,
             node_id,
@@ -42,7 +42,7 @@ impl MaelstromConfig {
             if matches!(msg.body.msg_type, MessageType::Init) {
                 let Some(AdditionalFields::Init {
                     ref node_id,
-                    ref nodes,
+                    ref node_ids,
                 }) = msg.body.additional_fields
                 else {
                     eprintln!("Invalid message: {:?}", msg);
@@ -52,11 +52,11 @@ impl MaelstromConfig {
                 let id: u32 = node_id.chars().last().unwrap().into();
 
                 let mut parsed_nodes = Vec::new();
-                for node in nodes {
+                for node in node_ids {
                     let node_id: u32 = node_id.chars().last().unwrap().into();
                     parsed_nodes.push((DieselUlid::generate(), node_id as u16, node.clone()));
                 }
-                let network = Arc::new(MaelstromConfig::new(node_id.clone(), nodes.clone()).await);
+                let network = Arc::new(MaelstromConfig::new(node_id.clone(), node_ids.clone()).await);
 
                 let reply = msg.reply(Body {
                     msg_type: MessageType::InitOk,
@@ -90,19 +90,35 @@ impl MaelstromConfig {
     pub(crate) async fn kv_dispatch(&self, kv_store: &mut KVStore, msg: Message) -> Result<()> {
         match msg.body.additional_fields {
             Some(AdditionalFields::Read { ref key }) => {
-                let value = kv_store.read(key.clone()).await?;
-                let reply = msg.reply(Body {
-                    msg_type: MessageType::ReadOk,
-                    additional_fields: Some(AdditionalFields::ReadOk {
-                        key: key.clone(),
-                        value,
-                    }),
-                    ..Default::default()
-                });
-                MessageHandler::send(reply)?;
+                match kv_store.read(key.to_string()).await {
+                    Ok(value) => {
+                        let reply = msg.reply(Body {
+                            msg_type: MessageType::ReadOk,
+                            additional_fields: Some(AdditionalFields::ReadOk {
+                                key: *key,
+                                value,
+                            }),
+                            ..Default::default()
+                        });
+                        MessageHandler::send(reply)?;
+                    },
+                    Err(err) => {
+                        let reply = msg.reply(Body {
+                            msg_type: MessageType::Error,
+                            additional_fields: Some(AdditionalFields::Error {
+                                code: 20,
+                                text: format!("{err}"),
+                            }),
+                            ..Default::default()
+                        });
+                        MessageHandler::send(reply)?;
+                    }
+                    
+                }; 
+                
             }
             Some(AdditionalFields::Write { ref key, ref value }) => {
-                kv_store.write(key.clone(), value.clone()).await?;
+                kv_store.write(key.to_string(), value.clone()).await?;
                 let reply = msg.reply(Body {
                     msg_type: MessageType::WriteOk,
                     additional_fields: None,

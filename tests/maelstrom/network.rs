@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use diesel_ulid::DieselUlid;
 use std::sync::Arc;
 use monotime::MonoTime;
+use synevi_network::consensus_transport::{AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse, PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse};
 use synevi_network::error::BroadCastError;
 use synevi_network::network::{BroadcastRequest, BroadcastResponse, Network, NetworkInterface};
 use synevi_network::replica::Replica;
@@ -29,6 +30,7 @@ impl Network for MaelstromConfig {
         tokio::spawn(async move {
             loop {
                 let msg = handler_clone.lock().await.next();
+                eprintln!("GOT: {msg:?}");
                 if let Some(msg) = msg {
                     match msg.body.msg_type {
                         MessageType::Read | MessageType::Write => {
@@ -70,7 +72,13 @@ impl Network for MaelstromConfig {
     }
 
     async fn get_interface(&self) -> Arc<dyn NetworkInterface> {
-        todo!()
+        let clone = MaelstromConfig {
+            members: self.members.clone(),
+            node_id: self.node_id.clone(),
+            message_handler: self.message_handler.clone(),
+            broadcast_responses: self.broadcast_responses.clone(),
+        };
+        Arc::new(clone)
     }
 
     async fn get_waiting_time(&self, _node_serial: u16) -> u64 {
@@ -298,25 +306,25 @@ impl NetworkInterface for MaelstromConfig {
         Ok(result)
     }
 }
-// #[async_trait]
-// impl Replica for MaelstromConfig {
-//     async fn pre_accept(&self, request: PreAcceptRequest, node_serial: u16) -> anyhow::Result<PreAcceptResponse> {
-//         todo!()
-//     }
-// 
-//     async fn accept(&self, request: AcceptRequest) -> anyhow::Result<AcceptResponse> {
-//         todo!()
-//     }
-// 
-//     async fn commit(&self, request: CommitRequest) -> anyhow::Result<CommitResponse> {
-//         todo!()
-//     }
-// 
-//     async fn apply(&self, request: ApplyRequest) -> anyhow::Result<ApplyResponse> {
-//         todo!()
-//     }
-// 
-//     async fn recover(&self, request: RecoverRequest) -> anyhow::Result<RecoverResponse> {
-//         todo!()
-//     }
-// }
+#[async_trait]
+impl Replica for MaelstromConfig {
+    async fn pre_accept(&self, request: PreAcceptRequest, node_serial: u16) -> anyhow::Result<PreAcceptResponse> {
+        todo!()
+    }
+
+    async fn accept(&self, request: AcceptRequest) -> anyhow::Result<AcceptResponse> {
+        todo!()
+    }
+
+    async fn commit(&self, request: CommitRequest) -> anyhow::Result<CommitResponse> {
+        todo!()
+    }
+
+    async fn apply(&self, request: ApplyRequest) -> anyhow::Result<ApplyResponse> {
+        todo!()
+    }
+
+    async fn recover(&self, request: RecoverRequest) -> anyhow::Result<RecoverResponse> {
+        todo!()
+    }
+}

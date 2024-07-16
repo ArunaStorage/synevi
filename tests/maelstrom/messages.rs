@@ -24,6 +24,7 @@ pub enum MessageType {
     ApplyOk,
     Recover,
     RecoverOk,
+    Cas,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug, Default, Clone)]
@@ -70,7 +71,7 @@ pub struct Body {
 pub enum AdditionalFields {
     Init {
         node_id: String,
-        nodes: Vec<String>,
+        node_ids: Vec<String>,
     },
     Error {
         code: u64,
@@ -83,14 +84,14 @@ pub enum AdditionalFields {
         echo: String,
     },
     Read {
-        key: String,
+        key: u64,
     },
     ReadOk {
-        key: String,
+        key: u64,
         value: String,
     },
     Write {
-        key: String,
+        key: u64,
         value: String,
     },
 
@@ -168,6 +169,26 @@ mod tests {
                 in_reply_to: None,
                 additional_fields: Some(AdditionalFields::Echo {
                     echo: "Hello world".to_string(),
+                }),
+            },
+            ..Default::default()
+        };
+        let serialized = serde_json::from_str(echo).unwrap();
+        assert_eq!(msg, serialized);
+    }
+    #[test]
+    fn test_kv_deserde() {
+        let echo = r#"{ "id":0, "src": "c1", "dest": "n1", "body": { "type":"read", "msg_id":2, "key": "0" } }"#;
+
+        let msg = Message {
+            src: "c1".to_string(),
+            dest: "n1".to_string(),
+            body: Body {
+                msg_type: MessageType::Read,
+                msg_id: Some(2),
+                in_reply_to: None,
+                additional_fields: Some(AdditionalFields::Read {
+                    key: "0".to_string(),
                 }),
             },
             ..Default::default()

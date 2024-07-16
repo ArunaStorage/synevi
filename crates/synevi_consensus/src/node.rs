@@ -71,7 +71,7 @@ impl Node {
             wait_handler: wait_handler.clone(),
         });
         // Spawn tonic server
-        network.spawn_server(replica.clone()).await?;
+        // network.spawn_server(replica.clone()).await?;
 
         // If no config / persistence -> default
         Ok((Node {
