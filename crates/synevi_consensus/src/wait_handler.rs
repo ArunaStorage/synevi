@@ -7,12 +7,12 @@ use crate::{
 use ahash::RandomState;
 use anyhow::Result;
 use async_channel::{Receiver, Sender};
+use std::collections::BTreeMap;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
 };
-use std::collections::BTreeMap;
 use synevi_network::{
     consensus_transport::State,
     network::{Network, NodeInfo},
@@ -142,7 +142,8 @@ impl WaitHandler {
                                 if let Some(notify) = apply.1.notify.take() {
                                     let _ = notify.send(());
                                 }
-                                waiter_state.remove_from_waiter_apply(&apply.1.t_zero, &mut to_apply);
+                                waiter_state
+                                    .remove_from_waiter_apply(&apply.1.t_zero, &mut to_apply);
                             }
                         }
                     }
@@ -249,8 +250,7 @@ impl WaiterState {
         }
     }
 
-    fn remove_from_waiter_commit(&mut self, t0_dep: &T0, t_dep: &T) -> //Vec<WaitMessage> {
-    BTreeMap<T, WaitMessage> {
+    fn remove_from_waiter_commit(&mut self, t0_dep: &T0, t_dep: &T) -> BTreeMap<T, WaitMessage> {
         let mut apply_deps = BTreeMap::default();
         self.events.retain(|_, event| {
             if let Some(msg) = &mut event.wait_message {

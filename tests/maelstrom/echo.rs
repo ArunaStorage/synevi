@@ -2,6 +2,7 @@ use anyhow::Result;
 use messages::{AdditionalFields, Body};
 use protocol::MessageHandler;
 mod messages;
+mod network;
 mod protocol;
 
 pub fn main() -> Result<()> {

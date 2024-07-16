@@ -13,6 +13,17 @@ pub enum MessageType {
     ReadOk,
     Write,
     WriteOk,
+    // internal consensus specific:
+    PreAccept,
+    PreAcceptOk,
+    Commit,
+    CommitOk,
+    Accept,
+    AcceptOk,
+    Apply,
+    ApplyOk,
+    Recover,
+    RecoverOk,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
@@ -34,7 +45,7 @@ impl Message {
     pub fn reply(&self, mut body: Body) -> Message {
         body.in_reply_to = self.body.msg_id;
         Message {
-            id: self.id.clone() + 1,
+            id: self.id + 1,
             src: self.dest.clone(),
             dest: self.src.clone(),
             body,
@@ -54,16 +65,83 @@ pub struct Body {
     pub additional_fields: Option<AdditionalFields>,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]
 #[serde(untagged)]
 pub enum AdditionalFields {
-    Init { node_id: String, nodes: Vec<String> },
-    Error { code: u64, text: String },
-    Echo { echo: String },
-    EchoOk { echo: String },
-    Read { key: String },
-    ReadOk { key: String, value: String },
-    Write { key: String, value: String },
+    Init {
+        node_id: String,
+        nodes: Vec<String>,
+    },
+    Error {
+        code: u64,
+        text: String,
+    },
+    Echo {
+        echo: String,
+    },
+    EchoOk {
+        echo: String,
+    },
+    Read {
+        key: String,
+    },
+    ReadOk {
+        key: String,
+        value: String,
+    },
+    Write {
+        key: String,
+        value: String,
+    },
+
+    // internal consensus specific:
+    PreAccept {
+        event: Vec<u8>,
+        t0: Vec<u8>,
+    },
+    PreAcceptOk {
+        t: Vec<u8>,
+        deps: Vec<u8>,
+        nack: bool,
+    },
+    Accept {
+        ballot: Vec<u8>,
+        event: Vec<u8>,
+        t0: Vec<u8>,
+        t: Vec<u8>,
+        deps: Vec<u8>,
+    },
+    AcceptOk {
+        deps: Vec<u8>,
+        nack: bool,
+    },
+    Commit {
+        event: Vec<u8>,
+        t0: Vec<u8>,
+        t: Vec<u8>,
+        deps: Vec<u8>,
+    },
+    CommitOk {},
+    Apply {
+        event: Vec<u8>,
+        t0: Vec<u8>,
+        t: Vec<u8>,
+        deps: Vec<u8>,
+    },
+    ApplyOk {},
+    Recover {
+        ballot: Vec<u8>,
+        event: Vec<u8>,
+        t0: Vec<u8>,
+    },
+    RecoverOk {
+        local_state: u32,
+        wait: Vec<u8>,
+        superseding: bool,
+        deps: Vec<u8>,
+        t: Vec<u8>,
+        nack: Vec<u8>,
+    },
 }
 
 #[cfg(test)]
@@ -87,7 +165,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let serialized = serde_json::from_str(&echo).unwrap();
+        let serialized = serde_json::from_str(echo).unwrap();
         assert_eq!(msg, serialized);
     }
 }
