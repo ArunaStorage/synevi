@@ -67,7 +67,7 @@ pub enum BroadcastRequest {
     // TODO: Recover
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BroadcastResponse {
     PreAccept(PreAcceptResponse),
     Accept(AcceptResponse),

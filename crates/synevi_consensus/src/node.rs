@@ -29,6 +29,60 @@ impl Node {
     pub async fn new_with_config() -> Self {
         todo!()
     }
+    
+    pub async fn new_with_parameters_and_replica(
+        id: DieselUlid,
+        serial: u16,
+        network: Arc<dyn Network + Send + Sync>,
+        db_path: Option<String>,
+    ) -> Result<(Self, Arc<ReplicaConfig>)> {
+        let node_name = Arc::new(NodeInfo { id, serial });
+        let event_store = Arc::new(Mutex::new(EventStore::init(db_path, serial)?));
+
+        let stats = Arc::new(Stats {
+            total_requests: AtomicU64::new(0),
+            total_accepts: AtomicU64::new(0),
+            total_recovers: AtomicU64::new(0),
+        });
+
+        let reorder_buffer = ReorderBuffer::new(event_store.clone());
+
+        let reorder_clone = reorder_buffer.clone();
+        tokio::spawn(async move {
+            reorder_clone.run().await.unwrap();
+        });
+
+        let wait_handler = WaitHandler::new(
+            event_store.clone(),
+            network.clone(),
+            stats.clone(),
+            node_name.clone(),
+        );
+        let wait_handler_clone = wait_handler.clone();
+        tokio::spawn(async move {
+            wait_handler_clone.run().await.unwrap();
+        });
+
+        let replica = Arc::new(ReplicaConfig {
+            _node_info: node_name.clone(),
+            event_store: event_store.clone(),
+            stats: stats.clone(),
+            _reorder_buffer: reorder_buffer,
+            wait_handler: wait_handler.clone(),
+        });
+        // Spawn tonic server
+        network.spawn_server(replica.clone()).await?;
+
+        // If no config / persistence -> default
+        Ok((Node {
+            info: node_name,
+            event_store,
+            network,
+            stats,
+            semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
+            wait_handler,
+        }, replica))
+    }
 
     #[instrument(level = "trace")]
     pub async fn new_with_parameters(

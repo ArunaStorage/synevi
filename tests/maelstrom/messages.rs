@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug, Default, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageType {
     Init,
@@ -26,7 +26,7 @@ pub enum MessageType {
     RecoverOk,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug, Default, Clone)]
 pub struct Message {
     #[serde(skip_serializing_if = "u64_is_zero", default)]
     pub id: u64,
@@ -53,7 +53,7 @@ impl Message {
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug, Default, Clone)]
 pub struct Body {
     #[serde(rename = "type")]
     pub msg_type: MessageType,
@@ -100,6 +100,7 @@ pub enum AdditionalFields {
         t0: Vec<u8>,
     },
     PreAcceptOk {
+        t0: Vec<u8>,
         t: Vec<u8>,
         deps: Vec<u8>,
         nack: bool,
@@ -112,6 +113,7 @@ pub enum AdditionalFields {
         deps: Vec<u8>,
     },
     AcceptOk {
+        t0: Vec<u8>,
         deps: Vec<u8>,
         nack: bool,
     },
@@ -121,21 +123,26 @@ pub enum AdditionalFields {
         t: Vec<u8>,
         deps: Vec<u8>,
     },
-    CommitOk {},
+    CommitOk {
+        t0: Vec<u8>,
+    },
     Apply {
         event: Vec<u8>,
         t0: Vec<u8>,
         t: Vec<u8>,
         deps: Vec<u8>,
     },
-    ApplyOk {},
+    ApplyOk {
+        t0: Vec<u8>,
+    },
     Recover {
         ballot: Vec<u8>,
         event: Vec<u8>,
         t0: Vec<u8>,
     },
     RecoverOk {
-        local_state: u32,
+        t0: Vec<u8>,
+        local_state: i32,
         wait: Vec<u8>,
         superseding: bool,
         deps: Vec<u8>,

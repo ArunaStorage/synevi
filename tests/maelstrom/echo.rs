@@ -1,6 +1,7 @@
 use anyhow::Result;
 use messages::{AdditionalFields, Body};
 use protocol::MessageHandler;
+mod maelstrom_config;
 mod messages;
 mod network;
 mod protocol;

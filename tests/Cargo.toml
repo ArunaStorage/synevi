@@ -13,6 +13,7 @@ synevi_kv = { path = "../crates/synevi_kv" }
 monotime = { path = "../crates/monotime" }
 anyhow = { workspace = true }
 async-trait = {workspace = true}
+ahash = { workspace = true}
 bytes = "1.6.0"
 chrono = "0.4.38"
 diesel-ulid = { workspace = true }

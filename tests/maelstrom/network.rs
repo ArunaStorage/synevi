@@ -1,83 +1,14 @@
+use crate::maelstrom_config::MaelstromConfig;
+use crate::messages::AdditionalFields::{Accept, Apply, Commit, PreAccept, Recover};
+use crate::messages::{Body, Message, MessageType};
+use crate::protocol::MessageHandler;
 use async_trait::async_trait;
 use diesel_ulid::DieselUlid;
 use std::sync::Arc;
-use anyhow::anyhow;
-use futures::lock::Mutex;
-use synevi_kv::KVStore;
-use synevi_network::consensus_transport::{
-    AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
-    PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse,
-};
+use monotime::MonoTime;
 use synevi_network::error::BroadCastError;
 use synevi_network::network::{BroadcastRequest, BroadcastResponse, Network, NetworkInterface};
 use synevi_network::replica::Replica;
-use crate::messages;
-use crate::messages::{AdditionalFields, Body, MessageType};
-use crate::protocol::MessageHandler;
-
-#[derive(Debug)]
-pub struct MaelstromConfig {
-    pub members: Vec<String>,
-    pub node_id: String,
-    pub message_handler: Arc<Mutex<MessageHandler>>,
-}
-
-impl MaelstromConfig {
-    async fn new(node_id: String, members: Vec<String>) -> Self {
-        MaelstromConfig { members, node_id, message_handler: Arc::new(Mutex::new(MessageHandler)) }
-    }
-    pub async fn init() -> anyhow::Result<(KVStore, Arc<Self>)> {
-        let mut handler = MessageHandler;
-
-        let  (kv_store, network) = if let Some(msg) = handler.next() {
-            if matches!(msg.body.msg_type, messages::MessageType::Init) {
-                let Some(AdditionalFields::Init {
-                             ref node_id,
-                             ref nodes,
-                         }) = msg.body.additional_fields
-                else {
-                    eprintln!("Invalid message: {:?}", msg);
-                    return Err(anyhow!("Invalid message"));
-                };
-
-                let id: u32 = node_id.chars().last().unwrap().into();
-
-                let mut parsed_nodes = Vec::new();
-                for node in nodes {
-                    let node_id: u32 = node_id.chars().last().unwrap().into();
-                    parsed_nodes.push((DieselUlid::generate(), node_id as u16, node.clone()));
-                }
-                let network = Arc::new(MaelstromConfig::new(node_id.clone(), nodes.clone()).await);
-
-                let reply = msg.reply(Body {
-                    msg_type: messages::MessageType::InitOk,
-                    ..Default::default()
-                });
-                MessageHandler::send(reply)?;
-                (KVStore::init(
-                    DieselUlid::generate(),
-                    id as u16,
-                    network.clone(),
-                    parsed_nodes,
-                    None,
-                )
-                     .await
-                     .unwrap(), network)
-            } else {
-                eprintln!("Unexpected message type: {:?}", msg.body.msg_type);
-                return Err(anyhow!("Unexpected message type: {:?}", msg.body.msg_type));
-            }
-        } else {
-            eprintln!("No init message received");
-            return Err(anyhow!("No init message received"));
-        };
-
-        Ok((
-            kv_store,
-            network,
-        ))
-    }
-}
 
 #[async_trait]
 impl Network for MaelstromConfig {
@@ -91,35 +22,44 @@ impl Network for MaelstromConfig {
         Ok(())
     }
 
-    async fn spawn_server(&self, server: Arc<dyn Replica>) -> anyhow::Result<()> {
-        
-        
+    async fn spawn_server(&self, _server: Arc<dyn Replica>) -> anyhow::Result<()> {
+        let (mut kv_store, network, replica) = MaelstromConfig::init().await?;
+        let handler_clone = self.message_handler.clone();
+
         tokio::spawn(async move {
             loop {
                 let msg = handler_clone.lock().await.next();
                 if let Some(msg) = msg {
                     match msg.body.msg_type {
                         MessageType::Read | MessageType::Write => {
-                            todo!("Let kv store handle these");
-                        },
-                        MessageType::PreAccept |
-                        MessageType::Commit |
-                        MessageType::Accept |
-                        MessageType::Apply |
-                        MessageType::Recover
-                         => {
-                            todo!("Let replica handle these");
+                            if let Err(err) = network.kv_dispatch(&mut kv_store, msg.clone()).await
+                            {
+                                eprintln!("{err:?}");
+                                continue;
+                            };
                         }
-                        MessageType::PreAcceptOk |
-                        MessageType::AcceptOk |
-                        MessageType::CommitOk |
-                        MessageType::ApplyOk | 
-                        MessageType::RecoverOk
-                        => {
-                            todo!("Collect for broadcast results");
+                        MessageType::PreAccept
+                        | MessageType::Commit
+                        | MessageType::Accept
+                        | MessageType::Apply
+                        | MessageType::Recover => {
+                            if let Err(err) = network.replica_dispatch(replica.clone(), msg.clone()).await {
+                                eprintln!("{err:?}");
+                                continue;
+                            }
+                        }
+                        MessageType::PreAcceptOk
+                        | MessageType::AcceptOk
+                        | MessageType::CommitOk
+                        | MessageType::ApplyOk
+                        | MessageType::RecoverOk => {
+                            if let Err(err) = network.broadcast_collect(msg.clone()).await {
+                                eprintln!("{err:?}");
+                                continue;
+                            }
                         }
                         err => {
-                            eprintln!("Unexpected message type {:?}", err);     
+                            eprintln!("Unexpected message type {:?}", err);
                             continue;
                         }
                     }
@@ -144,29 +84,239 @@ impl NetworkInterface for MaelstromConfig {
         &self,
         request: BroadcastRequest,
     ) -> anyhow::Result<Vec<BroadcastResponse>, BroadCastError> {
-        todo!()
+        let mut await_majority = true;
+        let mut broadcast_all = false;
+        let mut rcv = match &request {
+            BroadcastRequest::PreAccept(req, serial) => {
+                let t0 = MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap();
+                let mut lock = self.broadcast_responses.lock().await;
+                let entry = lock.entry(t0).or_insert(tokio::sync::broadcast::channel(self.members.len()*5));
+                let rcv = entry.0.subscribe();
+                drop(lock);
+                for replica in &self.members {
+                    if let Err(err) = MessageHandler::send(Message {
+                        src: self.node_id.clone(),
+                        dest: replica.clone(),
+                        body: Body {
+                            msg_type: MessageType::PreAccept,
+                            msg_id: None,
+                            in_reply_to: None,
+                            additional_fields: Some(PreAccept {
+                                event: req.event.clone(),
+                                t0: req.timestamp_zero.clone(),
+                            }),
+                        },
+                        ..Default::default()
+                    }) {
+                        eprintln!("{err:?}");
+                        continue;
+                    };
+                }
+                rcv
+            }
+            BroadcastRequest::Accept(req) => {
+                let t0 = MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap();
+                let mut lock = self.broadcast_responses.lock().await;
+                let entry = lock.entry(t0).or_insert(tokio::sync::broadcast::channel(self.members.len()*5));
+                let rcv = entry.0.subscribe();
+                drop(lock);
+                for replica in &self.members {
+                    if let Err(err) = MessageHandler::send(Message {
+                        src: self.node_id.clone(),
+                        dest: replica.clone(),
+                        body: Body {
+                            msg_type: MessageType::Accept,
+                            msg_id: None,
+                            in_reply_to: None,
+                            additional_fields: Some(Accept {
+                                ballot: req.ballot.clone(),
+                                event: req.event.clone(),
+                                t0: req.timestamp_zero.clone(),
+                                t: req.timestamp.clone(),
+                                deps: req.dependencies.clone(),
+                            }),
+                        },
+                        ..Default::default()
+                    }) {
+                        eprintln!("{err:?}");
+                        continue;
+                    };
+                }
+                rcv
+            }
+            BroadcastRequest::Commit(req) => {
+                let t0 = MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap();
+                let mut lock = self.broadcast_responses.lock().await;
+                let entry = lock.entry(t0).or_insert(tokio::sync::broadcast::channel(self.members.len()*5));
+                let rcv = entry.0.subscribe();
+                drop(lock);
+                for replica in &self.members {
+                    if let Err(err) = MessageHandler::send(Message {
+                        src: self.node_id.clone(),
+                        dest: replica.clone(),
+                        body: Body {
+                            msg_type: MessageType::Commit,
+                            msg_id: None,
+                            in_reply_to: None,
+                            additional_fields: Some(Commit {
+                                event: req.event.clone(),
+                                t0: req.timestamp_zero.clone(),
+                                t: req.timestamp.clone(),
+                                deps: req.dependencies.clone(),
+                            }),
+                        },
+                        ..Default::default()
+                    }) {
+                        eprintln!("{err:?}");
+                        continue;
+                    };
+                }
+                rcv
+            }
+            BroadcastRequest::Apply(req) => {
+                let t0 = MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap();
+                let mut lock = self.broadcast_responses.lock().await;
+                let entry = lock.entry(t0).or_insert(tokio::sync::broadcast::channel(self.members.len()*5));
+                let rcv = entry.0.subscribe();
+                drop(lock);
+                await_majority = false;
+                for replica in &self.members {
+                    if let Err(err) = MessageHandler::send(Message {
+                        src: self.node_id.clone(),
+                        dest: replica.clone(),
+                        body: Body {
+                            msg_type: MessageType::Apply,
+                            msg_id: None,
+                            in_reply_to: None,
+                            additional_fields: Some(Apply {
+                                event: req.event.clone(),
+                                t0: req.timestamp_zero.clone(),
+                                t: req.timestamp.clone(),
+                                deps: req.dependencies.clone(),
+                            }),
+                        },
+                        ..Default::default()
+                    }) {
+                        eprintln!("{err:?}");
+                        continue;
+                    };
+                }
+                rcv
+            }
+            BroadcastRequest::Recover(req) => {
+                let t0 = MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap();
+                await_majority = false;
+                broadcast_all = true;
+                let mut lock = self.broadcast_responses.lock().await;
+                let entry = lock.entry(t0).or_insert(tokio::sync::broadcast::channel(self.members.len()*5));
+                let rcv = entry.0.subscribe();
+                drop(lock);
+                for replica in &self.members {
+                    if let Err(err) = MessageHandler::send(Message {
+                        src: self.node_id.clone(),
+                        dest: replica.clone(),
+                        body: Body {
+                            msg_type: MessageType::Recover,
+                            msg_id: None,
+                            in_reply_to: None,
+                            additional_fields: Some(Recover {
+                                ballot: req.ballot.clone(),
+                                event: req.event.clone(),
+                                t0: req.timestamp_zero.clone(),
+                            }),
+                        },
+                        ..Default::default()
+                    }) {
+                        eprintln!("{err:?}");
+                        continue;
+                    };
+                }
+                rcv
+            }
+        };
+
+        let majority = (self.members.len() / 2) + 1;
+        let mut counter = 0_usize;
+        let mut result = Vec::new();
+
+        // Poll majority
+        // TODO: Electorates for PA ?
+        if await_majority {
+            while let Ok(message) = rcv.recv().await {
+                match (&request, message) {
+                    (&BroadcastRequest::PreAccept(..), response @ BroadcastResponse::PreAccept(_)) => {
+                        result.push(response);
+                    }
+                    (&BroadcastRequest::Accept(_), response @ BroadcastResponse::Accept(_)) => {
+                        result.push(response);
+                    }
+                    (&BroadcastRequest::Commit(_), response @ BroadcastResponse::Commit(_)) => {
+                        result.push(response);
+                    }
+                    (&BroadcastRequest::Apply(_), response @ BroadcastResponse::Apply(_)) => {
+                        result.push(response);
+                    }
+                    (&BroadcastRequest::Recover(_), response @ BroadcastResponse::Recover(_)) => {
+                        result.push(response);
+                    }
+                    _ => continue
+                }
+                counter += 1;
+                if counter >= majority {
+                    break;
+                }
+            }
+        } else {
+            // TODO: Differentiate between push and forget and wait for all response
+            // -> Apply vs Recover
+                while let Ok(message) = rcv.recv().await {
+                    match (&request, message) {
+                        (&BroadcastRequest::PreAccept(..), response @ BroadcastResponse::PreAccept(_)) => {
+                            result.push(response);
+                        }
+                        (&BroadcastRequest::Accept(_), response @ BroadcastResponse::Accept(_)) => {
+                            result.push(response);
+                        }
+                        (&BroadcastRequest::Commit(_), response @ BroadcastResponse::Commit(_)) => {
+                            result.push(response);
+                        }
+                        (&BroadcastRequest::Apply(_), response @ BroadcastResponse::Apply(_)) => {
+                            result.push(response);
+                        }
+                        (&BroadcastRequest::Recover(_), response @ BroadcastResponse::Recover(_)) => {
+                            result.push(response);
+                        }
+                        _ => continue
+                    };
+                };
+        }
+
+        if result.len() < majority {
+            println!("Majority not reached: {:?}", result);
+            return Err(BroadCastError::MajorityNotReached);
+        }
+        Ok(result)
     }
 }
-
-#[async_trait]
-impl Replica for MaelstromConfig {
-    async fn pre_accept(&self, _request: PreAcceptRequest, _node_serial: u16) -> anyhow::Result<PreAcceptResponse> {
-        todo!()
-    }
-
-    async fn accept(&self, _request: AcceptRequest) -> anyhow::Result<AcceptResponse> {
-        todo!()
-    }
-
-    async fn commit(&self, _request: CommitRequest) -> anyhow::Result<CommitResponse> {
-        todo!()
-    }
-
-    async fn apply(&self, _request: ApplyRequest) -> anyhow::Result<ApplyResponse> {
-        todo!()
-    }
-
-    async fn recover(&self, _request: RecoverRequest) -> anyhow::Result<RecoverResponse> {
-        todo!()
-    }
-}
+// #[async_trait]
+// impl Replica for MaelstromConfig {
+//     async fn pre_accept(&self, request: PreAcceptRequest, node_serial: u16) -> anyhow::Result<PreAcceptResponse> {
+//         todo!()
+//     }
+// 
+//     async fn accept(&self, request: AcceptRequest) -> anyhow::Result<AcceptResponse> {
+//         todo!()
+//     }
+// 
+//     async fn commit(&self, request: CommitRequest) -> anyhow::Result<CommitResponse> {
+//         todo!()
+//     }
+// 
+//     async fn apply(&self, request: ApplyRequest) -> anyhow::Result<ApplyResponse> {
+//         todo!()
+//     }
+// 
+//     async fn recover(&self, request: RecoverRequest) -> anyhow::Result<RecoverResponse> {
+//         todo!()
+//     }
+// }

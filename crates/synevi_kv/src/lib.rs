@@ -4,6 +4,7 @@ use diesel_ulid::DieselUlid;
 use std::collections::HashMap;
 use std::sync::Arc;
 use synevi_consensus::node::Node;
+use synevi_consensus::replica::ReplicaConfig;
 use synevi_network::network::Network;
 
 pub struct KVStore {
@@ -18,15 +19,15 @@ impl KVStore {
         network: Arc<dyn Network + Send + Sync>,
         members: Vec<(DieselUlid, u16, String)>,
         path: Option<String>,
-    ) -> Result<Self> {
-        let mut node = Node::new_with_parameters(id, serial, network, path).await?;
+    ) -> Result<(Self, Arc<ReplicaConfig>)> {
+        let mut node = Node::new_with_parameters_and_replica(id, serial, network, path).await?;
         for (ulid, id, host) in members {
-            node.add_member(ulid, id, host).await?;
+            node.0.add_member(ulid, id, host).await?;
         }
-        Ok(KVStore {
+        Ok((KVStore {
             kv_store: HashMap::default(),
-            node,
-        })
+            node: node.0,
+        }, node.1))
     }
 
     pub async fn read(&self, key: String) -> Result<String> {
