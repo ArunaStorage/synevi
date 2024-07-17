@@ -149,11 +149,11 @@ impl WaitHandler {
                     }
                 },
                 _ => {
-                    // if let Some(t0_recover) = self.check_recovery(&waiter_state) {
-                    //     //println!("Recovering: {:?}", t0_recover);
-                    //     let wait_handler = self.clone();
-                    //     wait_handler.recover(t0_recover, &mut waiter_state).await;
-                    // }
+                    if let Some(t0_recover) = self.check_recovery(&waiter_state) {
+                        //println!("Recovering: {:?}", t0_recover);
+                        let wait_handler = self.clone();
+                        wait_handler.recover(t0_recover, &mut waiter_state).await;
+                    }
                 }
             }
         }

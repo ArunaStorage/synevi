@@ -13,3 +13,5 @@ diesel-ulid = { workspace = true}
 synevi_network = { path = "../synevi_network" }
 synevi_persistence = {path = "../synevi_persistence"}
 synevi_consensus = {path = "../synevi_consensus"}
+async-trait = "0.1.80"
+tokio = {workspace = true}

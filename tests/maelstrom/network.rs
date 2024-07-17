@@ -1,12 +1,14 @@
 use crate::maelstrom_config::MaelstromConfig;
-use crate::messages::AdditionalFields::{Accept, Apply, Commit, PreAccept, Recover};
 use crate::messages::{Body, Message, MessageType};
 use crate::protocol::MessageHandler;
 use async_trait::async_trait;
 use diesel_ulid::DieselUlid;
-use std::sync::Arc;
 use monotime::MonoTime;
-use synevi_network::consensus_transport::{AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse, PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse};
+use std::sync::Arc;
+use synevi_network::consensus_transport::{
+    AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
+    PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse,
+};
 use synevi_network::error::BroadCastError;
 use synevi_network::network::{BroadcastRequest, BroadcastResponse, Network, NetworkInterface};
 use synevi_network::replica::Replica;
@@ -33,28 +35,32 @@ impl Network for MaelstromConfig {
                 eprintln!("GOT: {msg:?}");
                 if let Some(msg) = msg {
                     match msg.body.msg_type {
-                        MessageType::Read | MessageType::Write => {
+                        MessageType::Read{..} | MessageType::Write { .. } => {
                             if let Err(err) = network.kv_dispatch(&mut kv_store, msg.clone()).await
                             {
                                 eprintln!("{err:?}");
                                 continue;
                             };
                         }
-                        MessageType::PreAccept
-                        | MessageType::Commit
-                        | MessageType::Accept
-                        | MessageType::Apply
-                        | MessageType::Recover => {
-                            if let Err(err) = network.replica_dispatch(replica.clone(), msg.clone()).await {
+                            MessageType::PreAccept{..}
+                            | MessageType::Commit {..}
+                            | MessageType::Accept {..}
+                            | MessageType::Apply  {..}
+                            | MessageType::Recover{..}
+                         => {
+                            if let Err(err) =
+                                network.replica_dispatch(replica.clone(), msg.clone()).await
+                            {
                                 eprintln!("{err:?}");
                                 continue;
                             }
                         }
-                        MessageType::PreAcceptOk
-                        | MessageType::AcceptOk
-                        | MessageType::CommitOk
-                        | MessageType::ApplyOk
-                        | MessageType::RecoverOk => {
+                            MessageType::PreAcceptOk{..} 
+                            | MessageType::AcceptOk {..}
+                            | MessageType::CommitOk {..}
+                            | MessageType::ApplyOk  {..}
+                            | MessageType::RecoverOk{..}
+                        => {
                             if let Err(err) = network.broadcast_collect(msg.clone()).await {
                                 eprintln!("{err:?}");
                                 continue;
@@ -98,7 +104,9 @@ impl NetworkInterface for MaelstromConfig {
             BroadcastRequest::PreAccept(req, serial) => {
                 let t0 = MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap();
                 let mut lock = self.broadcast_responses.lock().await;
-                let entry = lock.entry(t0).or_insert(tokio::sync::broadcast::channel(self.members.len()*5));
+                let entry = lock
+                    .entry(t0)
+                    .or_insert(tokio::sync::broadcast::channel(self.members.len() * 5));
                 let rcv = entry.0.subscribe();
                 drop(lock);
                 for replica in &self.members {
@@ -106,13 +114,12 @@ impl NetworkInterface for MaelstromConfig {
                         src: self.node_id.clone(),
                         dest: replica.clone(),
                         body: Body {
-                            msg_type: MessageType::PreAccept,
                             msg_id: None,
                             in_reply_to: None,
-                            additional_fields: Some(PreAccept {
+                            msg_type: MessageType::PreAccept {
                                 event: req.event.clone(),
                                 t0: req.timestamp_zero.clone(),
-                            }),
+                            },
                         },
                         ..Default::default()
                     }) {
@@ -125,7 +132,9 @@ impl NetworkInterface for MaelstromConfig {
             BroadcastRequest::Accept(req) => {
                 let t0 = MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap();
                 let mut lock = self.broadcast_responses.lock().await;
-                let entry = lock.entry(t0).or_insert(tokio::sync::broadcast::channel(self.members.len()*5));
+                let entry = lock
+                    .entry(t0)
+                    .or_insert(tokio::sync::broadcast::channel(self.members.len() * 5));
                 let rcv = entry.0.subscribe();
                 drop(lock);
                 for replica in &self.members {
@@ -133,16 +142,16 @@ impl NetworkInterface for MaelstromConfig {
                         src: self.node_id.clone(),
                         dest: replica.clone(),
                         body: Body {
-                            msg_type: MessageType::Accept,
+                            
                             msg_id: None,
                             in_reply_to: None,
-                            additional_fields: Some(Accept {
+                            msg_type: MessageType::Accept {
                                 ballot: req.ballot.clone(),
                                 event: req.event.clone(),
                                 t0: req.timestamp_zero.clone(),
                                 t: req.timestamp.clone(),
                                 deps: req.dependencies.clone(),
-                            }),
+                            },
                         },
                         ..Default::default()
                     }) {
@@ -155,7 +164,9 @@ impl NetworkInterface for MaelstromConfig {
             BroadcastRequest::Commit(req) => {
                 let t0 = MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap();
                 let mut lock = self.broadcast_responses.lock().await;
-                let entry = lock.entry(t0).or_insert(tokio::sync::broadcast::channel(self.members.len()*5));
+                let entry = lock
+                    .entry(t0)
+                    .or_insert(tokio::sync::broadcast::channel(self.members.len() * 5));
                 let rcv = entry.0.subscribe();
                 drop(lock);
                 for replica in &self.members {
@@ -163,15 +174,15 @@ impl NetworkInterface for MaelstromConfig {
                         src: self.node_id.clone(),
                         dest: replica.clone(),
                         body: Body {
-                            msg_type: MessageType::Commit,
                             msg_id: None,
                             in_reply_to: None,
-                            additional_fields: Some(Commit {
+
+                            msg_type: MessageType::Commit {
                                 event: req.event.clone(),
                                 t0: req.timestamp_zero.clone(),
                                 t: req.timestamp.clone(),
                                 deps: req.dependencies.clone(),
-                            }),
+                            },
                         },
                         ..Default::default()
                     }) {
@@ -184,7 +195,9 @@ impl NetworkInterface for MaelstromConfig {
             BroadcastRequest::Apply(req) => {
                 let t0 = MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap();
                 let mut lock = self.broadcast_responses.lock().await;
-                let entry = lock.entry(t0).or_insert(tokio::sync::broadcast::channel(self.members.len()*5));
+                let entry = lock
+                    .entry(t0)
+                    .or_insert(tokio::sync::broadcast::channel(self.members.len() * 5));
                 let rcv = entry.0.subscribe();
                 drop(lock);
                 await_majority = false;
@@ -193,15 +206,16 @@ impl NetworkInterface for MaelstromConfig {
                         src: self.node_id.clone(),
                         dest: replica.clone(),
                         body: Body {
-                            msg_type: MessageType::Apply,
                             msg_id: None,
                             in_reply_to: None,
-                            additional_fields: Some(Apply {
+
+                            msg_type: MessageType::Apply
+ {
                                 event: req.event.clone(),
                                 t0: req.timestamp_zero.clone(),
                                 t: req.timestamp.clone(),
                                 deps: req.dependencies.clone(),
-                            }),
+                            },
                         },
                         ..Default::default()
                     }) {
@@ -216,7 +230,9 @@ impl NetworkInterface for MaelstromConfig {
                 await_majority = false;
                 broadcast_all = true;
                 let mut lock = self.broadcast_responses.lock().await;
-                let entry = lock.entry(t0).or_insert(tokio::sync::broadcast::channel(self.members.len()*5));
+                let entry = lock
+                    .entry(t0)
+                    .or_insert(tokio::sync::broadcast::channel(self.members.len() * 5));
                 let rcv = entry.0.subscribe();
                 drop(lock);
                 for replica in &self.members {
@@ -224,14 +240,15 @@ impl NetworkInterface for MaelstromConfig {
                         src: self.node_id.clone(),
                         dest: replica.clone(),
                         body: Body {
-                            msg_type: MessageType::Recover,
                             msg_id: None,
                             in_reply_to: None,
-                            additional_fields: Some(Recover {
+
+                            msg_type: MessageType::Recover
+ {
                                 ballot: req.ballot.clone(),
                                 event: req.event.clone(),
                                 t0: req.timestamp_zero.clone(),
-                            }),
+                            },
                         },
                         ..Default::default()
                     }) {
@@ -252,7 +269,10 @@ impl NetworkInterface for MaelstromConfig {
         if await_majority {
             while let Ok(message) = rcv.recv().await {
                 match (&request, message) {
-                    (&BroadcastRequest::PreAccept(..), response @ BroadcastResponse::PreAccept(_)) => {
+                    (
+                        &BroadcastRequest::PreAccept(..),
+                        response @ BroadcastResponse::PreAccept(_),
+                    ) => {
                         result.push(response);
                     }
                     (&BroadcastRequest::Accept(_), response @ BroadcastResponse::Accept(_)) => {
@@ -267,7 +287,7 @@ impl NetworkInterface for MaelstromConfig {
                     (&BroadcastRequest::Recover(_), response @ BroadcastResponse::Recover(_)) => {
                         result.push(response);
                     }
-                    _ => continue
+                    _ => continue,
                 }
                 counter += 1;
                 if counter >= majority {
@@ -277,26 +297,29 @@ impl NetworkInterface for MaelstromConfig {
         } else {
             // TODO: Differentiate between push and forget and wait for all response
             // -> Apply vs Recover
-                while let Ok(message) = rcv.recv().await {
-                    match (&request, message) {
-                        (&BroadcastRequest::PreAccept(..), response @ BroadcastResponse::PreAccept(_)) => {
-                            result.push(response);
-                        }
-                        (&BroadcastRequest::Accept(_), response @ BroadcastResponse::Accept(_)) => {
-                            result.push(response);
-                        }
-                        (&BroadcastRequest::Commit(_), response @ BroadcastResponse::Commit(_)) => {
-                            result.push(response);
-                        }
-                        (&BroadcastRequest::Apply(_), response @ BroadcastResponse::Apply(_)) => {
-                            result.push(response);
-                        }
-                        (&BroadcastRequest::Recover(_), response @ BroadcastResponse::Recover(_)) => {
-                            result.push(response);
-                        }
-                        _ => continue
-                    };
+            while let Ok(message) = rcv.recv().await {
+                match (&request, message) {
+                    (
+                        &BroadcastRequest::PreAccept(..),
+                        response @ BroadcastResponse::PreAccept(_),
+                    ) => {
+                        result.push(response);
+                    }
+                    (&BroadcastRequest::Accept(_), response @ BroadcastResponse::Accept(_)) => {
+                        result.push(response);
+                    }
+                    (&BroadcastRequest::Commit(_), response @ BroadcastResponse::Commit(_)) => {
+                        result.push(response);
+                    }
+                    (&BroadcastRequest::Apply(_), response @ BroadcastResponse::Apply(_)) => {
+                        result.push(response);
+                    }
+                    (&BroadcastRequest::Recover(_), response @ BroadcastResponse::Recover(_)) => {
+                        result.push(response);
+                    }
+                    _ => continue,
                 };
+            }
         }
 
         if result.len() < majority {
@@ -308,23 +331,27 @@ impl NetworkInterface for MaelstromConfig {
 }
 #[async_trait]
 impl Replica for MaelstromConfig {
-    async fn pre_accept(&self, request: PreAcceptRequest, node_serial: u16) -> anyhow::Result<PreAcceptResponse> {
+    async fn pre_accept(
+        &self,
+        _request: PreAcceptRequest,
+        _node_serial: u16,
+    ) -> anyhow::Result<PreAcceptResponse> {
         todo!()
     }
 
-    async fn accept(&self, request: AcceptRequest) -> anyhow::Result<AcceptResponse> {
+    async fn accept(&self, _request: AcceptRequest) -> anyhow::Result<AcceptResponse> {
         todo!()
     }
 
-    async fn commit(&self, request: CommitRequest) -> anyhow::Result<CommitResponse> {
+    async fn commit(&self, _request: CommitRequest) -> anyhow::Result<CommitResponse> {
         todo!()
     }
 
-    async fn apply(&self, request: ApplyRequest) -> anyhow::Result<ApplyResponse> {
+    async fn apply(&self, _request: ApplyRequest) -> anyhow::Result<ApplyResponse> {
         todo!()
     }
 
-    async fn recover(&self, request: RecoverRequest) -> anyhow::Result<RecoverResponse> {
+    async fn recover(&self, _request: RecoverRequest) -> anyhow::Result<RecoverResponse> {
         todo!()
     }
 }

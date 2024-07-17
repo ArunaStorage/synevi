@@ -1,33 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug, Default, Clone)]
-#[serde(rename_all = "snake_case")]
-pub enum MessageType {
-    Init,
-    InitOk,
-    #[default]
-    Error,
-    Echo,   // For testing
-    EchoOk, // For testing
-    Read,
-    ReadOk,
-    Write,
-    WriteOk,
-    // internal consensus specific:
-    PreAccept,
-    PreAcceptOk,
-    Commit,
-    CommitOk,
-    Accept,
-    AcceptOk,
-    Apply,
-    ApplyOk,
-    Recover,
-    RecoverOk,
-    Cas,
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug, Default, Clone)]
 pub struct Message {
     #[serde(skip_serializing_if = "u64_is_zero", default)]
     pub id: u64,
@@ -56,23 +29,23 @@ impl Message {
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug, Default, Clone)]
 pub struct Body {
-    #[serde(rename = "type")]
-    pub msg_type: MessageType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub msg_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub in_reply_to: Option<u64>,
-    #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    pub additional_fields: Option<AdditionalFields>,
+    #[serde(flatten)]
+    pub msg_type: MessageType,
 }
 
+
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]
-#[serde(untagged)]
-pub enum AdditionalFields {
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum MessageType {
     Init {
         node_id: String,
         node_ids: Vec<String>,
     },
+    InitOk,
     Error {
         code: u64,
         text: String,
@@ -94,6 +67,7 @@ pub enum AdditionalFields {
         key: u64,
         value: String,
     },
+    WriteOk,
 
     // internal consensus specific:
     PreAccept {
@@ -152,6 +126,12 @@ pub enum AdditionalFields {
     },
 }
 
+impl Default for MessageType {
+    fn default() -> Self {
+        Self::Error { code: 0, text: "Unknown".to_string() }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,12 +144,11 @@ mod tests {
             src: "c1".to_string(),
             dest: "n1".to_string(),
             body: Body {
-                msg_type: MessageType::Echo,
                 msg_id: Some(1),
                 in_reply_to: None,
-                additional_fields: Some(AdditionalFields::Echo {
+                msg_type: MessageType::Echo {
                     echo: "Hello world".to_string(),
-                }),
+                },
             },
             ..Default::default()
         };
@@ -177,23 +156,38 @@ mod tests {
         assert_eq!(msg, serialized);
     }
     #[test]
-    fn test_kv_deserde() {
-        let echo = r#"{ "id":0, "src": "c1", "dest": "n1", "body": { "type":"read", "msg_id":2, "key": "0" } }"#;
+    fn test_kv_deserialization() {
+        let read = r#"{ "id":0, "src": "c1", "dest": "n1", "body": { "type":"read", "msg_id":2, "key":0 } }"#;
+        let write = r#"{ "id":0, "src": "c1", "dest": "n1", "body": { "type":"write", "msg_id":2, "key":0, "value":"abc" } }"#;
 
-        let msg = Message {
+        let read_msg = Message {
             src: "c1".to_string(),
             dest: "n1".to_string(),
             body: Body {
-                msg_type: MessageType::Read,
                 msg_id: Some(2),
                 in_reply_to: None,
-                additional_fields: Some(AdditionalFields::Read {
-                    key: "0".to_string(),
-                }),
+                msg_type: MessageType::Read {
+                    key: "0".to_string().parse().unwrap(),
+                },
             },
             ..Default::default()
         };
-        let serialized = serde_json::from_str(echo).unwrap();
-        assert_eq!(msg, serialized);
+        let write_msg = Message {
+            src: "c1".to_string(),
+            dest: "n1".to_string(),
+            body: Body {
+                msg_id: Some(2),
+                in_reply_to: None,
+                msg_type: MessageType::Write {
+                    key: "0".to_string().parse().unwrap(),
+                    value: "abc".to_string(),
+                },
+            },
+            ..Default::default()
+        };
+        let read_serialized = serde_json::from_str(read).unwrap();
+        assert_eq!(read_msg, read_serialized);
+        let write_serialized = serde_json::from_str(write).unwrap();
+        assert_eq!(write_msg, write_serialized);
     }
 }

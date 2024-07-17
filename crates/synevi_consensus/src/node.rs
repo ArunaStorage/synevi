@@ -1,9 +1,11 @@
-use crate::event_store::EventStore;
+use crate::event_store::{Event, EventStore};
 use crate::reorder_buffer::ReorderBuffer;
 use crate::replica::ReplicaConfig;
 use crate::{coordinator::CoordinatorIterator, wait_handler::WaitHandler};
 use anyhow::Result;
+use async_trait::async_trait;
 use diesel_ulid::DieselUlid;
+use std::fmt::Debug;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::network::{Network, NodeInfo};
 use tokio::sync::Mutex;
@@ -29,15 +31,16 @@ impl Node {
     pub async fn new_with_config() -> Self {
         todo!()
     }
-    
+
     pub async fn new_with_parameters_and_replica(
         id: DieselUlid,
         serial: u16,
         network: Arc<dyn Network + Send + Sync>,
         db_path: Option<String>,
+        executor: Arc<dyn Execute>,
     ) -> Result<(Self, Arc<ReplicaConfig>)> {
         let node_name = Arc::new(NodeInfo { id, serial });
-        let event_store = Arc::new(Mutex::new(EventStore::init(db_path, serial)?));
+        let event_store = Arc::new(Mutex::new(EventStore::init(db_path, serial, executor)?));
 
         let stats = Arc::new(Stats {
             total_requests: AtomicU64::new(0),
@@ -74,14 +77,17 @@ impl Node {
         // network.spawn_server(replica.clone()).await?;
 
         // If no config / persistence -> default
-        Ok((Node {
-            info: node_name,
-            event_store,
-            network,
-            stats,
-            semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
-            wait_handler,
-        }, replica))
+        Ok((
+            Node {
+                info: node_name,
+                event_store,
+                network,
+                stats,
+                semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
+                wait_handler,
+            },
+            replica,
+        ))
     }
 
     #[instrument(level = "trace")]
@@ -90,9 +96,10 @@ impl Node {
         serial: u16,
         network: Arc<dyn Network + Send + Sync>,
         db_path: Option<String>,
+        executor: Arc<dyn Execute>,
     ) -> Result<Self> {
         let node_name = Arc::new(NodeInfo { id, serial });
-        let event_store = Arc::new(Mutex::new(EventStore::init(db_path, serial)?));
+        let event_store = Arc::new(Mutex::new(EventStore::init(db_path, serial, executor)?));
 
         let stats = Arc::new(Stats {
             total_requests: AtomicU64::new(0),
@@ -187,6 +194,10 @@ impl Node {
     }
 }
 
+#[async_trait]
+pub trait Execute: Debug + Send + Sync {
+    async fn execute(&self, payload: Vec<u8>) -> Result<()>;
+}
 #[cfg(test)]
 mod tests {
     use crate::coordinator::CoordinatorIterator;

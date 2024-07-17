@@ -1,3 +1,4 @@
+use crate::node::Execute;
 use crate::{
     coordinator::TransactionStateMachine,
     utils::{from_dependency, Ballot, T, T0},
@@ -8,6 +9,8 @@ use bytes::{BufMut, Bytes, BytesMut};
 use monotime::MonoTime;
 use sha3::Digest;
 use sha3::Sha3_256;
+use std::fmt::Debug;
+use std::sync::Arc;
 use std::{
     collections::{BTreeMap, HashSet},
     time::{SystemTime, UNIX_EPOCH},
@@ -33,6 +36,7 @@ pub struct EventStore {
     pub(crate) latest_t0: T0,             // last created or recognized t0
     pub node_serial: u16,
     latest_hash: [u8; 32],
+    execution: Arc<dyn Execute>,
     // This is only needed for debugging purposes
     // pub last_applied_series: Vec<T>,
 }
@@ -125,8 +129,12 @@ pub(crate) struct RecoverDependencies {
 }
 
 impl EventStore {
-    #[instrument(level = "trace")]
-    pub fn init(path: Option<String>, node_serial: u16) -> Result<Self> {
+    #[instrument(level = "trace", skip(executor))]
+    pub fn init(
+        path: Option<String>,
+        node_serial: u16,
+        executor: Arc<dyn Execute>,
+    ) -> Result<Self> {
         match path {
             Some(path) => {
                 // TODO: Read all from DB and fill event store
@@ -155,7 +163,8 @@ impl EventStore {
                     database: Some(db),
                     node_serial,
                     latest_hash: [0; 32], // TODO: Read from DB
-                                          //last_applied_series: vec![],
+                    execution: executor,
+                    //last_applied_series: vec![],
                 })
             }
             None => Ok(EventStore {
@@ -166,6 +175,7 @@ impl EventStore {
                 database: None,
                 node_serial,
                 latest_hash: [0; 32],
+                execution: executor,
                 //last_applied_series: vec![],
             }),
         }
@@ -303,6 +313,11 @@ impl EventStore {
             self.last_applied = event.t;
             old_event.previous_hash = Some(self.latest_hash);
             self.latest_hash = old_event.hash_event();
+            let payload = old_event.event.clone();
+            eprintln!("EXECUTE");
+            if let Err(err) = self.execution.execute(payload).await {
+                eprintln!("{err}");
+            };
             //println!("Latest hash: {:?}", self.latest_hash);
         }
 

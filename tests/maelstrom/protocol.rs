@@ -11,7 +11,6 @@ impl Iterator for MessageHandler {
         let mut buffer = String::new();
         while let Ok(x) = io::stdin().read_line(&mut buffer) {
             if x != 0 {
-                eprintln!("GOT: {buffer:?}");
                 return serde_json::from_str(&buffer).unwrap();
             }
         }

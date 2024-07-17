@@ -1,6 +1,8 @@
 use anyhow::Result;
-use messages::{AdditionalFields, Body};
+use messages::{ Body};
 use protocol::MessageHandler;
+use crate::messages::MessageType;
+
 mod maelstrom_config;
 mod messages;
 mod network;
@@ -12,21 +14,16 @@ pub fn main() -> Result<()> {
     while let Some(msg) = handler.next() {
         eprintln!("Received message: {:?}", msg);
         match msg.body.msg_type {
-            messages::MessageType::Echo => {
-                let Some(AdditionalFields::Echo { ref echo }) = msg.body.additional_fields else {
-                    eprintln!("Invalid message: {:?}", msg);
-                    continue;
-                };
+            MessageType::Echo { ref echo, .. } => {
                 let reply = msg.reply(Body {
-                    msg_type: messages::MessageType::EchoOk,
-                    additional_fields: Some(messages::AdditionalFields::EchoOk {
-                        echo: echo.to_string(),
-                    }),
+                    msg_type: MessageType::EchoOk{
+                        echo: echo.to_string()
+                    },
                     ..Default::default()
                 });
                 MessageHandler::send(reply)?;
             }
-            messages::MessageType::Init => {
+            MessageType::Init { .. } => {
                 let reply = msg.reply(Body {
                     msg_type: messages::MessageType::InitOk,
                     ..Default::default()
