@@ -60,14 +60,19 @@ pub enum MessageType {
         key: u64,
     },
     ReadOk {
-        key: u64,
-        value: String,
+        value: u64,
     },
     Write {
         key: u64,
-        value: String,
+        value: u64,
     },
     WriteOk,
+    Cas{
+        key: u64,
+        from: u64,
+        to: u64,
+    },
+    CasOk,
 
     // internal consensus specific:
     PreAccept {
@@ -158,7 +163,7 @@ mod tests {
     #[test]
     fn test_kv_deserialization() {
         let read = r#"{ "id":0, "src": "c1", "dest": "n1", "body": { "type":"read", "msg_id":2, "key":0 } }"#;
-        let write = r#"{ "id":0, "src": "c1", "dest": "n1", "body": { "type":"write", "msg_id":2, "key":0, "value":"abc" } }"#;
+        let write = r#"{ "id":0, "src": "c1", "dest": "n1", "body": { "type":"write", "msg_id":2, "key":0, "value":0 } }"#;
 
         let read_msg = Message {
             src: "c1".to_string(),
@@ -180,7 +185,7 @@ mod tests {
                 in_reply_to: None,
                 msg_type: MessageType::Write {
                     key: "0".to_string().parse().unwrap(),
-                    value: "abc".to_string(),
+                    value: 0,
                 },
             },
             ..Default::default()

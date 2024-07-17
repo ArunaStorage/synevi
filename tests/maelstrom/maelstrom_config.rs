@@ -103,8 +103,7 @@ impl MaelstromConfig {
                     Ok(value) => {
                         let reply = msg.reply(Body {
                             msg_type: MessageType::ReadOk {
-                                key: *key,
-                                value,
+                                value: value.parse()?,
                             },
                             ..Default::default()
                         });
@@ -126,7 +125,7 @@ impl MaelstromConfig {
                 ref key,
                 ref value,
             } => {
-                kv_store.write(key.to_string(), value.clone()).await?;
+                kv_store.write(key.to_string(), value.to_string()).await?;
                 let reply = msg.reply(Body {
                     msg_type: WriteOk,
                     ..Default::default()
