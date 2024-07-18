@@ -39,6 +39,7 @@ impl CoordinatorIterator {
         transaction: Vec<u8>,
         stats: Arc<Stats>,
         wait_handler: Arc<WaitHandler>,
+        id: u128,
     ) -> Self {
         CoordinatorIterator::Initialized(Some(
             Coordinator::<Initialized>::new(
@@ -48,6 +49,7 @@ impl CoordinatorIterator {
                 transaction,
                 stats,
                 wait_handler,
+                id,
             )
             .await,
         ))
@@ -161,6 +163,7 @@ pub struct Coordinator<X> {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TransactionStateMachine {
+    pub id: u128,
     pub state: State,
     pub transaction: Vec<u8>,
     pub t_zero: T0,
@@ -178,12 +181,13 @@ impl<X> Coordinator<X> {
         transaction: Vec<u8>,
         stats: Arc<Stats>,
         wait_handler: Arc<WaitHandler>,
+        id: u128,
     ) -> Coordinator<Initialized> {
         // Create struct
         let transaction = event_store
             .lock()
             .await
-            .init_transaction(transaction, node.serial)
+            .init_transaction(transaction, node.serial, id)
             .await;
         Coordinator::<Initialized> {
             node,
@@ -223,6 +227,7 @@ impl Coordinator<Recover> {
 
         let recover_responses = network_interface
             .broadcast(BroadcastRequest::Recover(RecoverRequest {
+                id: event.id.to_be_bytes().to_vec(),
                 ballot: ballot.into(),
                 event: event.event,
                 timestamp_zero: t0_recover.into(),
@@ -417,6 +422,7 @@ impl Coordinator<Initialized> {
 
         // Create the PreAccepted msg
         let pre_accepted_request = PreAcceptRequest {
+            id: self.transaction.id.to_be_bytes().into(),
             event: self.transaction.transaction.clone(),
             timestamp_zero: (*self.transaction.t_zero).into(),
         };
@@ -487,6 +493,7 @@ impl Coordinator<PreAccepted> {
         if *self.transaction.t_zero != *self.transaction.t {
             self.stats.total_accepts.fetch_add(1, Ordering::Relaxed);
             let accepted_request = AcceptRequest {
+                id: self.transaction.id.to_be_bytes().into(),
                 ballot: self.transaction.ballot.into(),
                 event: self.transaction.transaction.clone(),
                 timestamp_zero: (*self.transaction.t_zero).into(),
@@ -549,6 +556,7 @@ impl Coordinator<Accepted> {
     #[instrument(level = "trace", skip(self))]
     pub async fn commit(mut self) -> Result<Coordinator<Committed>> {
         let committed_request = CommitRequest {
+            id: self.transaction.id.to_be_bytes().into(),
             event: self.transaction.transaction.clone(),
             timestamp_zero: (*self.transaction.t_zero).into(),
             timestamp: (*self.transaction.t).into(),
@@ -588,6 +596,7 @@ impl Coordinator<Accepted> {
                 self.transaction.transaction.clone(),
                 WaitAction::CommitBefore,
                 sx,
+                self.transaction.id,
             )
             .await?;
         let _ = rx.await;
@@ -602,6 +611,7 @@ impl Coordinator<Committed> {
         self.execute_consensus().await?;
 
         let applied_request = ApplyRequest {
+            id: self.transaction.id.to_be_bytes().into(),
             event: self.transaction.transaction.clone(),
             timestamp: (*self.transaction.t).into(),
             timestamp_zero: (*self.transaction.t_zero).into(),
@@ -637,6 +647,7 @@ impl Coordinator<Committed> {
                 self.transaction.transaction.clone(),
                 WaitAction::ApplyAfter,
                 sx,
+                self.transaction.id,
             )
             .await?;
 
@@ -659,6 +670,7 @@ mod tests {
     use diesel_ulid::DieselUlid;
     use monotime::MonoTime;
     use std::{collections::HashSet, sync::Arc, vec};
+    use tokio::sync::mpsc::channel;
     use synevi_network::{
         consensus_transport::{PreAcceptResponse, State},
         network::NodeInfo,
@@ -667,7 +679,8 @@ mod tests {
 
     #[tokio::test]
     async fn init_test() {
-        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1).unwrap()));
+        let (sdx, _rcv) = channel(100);
+        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1, sdx).unwrap()));
 
         let network = Arc::new(NetworkMock::default());
         let coordinator = Coordinator::<Initialized>::new(
@@ -680,6 +693,7 @@ mod tests {
             Vec::from("test"),
             Arc::new(Default::default()),
             WaitHandler::new(event_store, network, Default::default(), Default::default()),
+            0
         )
         .await;
         assert_eq!(coordinator.transaction.state, State::PreAccepted);
@@ -692,9 +706,13 @@ mod tests {
 
     #[tokio::test]
     async fn pre_accepted_fast_path_test() {
-        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1).unwrap()));
+        let (sdx, _) = channel(100);
+        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1, sdx).unwrap()));
+        
+        let id = u128::from_be_bytes(DieselUlid::generate().as_byte_array());
 
         let state_machine = TransactionStateMachine {
+            id,
             state: State::PreAccepted,
             transaction: Vec::new(),
             t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
@@ -745,6 +763,7 @@ mod tests {
         assert_eq!(
             event_store.lock().await.events.iter().next().unwrap().1,
             &Event {
+                id,
                 state: State::PreAccepted,
                 event: Vec::new(),
                 t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
@@ -791,6 +810,7 @@ mod tests {
             .unwrap();
 
         let state_machine = TransactionStateMachine {
+            id,
             state: State::PreAccepted,
             transaction: Vec::new(),
             t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
@@ -814,6 +834,7 @@ mod tests {
         assert_eq!(
             event_store.lock().await.events.iter().next().unwrap().1,
             &Event {
+                id,
                 state: State::PreAccepted,
                 event: Vec::new(),
                 t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
@@ -834,9 +855,13 @@ mod tests {
 
     #[tokio::test]
     async fn pre_accepted_slow_path_test() {
-        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1).unwrap()));
+        let (sdx, _rcv) = channel(100);
+        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1, sdx).unwrap()));
+        
+        let id = u128::from_be_bytes(DieselUlid::generate().as_byte_array());
 
         let state_machine = TransactionStateMachine {
+            id,
             state: State::PreAccepted,
             transaction: Vec::new(),
             t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
@@ -897,6 +922,7 @@ mod tests {
         assert_eq!(
             event_store.lock().await.events.iter().next().unwrap().1,
             &Event {
+                id,
                 state: State::PreAccepted,
                 event: Vec::new(),
                 t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),

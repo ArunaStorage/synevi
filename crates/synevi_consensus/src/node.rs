@@ -1,15 +1,18 @@
-use crate::event_store::{Event, EventStore};
-use crate::reorder_buffer::ReorderBuffer;
-use crate::replica::ReplicaConfig;
-use crate::{coordinator::CoordinatorIterator, wait_handler::WaitHandler};
-use anyhow::Result;
-use async_trait::async_trait;
-use diesel_ulid::DieselUlid;
 use std::fmt::Debug;
-use std::sync::{atomic::AtomicU64, Arc};
-use synevi_network::network::{Network, NodeInfo};
+use std::sync::{Arc, atomic::AtomicU64};
+
+use anyhow::Result;
+use diesel_ulid::DieselUlid;
+use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
 use tracing::instrument;
+
+use synevi_network::network::{Network, NodeInfo};
+
+use crate::{coordinator::CoordinatorIterator, wait_handler::WaitHandler};
+use crate::event_store::EventStore;
+use crate::reorder_buffer::ReorderBuffer;
+use crate::replica::ReplicaConfig;
 
 #[derive(Debug, Default)]
 pub struct Stats {
@@ -32,15 +35,16 @@ impl Node {
         todo!()
     }
 
+    // Maelstrom specific, can be removed after refactor
     pub async fn new_with_parameters_and_replica(
         id: DieselUlid,
         serial: u16,
         network: Arc<dyn Network + Send + Sync>,
         db_path: Option<String>,
-        executor: Arc<dyn Execute>,
+        sender: Sender<(u128, Vec<u8>)>,
     ) -> Result<(Self, Arc<ReplicaConfig>)> {
         let node_name = Arc::new(NodeInfo { id, serial });
-        let event_store = Arc::new(Mutex::new(EventStore::init(db_path, serial, executor)?));
+        let event_store = Arc::new(Mutex::new(EventStore::init(db_path, serial, sender)?));
 
         let stats = Arc::new(Stats {
             total_requests: AtomicU64::new(0),
@@ -96,10 +100,10 @@ impl Node {
         serial: u16,
         network: Arc<dyn Network + Send + Sync>,
         db_path: Option<String>,
-        executor: Arc<dyn Execute>,
+        sender: Sender<(u128, Vec<u8>)>,
     ) -> Result<Self> {
         let node_name = Arc::new(NodeInfo { id, serial });
-        let event_store = Arc::new(Mutex::new(EventStore::init(db_path, serial, executor)?));
+        let event_store = Arc::new(Mutex::new(EventStore::init(db_path, serial, sender)?));
 
         let stats = Arc::new(Stats {
             total_requests: AtomicU64::new(0),
@@ -152,7 +156,7 @@ impl Node {
     }
 
     #[instrument(level = "trace", skip(self))]
-    pub async fn transaction(&self, transaction: Vec<u8>) -> Result<()> {
+    pub async fn transaction(&self, id: u128, transaction: Vec<u8>) -> Result<()> {
         let _permit = self.semaphore.clone().acquire_owned().await?;
         let interface = self.network.get_interface().await;
         let mut coordinator_iter = CoordinatorIterator::new(
@@ -162,6 +166,7 @@ impl Node {
             transaction,
             self.stats.clone(),
             self.wait_handler.clone(),
+            id,
         )
         .await;
 
@@ -194,24 +199,23 @@ impl Node {
     }
 }
 
-#[async_trait]
-pub trait Execute: Debug + Send + Sync {
-    async fn execute(&self, payload: Vec<u8>) -> Result<()>;
-}
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+    use std::sync::Arc;
+
+    use diesel_ulid::DieselUlid;
+    use rand::distributions::{Distribution, Uniform};
+
+    use synevi_network::consensus_transport::State;
+
     use crate::coordinator::CoordinatorIterator;
     use crate::event_store::Event;
     use crate::node::Node;
     use crate::tests::NetworkMock;
     use crate::utils::{T, T0};
-    use diesel_ulid::DieselUlid;
-    use rand::distributions::{Distribution, Uniform};
-    use std::collections::BTreeMap;
-    use std::net::SocketAddr;
-    use std::str::FromStr;
-    use std::sync::Arc;
-    use synevi_network::consensus_transport::State;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn recovery_single() {
@@ -221,7 +225,8 @@ mod tests {
         for (i, m) in node_names.iter().enumerate() {
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13100 + i)).unwrap();
             let network = Arc::new(synevi_network::network::NetworkConfig::new(socket_addr));
-            let node = Node::new_with_parameters(*m, i as u16, network, None)
+            let (sdx, _) = tokio::sync::mpsc::channel(100);
+            let node = Node::new_with_parameters(*m, i as u16, network, None, sdx)
                 .await
                 .unwrap();
             nodes.push(node);
@@ -247,6 +252,7 @@ mod tests {
             Vec::from("Recovery transaction"),
             coordinator.stats.clone(),
             coordinator.wait_handler.clone(),
+            0
         )
         .await;
         coordinator_iter.next().await.unwrap();
@@ -256,7 +262,7 @@ mod tests {
         // let applied = coordinator_iter.next().await.unwrap();
 
         arc_coordinator
-            .transaction(Vec::from("First"))
+            .transaction(1, Vec::from("First") )
             .await
             .unwrap();
 
@@ -279,7 +285,8 @@ mod tests {
         for (i, m) in node_names.iter().enumerate() {
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13000 + i)).unwrap();
             let network = Arc::new(synevi_network::network::NetworkConfig::new(socket_addr));
-            let node = Node::new_with_parameters(*m, i as u16, network, None)
+            let (sdx ,_) = tokio::sync::mpsc::channel(100);
+            let node = Node::new_with_parameters(*m, i as u16, network, None, sdx)
                 .await
                 .unwrap();
             nodes.push(node);
@@ -311,6 +318,7 @@ mod tests {
                 Vec::from("Recovery transaction"),
                 coordinator.stats.clone(),
                 coordinator.wait_handler.clone(),
+                0
             )
             .await;
             while coordinator_iter.next().await.unwrap().is_some() {
@@ -321,7 +329,7 @@ mod tests {
             }
         }
         coordinator
-            .transaction(Vec::from("last transaction"))
+            .transaction(0, Vec::from("last transaction"))
             .await
             .unwrap();
 
@@ -385,10 +393,11 @@ mod tests {
     async fn database_test() {
         let network = Arc::new(NetworkMock::default());
         let path = "../../tests/database/init_test_db".to_string();
-        let node = Node::new_with_parameters(DieselUlid::generate(), 0, network, Some(path))
+        let (sdx, _) = tokio::sync::mpsc::channel(100);
+        let node = Node::new_with_parameters(DieselUlid::generate(), 0, network, Some(path), sdx)
             .await
             .unwrap();
-        node.transaction(Vec::from("this is a transaction test"))
+        node.transaction(u128::from_be_bytes(DieselUlid::generate().as_byte_array()),Vec::from("this is a transaction test"))
             .await
             .unwrap();
         let mut event_store = node.event_store.lock().await;

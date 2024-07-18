@@ -117,6 +117,7 @@ impl NetworkInterface for MaelstromConfig {
                             msg_id: None,
                             in_reply_to: None,
                             msg_type: MessageType::PreAccept {
+                                id: req.id.clone(),
                                 event: req.event.clone(),
                                 t0: req.timestamp_zero.clone(),
                             },
@@ -146,6 +147,7 @@ impl NetworkInterface for MaelstromConfig {
                             msg_id: None,
                             in_reply_to: None,
                             msg_type: MessageType::Accept {
+                                id: req.id.clone(),
                                 ballot: req.ballot.clone(),
                                 event: req.event.clone(),
                                 t0: req.timestamp_zero.clone(),
@@ -178,6 +180,7 @@ impl NetworkInterface for MaelstromConfig {
                             in_reply_to: None,
 
                             msg_type: MessageType::Commit {
+                                id: req.id.clone(),
                                 event: req.event.clone(),
                                 t0: req.timestamp_zero.clone(),
                                 t: req.timestamp.clone(),
@@ -209,8 +212,8 @@ impl NetworkInterface for MaelstromConfig {
                             msg_id: None,
                             in_reply_to: None,
 
-                            msg_type: MessageType::Apply
- {
+                            msg_type: MessageType::Apply {
+                                id: req.id.clone(),
                                 event: req.event.clone(),
                                 t0: req.timestamp_zero.clone(),
                                 t: req.timestamp.clone(),
@@ -243,8 +246,8 @@ impl NetworkInterface for MaelstromConfig {
                             msg_id: None,
                             in_reply_to: None,
 
-                            msg_type: MessageType::Recover
- {
+                            msg_type: MessageType::Recover { 
+                                id: req.id.clone(),
                                 ballot: req.ballot.clone(),
                                 event: req.event.clone(),
                                 t0: req.timestamp_zero.clone(),

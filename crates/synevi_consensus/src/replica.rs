@@ -51,7 +51,7 @@ impl Replica for ReplicaConfig {
             .event_store
             .lock()
             .await
-            .pre_accept(t0, request.event)
+            .pre_accept(t0, request.event, u128::from_be_bytes(request.id.as_slice().try_into()?))
             .await?;
 
         // self.reorder_buffer
@@ -73,6 +73,7 @@ impl Replica for ReplicaConfig {
         //println!("Accept: {:?} @ {:?}", t_zero, self.node_info.serial);
 
         let t = T::try_from(request.timestamp.as_slice())?;
+        let id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         let request_ballot = Ballot::try_from(request.ballot.as_slice())?;
 
         let dependencies = {
@@ -85,6 +86,7 @@ impl Replica for ReplicaConfig {
             }
             store
                 .upsert(Event {
+                    id,
                     t_zero,
                     t,
                     state: State::Accepted,
@@ -106,12 +108,13 @@ impl Replica for ReplicaConfig {
     #[instrument(level = "trace", skip(self))]
     async fn commit(&self, request: CommitRequest) -> Result<CommitResponse> {
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
+        let id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         //println!("Commit: {:?} @ {:?}", t_zero, self.node_info.serial);
         let t = T::try_from(request.timestamp.as_slice())?;
         let deps = from_dependency(request.dependencies)?;
         let (sx, rx) = tokio::sync::oneshot::channel();
         self.wait_handler
-            .send_msg(t_zero, t, deps, request.event, WaitAction::CommitBefore, sx)
+            .send_msg(t_zero, t, deps, request.event, WaitAction::CommitBefore, sx, id)
             .await?;
         let _ = rx.await;
         Ok(CommitResponse {})
@@ -121,6 +124,7 @@ impl Replica for ReplicaConfig {
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse> {
         let transaction: Vec<u8> = request.event;
 
+        let id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         let t = T::try_from(request.timestamp.as_slice())?;
 
@@ -129,7 +133,7 @@ impl Replica for ReplicaConfig {
         let (sx, rx) = tokio::sync::oneshot::channel();
 
         self.wait_handler
-            .send_msg(t_zero, t, deps, transaction, WaitAction::ApplyAfter, sx)
+            .send_msg(t_zero, t, deps, transaction, WaitAction::ApplyAfter, sx, id)
             .await?;
         let _ = rx.await;
 
@@ -138,6 +142,7 @@ impl Replica for ReplicaConfig {
 
     #[instrument(level = "trace", skip(self))]
     async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse> {
+        let id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         let mut event_store_lock = self.event_store.lock().await;
         if let Some(mut event) = event_store_lock.get_event(t_zero).await {
@@ -154,7 +159,7 @@ impl Replica for ReplicaConfig {
             event_store_lock.update_ballot(&t_zero, request_ballot);
 
             if matches!(event.state, State::Undefined) {
-                event.t = event_store_lock.pre_accept(t_zero, request.event).await?.1;
+                event.t = event_store_lock.pre_accept(t_zero, request.event, id).await?.1;
             };
             let recover_deps = event_store_lock.get_recover_deps(&event.t, &t_zero).await?;
 
@@ -169,7 +174,7 @@ impl Replica for ReplicaConfig {
                 nack: Ballot::default().into(),
             })
         } else {
-            let (_, t) = event_store_lock.pre_accept(t_zero, request.event).await?;
+            let (_, t) = event_store_lock.pre_accept(t_zero, request.event, id).await?;
             let recover_deps = event_store_lock.get_recover_deps(&t, &t_zero).await?;
             self.stats.total_recovers.fetch_add(1, Ordering::Relaxed);
 
@@ -197,6 +202,7 @@ mod tests {
     use bytes::{BufMut, BytesMut};
     use monotime::MonoTime;
     use std::sync::Arc;
+    use diesel_ulid::DieselUlid;
     use synevi_network::consensus_transport::{CommitRequest, State};
     use synevi_network::network::NodeInfo;
     use synevi_network::replica::Replica;
@@ -204,7 +210,8 @@ mod tests {
 
     #[tokio::test]
     async fn start_recovery() {
-        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1).unwrap()));
+        let (sdx, _) = tokio::sync::mpsc::channel(100);
+        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1, sdx).unwrap()));
 
         let conflicting_t0 = MonoTime::new(0, 0);
         event_store
@@ -251,6 +258,7 @@ mod tests {
         let mut buf = BytesMut::with_capacity(16);
         buf.put_u128(conflicting_t0.into());
         let request = CommitRequest {
+            id: DieselUlid::generate().as_byte_array().to_vec(),
             event: Vec::new(),
             timestamp_zero: t0.into(),
             timestamp: t0.into(),

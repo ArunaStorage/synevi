@@ -15,3 +15,4 @@ synevi_persistence = {path = "../synevi_persistence"}
 synevi_consensus = {path = "../synevi_consensus"}
 async-trait = "0.1.80"
 tokio = {workspace = true}
+thiserror = "1.0.61"

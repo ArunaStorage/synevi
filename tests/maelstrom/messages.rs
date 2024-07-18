@@ -76,6 +76,7 @@ pub enum MessageType {
 
     // internal consensus specific:
     PreAccept {
+        id: Vec<u8>,
         event: Vec<u8>,
         t0: Vec<u8>,
     },
@@ -86,6 +87,7 @@ pub enum MessageType {
         nack: bool,
     },
     Accept {
+        id: Vec<u8>,
         ballot: Vec<u8>,
         event: Vec<u8>,
         t0: Vec<u8>,
@@ -98,6 +100,7 @@ pub enum MessageType {
         nack: bool,
     },
     Commit {
+        id: Vec<u8>,
         event: Vec<u8>,
         t0: Vec<u8>,
         t: Vec<u8>,
@@ -107,6 +110,7 @@ pub enum MessageType {
         t0: Vec<u8>,
     },
     Apply {
+        id: Vec<u8>,
         event: Vec<u8>,
         t0: Vec<u8>,
         t: Vec<u8>,
@@ -116,6 +120,7 @@ pub enum MessageType {
         t0: Vec<u8>,
     },
     Recover {
+        id: Vec<u8>,
         ballot: Vec<u8>,
         event: Vec<u8>,
         t0: Vec<u8>,

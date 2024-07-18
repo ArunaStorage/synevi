@@ -15,6 +15,7 @@ use tokio::{
 };
 
 pub struct ReorderMessage {
+    pub id: u128,
     pub t0: T0,
     pub event: Vec<u8>,
     pub notify: oneshot::Sender<(T, Vec<u8>)>,
@@ -46,6 +47,7 @@ impl ReorderBuffer {
         notify: oneshot::Sender<(T, Vec<u8>)>,
         event: Vec<u8>,
         latency: u64,
+        id: u128,
     ) -> Result<()> {
         Ok(self
             .sender
@@ -54,6 +56,7 @@ impl ReorderBuffer {
                 notify,
                 event,
                 latency,
+                id,
             })
             .await?)
     }
@@ -69,15 +72,18 @@ impl ReorderBuffer {
             )
             .await
             {
-                Ok(Ok(ReorderMessage {
-                    t0,
-                    notify,
-                    event,
-                    latency,
+                Ok(
+                    Ok(
+                        ReorderMessage {
+                          id, 
+                          t0,
+                            notify,
+                            event,
+                            latency,
                 })) => {
                     //println!("Received message: {:?} latency: {}", t0, latency);
                     let now = Instant::now();
-                    buffer.insert(t0, (notify, event));
+                    buffer.insert(t0, (notify, event, id));
                     if current_transaction.1 == T0::default() {
                         current_transaction = (now, t0);
                         next_latency = latency;
@@ -89,13 +95,13 @@ impl ReorderBuffer {
 
                     while let Some(entry) = buffer.first_entry() {
                         if entry.key() <= &current_transaction.1 {
-                            let (t0_buffer, (notify, event)) = entry.remove_entry();
+                            let (t0_buffer, (notify, event, id)) = entry.remove_entry();
 
                             let (deps, t) = self
                                 .event_store
                                 .lock()
                                 .await
-                                .pre_accept(t0_buffer, event)
+                                .pre_accept(t0_buffer, event, id)
                                 .await?;
                             let _ = notify.send((t, deps));
                         } else {
@@ -112,12 +118,12 @@ impl ReorderBuffer {
                     // Elapsed more than 1.2x average (TODO) latency
                     if (current_transaction.0.elapsed().as_micros() as u64) > next_latency {
                         while let Some(entry) = buffer.first_entry() {
-                            let (t0_buffer, (notify, event)) = entry.remove_entry();
+                            let (t0_buffer, (notify, event, id)) = entry.remove_entry();
                             let (deps, t) = self
                                 .event_store
                                 .lock()
                                 .await
-                                .pre_accept(t0_buffer, event)
+                                .pre_accept(t0_buffer, event, id)
                                 .await?;
                             let _ = notify.send((t, deps));
                         }

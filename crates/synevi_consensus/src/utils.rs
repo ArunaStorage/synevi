@@ -132,6 +132,7 @@ pub fn from_dependency(deps: Vec<u8>) -> Result<HashSet<T0, RandomState>> {
 impl From<&TransactionStateMachine> for Event {
     fn from(value: &TransactionStateMachine) -> Self {
         Event {
+            id: value.id,
             t_zero: value.t_zero,
             t: value.t,
             state: value.state,

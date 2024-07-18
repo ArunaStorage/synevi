@@ -1,13 +1,14 @@
 use crate::maelstrom_config::MaelstromConfig;
 use crate::messages::{Body, MessageType};
 use crate::protocol::MessageHandler;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Error, Result};
 use diesel_ulid::DieselUlid;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use synevi_kv::KVStore;
 use synevi_network::network::Network;
+use synevi_kv::kv_store::KVStore;
+use synevi_kv::error::KVError;
 
 mod maelstrom_config;
 mod messages;
@@ -74,8 +75,7 @@ pub async fn maelstrom_kv_setup() -> Result<()> {
                                 Ok(value) => {
                                     let reply = msg.reply(Body {
                                         msg_type: MessageType::ReadOk {
-                                            value: value.parse()?,
-                                        },
+                                            value: value.parse()?, },
                                         ..Default::default()
                                     });
                                     MessageHandler::send(reply)?;
@@ -93,19 +93,58 @@ pub async fn maelstrom_kv_setup() -> Result<()> {
                             };
                         }
                         MessageType::Write{ ref key, ref value } => {
-                            kv_store.write(key.to_string(), value.to_string()).await?;
-                                let reply = msg.reply(Body {
+                            let reply = match kv_store.write(key.to_string(), value.to_string()).await {
+                                Ok(_) => msg.reply(Body {
                                     msg_type: MessageType::WriteOk,
                                     ..Default::default()
-                                });
+                                }),
+                                Err(err) => {
+                                    eprintln!("Error {err}");
+                                    msg.reply(Body {
+                                        msg_type: MessageType::WriteOk,
+                                        ..Default::default()
+                                    })
+                                }
+                                };
+                                 
                                 MessageHandler::send(reply)?;
                         }
                         MessageType::Cas{ref key, ref from, ref to} => {
-                            kv_store.cas(key.to_string(), from.to_string(), to.to_string()).await?;
-                                let reply = msg.reply(Body {
+                            let reply = match kv_store.cas(key.to_string(), from.to_string(), to.to_string()).await {
+                                Ok(_) => msg.reply(Body {
                                     msg_type: MessageType::CasOk,
                                     ..Default::default()
-                                });
+                                }),
+                                
+                                Err(err) => match err {
+                                    KVError::KeyNotFound => {
+                                        msg.reply(Body {
+                                            msg_type: MessageType::Error {
+                                                code: 20,
+                                                text: format!("{err}"),
+                                            },
+                                            ..Default::default()
+                                        })
+                                    }
+                                    KVError::MismatchError => {
+                                        msg.reply(Body {
+                                            msg_type: MessageType::Error {
+                                                code: 22,
+                                                text: format!("{err}"),
+                                            },
+                                            ..Default::default()
+                                        })
+                                    }
+                                    _ => {
+                                        eprintln!("Error: {err}");
+                                        msg.reply(Body {
+                                            msg_type: MessageType::CasOk,
+                                            ..Default::default()
+                                        })
+                                    }
+                                    
+                                },
+                            };
                                 MessageHandler::send(reply)?;
                         }
                         msg => eprintln!("Unexpected msg type {msg:?}"),

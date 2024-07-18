@@ -30,6 +30,7 @@ pub enum WaitAction {
 
 #[derive(Debug)]
 pub struct WaitMessage {
+    id: u128,
     t_zero: T0,
     t: T,
     deps: HashSet<T0, RandomState>,
@@ -87,10 +88,12 @@ impl WaitHandler {
         event: Vec<u8>,
         action: WaitAction,
         notify: oneshot::Sender<()>,
+        id: u128,
     ) -> Result<()> {
         Ok(self
             .sender
             .send(WaitMessage {
+                id,
                 t_zero,
                 t,
                 deps,
@@ -162,6 +165,7 @@ impl WaitHandler {
     async fn upsert_event(
         &self,
         WaitMessage {
+            id,
             t_zero,
             t,
             action,
@@ -178,6 +182,7 @@ impl WaitHandler {
             .lock()
             .await
             .upsert(Event {
+                id: *id,
                 t_zero: *t_zero,
                 t: *t,
                 state,
@@ -385,18 +390,20 @@ impl WaiterState {
 
 #[cfg(test)]
 mod tests {
+    use diesel_ulid::DieselUlid;
     use monotime::MonoTime;
 
     use crate::wait_handler::*;
 
     #[tokio::test]
     async fn test_wait_handler() {
+        let (sdx, _) = tokio::sync::mpsc::channel(100);
         let (sender, receiver): (Sender<WaitMessage>, Receiver<WaitMessage>) =
             async_channel::unbounded();
         let wait_handler = WaitHandler {
             sender,
             receiver,
-            event_store: Arc::new(Mutex::new(EventStore::init(None, 0).unwrap())),
+            event_store: Arc::new(Mutex::new(EventStore::init(None, 0, sdx).unwrap())),
             network: Arc::new(crate::tests::NetworkMock::default()),
             stats: Arc::new(Stats::default()),
             node_info: Arc::new(NodeInfo::default()),
@@ -409,6 +416,8 @@ mod tests {
         // let notify_2_1_future = notify_2_1.notified();
         // let notify_2_2_future = notify_2_2.notified();
 
+        let id_1 = u128::from_be_bytes(DieselUlid::generate().as_byte_array());
+        let _id_2 = u128::from_be_bytes(DieselUlid::generate().as_byte_array());
         let t0_1 = T0(MonoTime::new_with_time(1u128, 0, 0));
         let t0_2 = T0(MonoTime::new_with_time(2u128, 0, 0));
         let t_1 = T(MonoTime::new_with_time(1u128, 0, 0));
@@ -422,6 +431,7 @@ mod tests {
                 Vec::new(),
                 WaitAction::CommitBefore,
                 sx11,
+                id_1,
             )
             .await
             .unwrap();
@@ -433,6 +443,7 @@ mod tests {
                 Vec::new(),
                 WaitAction::CommitBefore,
                 sx12,
+                id_1,
             )
             .await
             .unwrap();
@@ -445,6 +456,7 @@ mod tests {
                 Vec::new(),
                 WaitAction::ApplyAfter,
                 sx21,
+                id_1,
             )
             .await
             .unwrap();

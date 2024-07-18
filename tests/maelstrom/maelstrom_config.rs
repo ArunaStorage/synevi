@@ -8,7 +8,7 @@ use monotime::MonoTime;
 use std::collections::HashMap;
 use std::sync::Arc;
 use synevi_consensus::replica::ReplicaConfig;
-use synevi_kv::KVStore;
+use synevi_kv::kv_store::KVStore;
 use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
     PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse,
@@ -150,6 +150,7 @@ impl MaelstromConfig {
         }
         match msg.body.msg_type {
             MessageType::PreAccept {
+                ref id,
                 ref event,
                 ref t0,
             } => {
@@ -157,6 +158,7 @@ impl MaelstromConfig {
                 let response = replica_config
                     .pre_accept(
                         PreAcceptRequest {
+                            id: id.clone(),
                             event: event.clone(),
                             timestamp_zero: t0.clone(),
                         },
@@ -177,6 +179,7 @@ impl MaelstromConfig {
                 MessageHandler::send(reply)?;
             }
             MessageType::Accept {
+                ref id ,
                 ref ballot,
                 ref event,
                 ref t0,
@@ -185,6 +188,7 @@ impl MaelstromConfig {
             } => {
                 let response = replica_config
                     .accept(AcceptRequest {
+                        id: id.clone(),
                         ballot: ballot.clone(),
                         event: event.clone(),
                         timestamp_zero: t0.clone(),
@@ -204,6 +208,7 @@ impl MaelstromConfig {
                 MessageHandler::send(reply)?;
             }
             MessageType::Commit {
+                ref id,
                 ref event,
                 ref t0,
                 ref t,
@@ -211,6 +216,7 @@ impl MaelstromConfig {
             } => {
                 replica_config
                     .commit(CommitRequest {
+                        id: id.clone(),
                         event: event.clone(),
                         timestamp_zero: t0.clone(),
                         timestamp: t.clone(),
@@ -227,6 +233,7 @@ impl MaelstromConfig {
                 MessageHandler::send(reply)?;
             }
             MessageType::Apply {
+                ref id,
                 ref event,
                 ref t0,
                 ref t,
@@ -234,6 +241,7 @@ impl MaelstromConfig {
             } => {
                 replica_config
                     .apply(ApplyRequest {
+                        id: id.clone(),
                         event: event.clone(),
                         timestamp_zero: t0.clone(),
                         timestamp: t.clone(),
@@ -250,12 +258,14 @@ impl MaelstromConfig {
                 MessageHandler::send(reply)?;
             }
             MessageType::Recover {
+                ref id,
                 ref ballot,
                 ref event,
                 ref t0,
             } => {
                 let result = replica_config
                     .recover(RecoverRequest {
+                        id: id.clone(),
                         ballot: ballot.clone(),
                         event: event.clone(),
                         timestamp_zero: t0.clone(),

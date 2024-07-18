@@ -19,7 +19,8 @@ mod tests {
             let _path = format!("../tests/database/{}_test_db", i);
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
             let network = Arc::new(synevi_network::network::NetworkConfig::new(socket_addr));
-            let node = Node::new_with_parameters(*m, i as u16, network, None)
+            let (sdx, _) = tokio::sync::mpsc::channel(100);
+            let node = Node::new_with_parameters(*m, i as u16, network, None, sdx)
                 .await
                 .unwrap();
             nodes.push(node);
@@ -39,11 +40,11 @@ mod tests {
 
         let mut joinset = tokio::task::JoinSet::new();
 
-        for _ in 0..10000 {
+        for i in 0..10000 {
             let coordinator = arc_coordinator.clone();
             joinset.spawn(async move {
                 coordinator
-                    .transaction(Vec::from("This is a transaction"))
+                    .transaction(i, Vec::from("This is a transaction"))
                     .await
             });
         }
@@ -131,7 +132,8 @@ mod tests {
             for (i, m) in node_names.iter().enumerate() {
                 let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 11000 + i)).unwrap();
                 let network = Arc::new(synevi_network::network::NetworkConfig::new(socket_addr));
-                let node = Node::new_with_parameters(*m, i as u16, network, None)
+                let (sdx, _) = tokio::sync::mpsc::channel(100);
+                let node = Node::new_with_parameters(*m, i as u16, network, None, sdx)
                     .await
                     .unwrap();
                 nodes.push(node);
@@ -168,11 +170,11 @@ mod tests {
                 let coordinator3 = arc_coordinator3.clone();
                 let coordinator4 = arc_coordinator4.clone();
                 let coordinator5 = arc_coordinator5.clone();
-                joinset.spawn(async move { coordinator1.transaction(Vec::from("C1")).await });
-                joinset.spawn(async move { coordinator2.transaction(Vec::from("C2")).await });
-                joinset.spawn(async move { coordinator3.transaction(Vec::from("C3")).await });
-                joinset.spawn(async move { coordinator4.transaction(Vec::from("C4")).await });
-                joinset.spawn(async move { coordinator5.transaction(Vec::from("C5")).await });
+                joinset.spawn(async move { coordinator1.transaction(u128::from_be_bytes(DieselUlid::generate().as_byte_array()), Vec::from("C1")).await });
+                joinset.spawn(async move { coordinator2.transaction(u128::from_be_bytes(DieselUlid::generate().as_byte_array()), Vec::from("C2")).await });
+                joinset.spawn(async move { coordinator3.transaction(u128::from_be_bytes(DieselUlid::generate().as_byte_array()), Vec::from("C3")).await });
+                joinset.spawn(async move { coordinator4.transaction(u128::from_be_bytes(DieselUlid::generate().as_byte_array()), Vec::from("C4")).await });
+                joinset.spawn(async move { coordinator5.transaction(u128::from_be_bytes(DieselUlid::generate().as_byte_array()), Vec::from("C5")).await });
             }
             while let Some(res) = joinset.join_next().await {
                 res.unwrap().unwrap();
@@ -296,7 +298,8 @@ mod tests {
             for (i, m) in node_names.iter().enumerate() {
                 let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 12000 + i)).unwrap();
                 let network = Arc::new(synevi_network::network::NetworkConfig::new(socket_addr));
-                let node = Node::new_with_parameters(*m, i as u16, network, None)
+                let (sdx, _) = tokio::sync::mpsc::channel(100);
+                let node = Node::new_with_parameters(*m, i as u16, network, None, sdx)
                     .await
                     .unwrap();
                 nodes.push(node);
@@ -311,9 +314,9 @@ mod tests {
                     .unwrap();
             }
 
-            for _ in 0..1000 {
+            for i in 0..1000 {
                 coordinator
-                    .transaction(Vec::from("This is a transaction"))
+                    .transaction(i, Vec::from("This is a transaction"))
                     .await
                     .unwrap();
             }

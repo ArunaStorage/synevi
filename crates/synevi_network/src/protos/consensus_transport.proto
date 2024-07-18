@@ -11,8 +11,9 @@ service ConsensusTransport {
 }
 
 message PreAcceptRequest {
-  bytes event = 1;
-  bytes timestamp_zero = 2;
+  bytes id = 1;
+  bytes event = 2;
+  bytes timestamp_zero = 3;
 }
 
 message PreAcceptResponse {
@@ -22,11 +23,12 @@ message PreAcceptResponse {
 }
 
 message AcceptRequest {
-  bytes ballot = 1;
-  bytes event = 2;
-  bytes timestamp_zero = 3;
-  bytes timestamp = 4;
-  bytes dependencies = 5;
+  bytes id = 1;
+  bytes ballot = 2;
+  bytes event = 3;
+  bytes timestamp_zero = 4;
+  bytes timestamp = 5;
+  bytes dependencies = 6;
 }
 
 message AcceptResponse {
@@ -35,10 +37,11 @@ message AcceptResponse {
 }
 
 message CommitRequest {
-  bytes event = 1;
-  bytes timestamp_zero = 2;
-  bytes timestamp = 3;
-  bytes dependencies = 4;
+  bytes id = 1;
+  bytes event = 2;
+  bytes timestamp_zero = 3;
+  bytes timestamp = 4;
+  bytes dependencies = 5;
 }
 
 message CommitResponse {
@@ -46,20 +49,22 @@ message CommitResponse {
 }
 
 message ApplyRequest {
-  bytes event = 1;
+  bytes id = 1;
+  bytes event = 2;
   // This is extra to make it easier to identify the event
-  bytes timestamp_zero = 2;
-  bytes timestamp = 3;
-  bytes dependencies = 4;
+  bytes timestamp_zero = 3;
+  bytes timestamp = 4;
+  bytes dependencies = 5;
   // bytes result = 5; // Theoretically not needed?
 }
 
 message ApplyResponse {}
 
 message RecoverRequest {
-  bytes ballot = 1;
-  bytes event = 2;
-  bytes timestamp_zero = 3;
+  bytes id = 1;
+  bytes ballot = 2;
+  bytes event = 3;
+  bytes timestamp_zero = 4;
 }
 
 enum State {

@@ -1,4 +1,3 @@
-use crate::node::Execute;
 use crate::{
     coordinator::TransactionStateMachine,
     utils::{from_dependency, Ballot, T, T0},
@@ -10,7 +9,6 @@ use monotime::MonoTime;
 use sha3::Digest;
 use sha3::Sha3_256;
 use std::fmt::Debug;
-use std::sync::Arc;
 use std::{
     collections::{BTreeMap, HashSet},
     time::{SystemTime, UNIX_EPOCH},
@@ -36,13 +34,14 @@ pub struct EventStore {
     pub(crate) latest_t0: T0,             // last created or recognized t0
     pub node_serial: u16,
     latest_hash: [u8; 32],
-    execution: Arc<dyn Execute>,
+    sender: tokio::sync::mpsc::Sender<(u128, Vec<u8>)>,
     // This is only needed for debugging purposes
     // pub last_applied_series: Vec<T>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct Event {
+    pub id: u128,
     pub t_zero: T0,
     pub t: T,
 
@@ -60,6 +59,7 @@ pub struct Event {
 impl Event {
     fn hash_event(&self) -> [u8; 32] {
         let mut hasher = Sha3_256::new();
+        hasher.update(Vec::<u8>::from(self.id.to_be_bytes()).as_slice());
         hasher.update(Vec::<u8>::from(self.t_zero).as_slice());
         hasher.update(Vec::<u8>::from(self.t).as_slice());
         hasher.update(Vec::<u8>::from(self.ballot).as_slice());
@@ -80,6 +80,7 @@ impl Event {
     pub fn as_bytes(&self) -> Bytes {
         let mut new: BytesMut = BytesMut::new();
 
+        new.put(self.id.to_be_bytes().as_slice());
         new.put(<[u8; 16]>::from(*self.t).as_slice());
         let state: i32 = self.state.into();
         new.put(state.to_be_bytes().as_slice()); // -> [u8: 4]
@@ -96,6 +97,7 @@ impl Event {
         let mut event = Event::default();
         event.t_zero = T0(MonoTime::try_from(input.key.iter().as_slice())?);
         event.event = input.event.into();
+        event.id = u128::from_be_bytes(<[u8; 16]>::try_from(state.split_to(16).iter().as_slice())?);
         event.t = T::try_from(state.split_to(16))?;
         event.state = State::try_from(i32::from_be_bytes(<[u8; 4]>::try_from(
             state.split_to(4).iter().as_slice(),
@@ -129,11 +131,11 @@ pub(crate) struct RecoverDependencies {
 }
 
 impl EventStore {
-    #[instrument(level = "trace", skip(executor))]
+    #[instrument(level = "trace")]
     pub fn init(
         path: Option<String>,
         node_serial: u16,
-        executor: Arc<dyn Execute>,
+        sender: tokio::sync::mpsc::Sender<(u128, Vec<u8>)>,
     ) -> Result<Self> {
         match path {
             Some(path) => {
@@ -163,7 +165,7 @@ impl EventStore {
                     database: Some(db),
                     node_serial,
                     latest_hash: [0; 32], // TODO: Read from DB
-                    execution: executor,
+                    sender,
                     //last_applied_series: vec![],
                 })
             }
@@ -175,7 +177,7 @@ impl EventStore {
                 database: None,
                 node_serial,
                 latest_hash: [0; 32],
-                execution: executor,
+                sender,
                 //last_applied_series: vec![],
             }),
         }
@@ -192,9 +194,11 @@ impl EventStore {
         &mut self,
         body: Vec<u8>,
         node_serial: u16,
+        id: u128
     ) -> TransactionStateMachine {
         let t0 = self.latest_t0.next_with_node(node_serial).into_time();
         TransactionStateMachine {
+            id,
             state: State::PreAccepted,
             transaction: body,
             t_zero: T0(t0),
@@ -225,7 +229,7 @@ impl EventStore {
     }
 
     #[instrument(level = "trace")]
-    pub async fn pre_accept(&mut self, t_zero: T0, transaction: Vec<u8>) -> Result<(Vec<u8>, T)> {
+    pub async fn pre_accept(&mut self, t_zero: T0, transaction: Vec<u8>, id: u128) -> Result<(Vec<u8>, T)> {
         let (t, deps) = {
             let t = T(if let Some((last_t, _)) = self.mappings.last_key_value() {
                 if **last_t > *t_zero {
@@ -248,6 +252,7 @@ impl EventStore {
         // This is OK because on pre_accept T == T0
 
         let event = Event {
+            id,
             t_zero,
             t,
             state: State::PreAccepted,
@@ -315,10 +320,7 @@ impl EventStore {
             self.latest_hash = old_event.hash_event();
             let payload = old_event.event.clone();
             eprintln!("EXECUTE");
-            if let Err(err) = self.execution.execute(payload).await {
-                eprintln!("{err}");
-            };
-            //println!("Latest hash: {:?}", self.latest_hash);
+            self.sender.send((old_event.id, payload)).await.unwrap();
         }
 
         if let Some(db) = &self.database {
@@ -428,6 +430,7 @@ mod tests {
         let t = T(t_zero.next().into_time());
 
         let event = Event {
+            id: 0, 
             t_zero,
             t,
             state: State::Commited,
