@@ -194,7 +194,7 @@ impl EventStore {
         &mut self,
         body: Vec<u8>,
         node_serial: u16,
-        id: u128
+        id: u128,
     ) -> TransactionStateMachine {
         let t0 = self.latest_t0.next_with_node(node_serial).into_time();
         TransactionStateMachine {
@@ -229,7 +229,12 @@ impl EventStore {
     }
 
     #[instrument(level = "trace")]
-    pub async fn pre_accept(&mut self, t_zero: T0, transaction: Vec<u8>, id: u128) -> Result<(Vec<u8>, T)> {
+    pub async fn pre_accept(
+        &mut self,
+        t_zero: T0,
+        transaction: Vec<u8>,
+        id: u128,
+    ) -> Result<(Vec<u8>, T)> {
         let (t, deps) = {
             let t = T(if let Some((last_t, _)) = self.mappings.last_key_value() {
                 if **last_t > *t_zero {
@@ -430,7 +435,7 @@ mod tests {
         let t = T(t_zero.next().into_time());
 
         let event = Event {
-            id: 0, 
+            id: 0,
             t_zero,
             t,
             state: State::Commited,

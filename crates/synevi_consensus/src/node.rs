@@ -1,5 +1,5 @@
 use std::fmt::Debug;
-use std::sync::{Arc, atomic::AtomicU64};
+use std::sync::{atomic::AtomicU64, Arc};
 
 use anyhow::Result;
 use diesel_ulid::DieselUlid;
@@ -9,10 +9,10 @@ use tracing::instrument;
 
 use synevi_network::network::{Network, NodeInfo};
 
-use crate::{coordinator::CoordinatorIterator, wait_handler::WaitHandler};
 use crate::event_store::EventStore;
 use crate::reorder_buffer::ReorderBuffer;
 use crate::replica::ReplicaConfig;
+use crate::{coordinator::CoordinatorIterator, wait_handler::WaitHandler};
 
 #[derive(Debug, Default)]
 pub struct Stats {
@@ -170,7 +170,9 @@ impl Node {
         )
         .await;
 
-        while coordinator_iter.next().await?.is_some() {}
+        while coordinator_iter.next().await?.is_some() {
+        }
+        eprintln!("Finished coordinator");
         Ok(())
     }
 
@@ -252,7 +254,7 @@ mod tests {
             Vec::from("Recovery transaction"),
             coordinator.stats.clone(),
             coordinator.wait_handler.clone(),
-            0
+            0,
         )
         .await;
         coordinator_iter.next().await.unwrap();
@@ -262,7 +264,7 @@ mod tests {
         // let applied = coordinator_iter.next().await.unwrap();
 
         arc_coordinator
-            .transaction(1, Vec::from("First") )
+            .transaction(1, Vec::from("First"))
             .await
             .unwrap();
 
@@ -285,7 +287,7 @@ mod tests {
         for (i, m) in node_names.iter().enumerate() {
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13000 + i)).unwrap();
             let network = Arc::new(synevi_network::network::NetworkConfig::new(socket_addr));
-            let (sdx ,_) = tokio::sync::mpsc::channel(100);
+            let (sdx, _) = tokio::sync::mpsc::channel(100);
             let node = Node::new_with_parameters(*m, i as u16, network, None, sdx)
                 .await
                 .unwrap();
@@ -318,7 +320,7 @@ mod tests {
                 Vec::from("Recovery transaction"),
                 coordinator.stats.clone(),
                 coordinator.wait_handler.clone(),
-                0
+                0,
             )
             .await;
             while coordinator_iter.next().await.unwrap().is_some() {
@@ -397,9 +399,12 @@ mod tests {
         let node = Node::new_with_parameters(DieselUlid::generate(), 0, network, Some(path), sdx)
             .await
             .unwrap();
-        node.transaction(u128::from_be_bytes(DieselUlid::generate().as_byte_array()),Vec::from("this is a transaction test"))
-            .await
-            .unwrap();
+        node.transaction(
+            u128::from_be_bytes(DieselUlid::generate().as_byte_array()),
+            Vec::from("this is a transaction test"),
+        )
+        .await
+        .unwrap();
         let mut event_store = node.event_store.lock().await;
         let db = event_store.database.clone();
         let all = db.unwrap().read_all().unwrap();

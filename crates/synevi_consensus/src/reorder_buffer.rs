@@ -72,14 +72,12 @@ impl ReorderBuffer {
             )
             .await
             {
-                Ok(
-                    Ok(
-                        ReorderMessage {
-                          id, 
-                          t0,
-                            notify,
-                            event,
-                            latency,
+                Ok(Ok(ReorderMessage {
+                    id,
+                    t0,
+                    notify,
+                    event,
+                    latency,
                 })) => {
                     //println!("Received message: {:?} latency: {}", t0, latency);
                     let now = Instant::now();

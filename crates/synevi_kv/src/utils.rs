@@ -1,6 +1,6 @@
-use std::fmt::{Debug, Formatter};
-use anyhow::anyhow;
 use crate::kv_store::{KVStore, Transaction};
+use anyhow::anyhow;
+use std::fmt::{Debug, Formatter};
 
 impl Debug for KVStore {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

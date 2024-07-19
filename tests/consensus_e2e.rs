@@ -170,11 +170,46 @@ mod tests {
                 let coordinator3 = arc_coordinator3.clone();
                 let coordinator4 = arc_coordinator4.clone();
                 let coordinator5 = arc_coordinator5.clone();
-                joinset.spawn(async move { coordinator1.transaction(u128::from_be_bytes(DieselUlid::generate().as_byte_array()), Vec::from("C1")).await });
-                joinset.spawn(async move { coordinator2.transaction(u128::from_be_bytes(DieselUlid::generate().as_byte_array()), Vec::from("C2")).await });
-                joinset.spawn(async move { coordinator3.transaction(u128::from_be_bytes(DieselUlid::generate().as_byte_array()), Vec::from("C3")).await });
-                joinset.spawn(async move { coordinator4.transaction(u128::from_be_bytes(DieselUlid::generate().as_byte_array()), Vec::from("C4")).await });
-                joinset.spawn(async move { coordinator5.transaction(u128::from_be_bytes(DieselUlid::generate().as_byte_array()), Vec::from("C5")).await });
+                joinset.spawn(async move {
+                    coordinator1
+                        .transaction(
+                            u128::from_be_bytes(DieselUlid::generate().as_byte_array()),
+                            Vec::from("C1"),
+                        )
+                        .await
+                });
+                joinset.spawn(async move {
+                    coordinator2
+                        .transaction(
+                            u128::from_be_bytes(DieselUlid::generate().as_byte_array()),
+                            Vec::from("C2"),
+                        )
+                        .await
+                });
+                joinset.spawn(async move {
+                    coordinator3
+                        .transaction(
+                            u128::from_be_bytes(DieselUlid::generate().as_byte_array()),
+                            Vec::from("C3"),
+                        )
+                        .await
+                });
+                joinset.spawn(async move {
+                    coordinator4
+                        .transaction(
+                            u128::from_be_bytes(DieselUlid::generate().as_byte_array()),
+                            Vec::from("C4"),
+                        )
+                        .await
+                });
+                joinset.spawn(async move {
+                    coordinator5
+                        .transaction(
+                            u128::from_be_bytes(DieselUlid::generate().as_byte_array()),
+                            Vec::from("C5"),
+                        )
+                        .await
+                });
             }
             while let Some(res) = joinset.join_next().await {
                 res.unwrap().unwrap();

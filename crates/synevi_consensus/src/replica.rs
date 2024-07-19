@@ -51,7 +51,11 @@ impl Replica for ReplicaConfig {
             .event_store
             .lock()
             .await
-            .pre_accept(t0, request.event, u128::from_be_bytes(request.id.as_slice().try_into()?))
+            .pre_accept(
+                t0,
+                request.event,
+                u128::from_be_bytes(request.id.as_slice().try_into()?),
+            )
             .await?;
 
         // self.reorder_buffer
@@ -114,7 +118,15 @@ impl Replica for ReplicaConfig {
         let deps = from_dependency(request.dependencies)?;
         let (sx, rx) = tokio::sync::oneshot::channel();
         self.wait_handler
-            .send_msg(t_zero, t, deps, request.event, WaitAction::CommitBefore, sx, id)
+            .send_msg(
+                t_zero,
+                t,
+                deps,
+                request.event,
+                WaitAction::CommitBefore,
+                sx,
+                id,
+            )
             .await?;
         let _ = rx.await;
         Ok(CommitResponse {})
@@ -159,7 +171,10 @@ impl Replica for ReplicaConfig {
             event_store_lock.update_ballot(&t_zero, request_ballot);
 
             if matches!(event.state, State::Undefined) {
-                event.t = event_store_lock.pre_accept(t_zero, request.event, id).await?.1;
+                event.t = event_store_lock
+                    .pre_accept(t_zero, request.event, id)
+                    .await?
+                    .1;
             };
             let recover_deps = event_store_lock.get_recover_deps(&event.t, &t_zero).await?;
 
@@ -174,7 +189,9 @@ impl Replica for ReplicaConfig {
                 nack: Ballot::default().into(),
             })
         } else {
-            let (_, t) = event_store_lock.pre_accept(t_zero, request.event, id).await?;
+            let (_, t) = event_store_lock
+                .pre_accept(t_zero, request.event, id)
+                .await?;
             let recover_deps = event_store_lock.get_recover_deps(&t, &t_zero).await?;
             self.stats.total_recovers.fetch_add(1, Ordering::Relaxed);
 
@@ -200,9 +217,9 @@ mod tests {
     use crate::utils::{T, T0};
     use crate::wait_handler::WaitHandler;
     use bytes::{BufMut, BytesMut};
+    use diesel_ulid::DieselUlid;
     use monotime::MonoTime;
     use std::sync::Arc;
-    use diesel_ulid::DieselUlid;
     use synevi_network::consensus_transport::{CommitRequest, State};
     use synevi_network::network::NodeInfo;
     use synevi_network::replica::Replica;

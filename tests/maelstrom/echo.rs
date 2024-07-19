@@ -1,7 +1,7 @@
-use anyhow::Result;
-use messages::{ Body};
-use protocol::MessageHandler;
 use crate::messages::MessageType;
+use anyhow::Result;
+use messages::Body;
+use protocol::MessageHandler;
 
 mod maelstrom_config;
 mod messages;
@@ -16,8 +16,8 @@ pub fn main() -> Result<()> {
         match msg.body.msg_type {
             MessageType::Echo { ref echo, .. } => {
                 let reply = msg.reply(Body {
-                    msg_type: MessageType::EchoOk{
-                        echo: echo.to_string()
+                    msg_type: MessageType::EchoOk {
+                        echo: echo.to_string(),
                     },
                     ..Default::default()
                 });

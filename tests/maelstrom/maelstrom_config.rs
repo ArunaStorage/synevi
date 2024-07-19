@@ -1,13 +1,16 @@
-use crate::messages::MessageType::WriteOk;
-use crate::messages::{Body, Message, MessageType};
-use crate::protocol::MessageHandler;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
 use ahash::RandomState;
 use anyhow::{anyhow, Result};
 use diesel_ulid::DieselUlid;
+use tokio::sync::mpsc::Sender;
+use tokio::sync::Mutex;
+
 use monotime::MonoTime;
-use std::collections::HashMap;
-use std::sync::Arc;
 use synevi_consensus::replica::ReplicaConfig;
+use synevi_kv::error::KVError;
 use synevi_kv::kv_store::KVStore;
 use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
@@ -15,23 +18,30 @@ use synevi_network::consensus_transport::{
 };
 use synevi_network::network::BroadcastResponse;
 use synevi_network::replica::Replica;
-use tokio::sync::broadcast::{Receiver, Sender};
-use tokio::sync::Mutex;
 
+use crate::messages::{Body, Message, MessageType};
+use crate::messages::MessageType::WriteOk;
+use crate::network::GLOBAL_COUNTER;
+use crate::protocol::MessageHandler;
+
+type ResponseHandler = Arc<
+    Mutex<
+        HashMap<
+            MonoTime,
+            (
+                tokio::sync::broadcast::Sender<BroadcastResponse>,
+                tokio::sync::broadcast::Receiver<BroadcastResponse>,
+            ),
+            RandomState,
+        >,
+    >,
+>;
 #[derive(Debug)]
 pub struct MaelstromConfig {
     pub members: Vec<String>,
     pub node_id: String,
     pub message_handler: Arc<Mutex<MessageHandler>>,
-    pub broadcast_responses: Arc<
-        Mutex<
-            HashMap<
-                MonoTime,
-                (Sender<BroadcastResponse>, Receiver<BroadcastResponse>),
-                RandomState,
-            >,
-        >,
-    >, // in response to : broadcast responses
+    pub broadcast_responses: ResponseHandler, // in response to : broadcast responses
 }
 
 impl MaelstromConfig {
@@ -52,15 +62,19 @@ impl MaelstromConfig {
                 ref node_ids,
             } = msg.body.msg_type
             {
+                let mut node_ids = node_ids.clone();
+                node_ids.retain(|n| n != node_id);
                 let id: u32 = node_id.chars().last().unwrap().into();
 
                 let mut parsed_nodes = Vec::new();
-                for node in node_ids {
-                    let node_id: u32 = node_id.chars().last().unwrap().into();
+                for node in &node_ids {
+                    let node_id: u32 = node.chars().last().unwrap().into();
                     parsed_nodes.push((DieselUlid::generate(), node_id as u16, node.clone()));
                 }
                 let network =
                     Arc::new(MaelstromConfig::new(node_id.clone(), node_ids.clone()).await);
+
+                GLOBAL_COUNTER.fetch_add(1, Ordering::Relaxed);
 
                 let reply = msg.reply(Body {
                     msg_type: MessageType::InitOk,
@@ -81,10 +95,7 @@ impl MaelstromConfig {
                 )
             } else {
                 eprintln!("Unexpected message type: {:?}", msg.body.msg_type);
-                return Err(anyhow!(
-                    "Unexpected message type: {:?}",
-                    msg.body.msg_type
-                ));
+                return Err(anyhow!("Unexpected message type: {:?}", msg.body.msg_type));
             }
         } else {
             eprintln!("No init message received");
@@ -94,11 +105,14 @@ impl MaelstromConfig {
         Ok((kv_store.0, network, kv_store.1))
     }
 
-    pub(crate) async fn kv_dispatch(&self, kv_store: &mut KVStore, msg: Message) -> Result<()> {
+    pub(crate) async fn kv_dispatch(
+        &self,
+        kv_store: &mut KVStore,
+        msg: Message,
+        responder: Arc<Sender<Message>>,
+    ) -> Result<()> {
         match msg.body.msg_type {
-            MessageType::Read {
-                ref key,
-            } => {
+            MessageType::Read { ref key } => {
                 match kv_store.read(key.to_string()).await {
                     Ok(value) => {
                         let reply = msg.reply(Body {
@@ -107,7 +121,10 @@ impl MaelstromConfig {
                             },
                             ..Default::default()
                         });
-                        MessageHandler::send(reply)?;
+                        eprintln!("READ OK REACHED");
+                        if let Err(err) = responder.send(reply).await {
+                            eprintln!("Error sending reply: {err:?}");
+                        }
                     }
                     Err(err) => {
                         let reply = msg.reply(Body {
@@ -117,20 +134,65 @@ impl MaelstromConfig {
                             },
                             ..Default::default()
                         });
-                        MessageHandler::send(reply)?;
+                        eprintln!("READ ERR REACHED");
+                        if let Err(err) = responder.send(reply).await {
+                            eprintln!("Error sending reply: {err:?}");
+                        }
                     }
                 };
             }
-            MessageType::Write {
-                ref key,
-                ref value,
-            } => {
+            MessageType::Write { ref key, ref value } => {
                 kv_store.write(key.to_string(), value.to_string()).await?;
+                eprintln!("WRITE OK REACHED");
                 let reply = msg.reply(Body {
                     msg_type: WriteOk,
                     ..Default::default()
                 });
-                MessageHandler::send(reply)?;
+                if let Err(err) = responder.send(reply).await {
+                    eprintln!("Error sending reply: {err:?}");
+                }
+            }
+            MessageType::Cas {
+                ref key,
+                ref from,
+                ref to,
+            } => {
+                let reply = match kv_store
+                    .cas(key.to_string(), from.to_string(), to.to_string())
+                    .await
+                {
+                    Ok(_) => msg.reply(Body {
+                        msg_type: MessageType::CasOk,
+                        ..Default::default()
+                    }),
+
+                    Err(err) => match err {
+                        KVError::KeyNotFound => msg.reply(Body {
+                            msg_type: MessageType::Error {
+                                code: 20,
+                                text: format!("{err}"),
+                            },
+                            ..Default::default()
+                        }),
+                        KVError::MismatchError => msg.reply(Body {
+                            msg_type: MessageType::Error {
+                                code: 22,
+                                text: format!("{err}"),
+                            },
+                            ..Default::default()
+                        }),
+                        _ => {
+                            eprintln!("Error: {err}");
+                            msg.reply(Body {
+                                msg_type: MessageType::CasOk,
+                                ..Default::default()
+                            })
+                        }
+                    },
+                };
+                if let Err(err) = responder.send(reply).await {
+                    eprintln!("Error sending reply: {err:?}");
+                }
             }
             err => {
                 return Err(anyhow!("{err:?}"));
@@ -143,6 +205,7 @@ impl MaelstromConfig {
         &self,
         replica_config: Arc<ReplicaConfig>,
         msg: Message,
+        responder: Arc<Sender<Message>>,
     ) -> Result<()> {
         if msg.dest != self.node_id {
             eprintln!("Wrong msg");
@@ -176,10 +239,12 @@ impl MaelstromConfig {
                     },
                     ..Default::default()
                 });
-                MessageHandler::send(reply)?;
+                if let Err(err) = responder.send(reply).await {
+                    eprintln!("Error sending reply: {err:?}");
+                }
             }
             MessageType::Accept {
-                ref id ,
+                ref id,
                 ref ballot,
                 ref event,
                 ref t0,
@@ -205,7 +270,9 @@ impl MaelstromConfig {
                     },
                     ..Default::default()
                 });
-                MessageHandler::send(reply)?;
+                if let Err(err) = responder.send(reply).await {
+                    eprintln!("Error sending reply: {err:?}");
+                }
             }
             MessageType::Commit {
                 ref id,
@@ -225,12 +292,12 @@ impl MaelstromConfig {
                     .await?;
 
                 let reply = msg.reply(Body {
-                    msg_type: MessageType::CommitOk {
-                        t0: t0.clone(),
-                    },
+                    msg_type: MessageType::CommitOk { t0: t0.clone() },
                     ..Default::default()
                 });
-                MessageHandler::send(reply)?;
+                if let Err(err) = responder.send(reply).await {
+                    eprintln!("Error sending reply: {err:?}");
+                }
             }
             MessageType::Apply {
                 ref id,
@@ -250,12 +317,12 @@ impl MaelstromConfig {
                     .await?;
 
                 let reply = msg.reply(Body {
-                    msg_type: MessageType::ApplyOk {
-                        t0: t0.clone(),
-                    },
+                    msg_type: MessageType::ApplyOk { t0: t0.clone() },
                     ..Default::default()
                 });
-                MessageHandler::send(reply)?;
+                if let Err(err) = responder.send(reply).await {
+                    eprintln!("Error sending reply: {err:?}");
+                }
             }
             MessageType::Recover {
                 ref id,
@@ -284,7 +351,9 @@ impl MaelstromConfig {
                     },
                     ..Default::default()
                 });
-                MessageHandler::send(reply)?;
+                if let Err(err) = responder.send(reply).await {
+                    eprintln!("Error sending reply: {err:?}");
+                }
             }
             err => {
                 return Err(anyhow!("{err:?}"));
@@ -317,7 +386,7 @@ impl MaelstromConfig {
                             nack: *nack,
                         }))?;
                 } else {
-                    let channel = tokio::sync::broadcast::channel(self.members.len() * 5);
+                    let channel = tokio::sync::broadcast::channel(1);
                     lock.insert(key, channel);
                 }
                 drop(lock);
@@ -335,7 +404,7 @@ impl MaelstromConfig {
                         nack: *nack,
                     }))?;
                 } else {
-                    let channel = tokio::sync::broadcast::channel(self.members.len() * 5);
+                    let channel = tokio::sync::broadcast::channel(1);
                     lock.insert(key, channel);
                 }
                 drop(lock);
@@ -346,7 +415,7 @@ impl MaelstromConfig {
                 if let Some(entry) = lock.get(&key) {
                     entry.0.send(BroadcastResponse::Commit(CommitResponse {}))?;
                 } else {
-                    let channel = tokio::sync::broadcast::channel(self.members.len() * 5);
+                    let channel = tokio::sync::broadcast::channel(1);
                     lock.insert(key, channel);
                 }
                 drop(lock);
@@ -357,7 +426,7 @@ impl MaelstromConfig {
                 if let Some(entry) = lock.get(&key) {
                     entry.0.send(BroadcastResponse::Apply(ApplyResponse {}))?;
                 } else {
-                    let channel = tokio::sync::broadcast::channel(self.members.len() * 5);
+                    let channel = tokio::sync::broadcast::channel(1);
                     lock.insert(key, channel);
                 }
                 drop(lock);
@@ -383,7 +452,7 @@ impl MaelstromConfig {
                         nack: nack.clone(),
                     }))?;
                 } else {
-                    let channel = tokio::sync::broadcast::channel(self.members.len() * 5);
+                    let channel = tokio::sync::broadcast::channel(1);
                     lock.insert(key, channel);
                 }
                 drop(lock);

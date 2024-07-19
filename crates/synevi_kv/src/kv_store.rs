@@ -1,20 +1,22 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
-
+use std::time::Duration;
 use ahash::RandomState;
 use anyhow::Result;
 use diesel_ulid::DieselUlid;
-use tokio::sync::{Mutex, oneshot};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
-
+use tokio::sync::{oneshot, Mutex};
+use tokio::time::timeout;
 use synevi_consensus::node::Node;
 use synevi_consensus::replica::ReplicaConfig;
 use synevi_network::network::Network;
 
 use crate::error::KVError;
 
-type TransactionMap = Arc<Mutex<HashMap<DieselUlid, oneshot::Sender<Result<(String, String), KVError>>, RandomState>>>;
+type TransactionMap = Arc<
+    Mutex<HashMap<DieselUlid, oneshot::Sender<Result<(String, String), KVError>>, RandomState>>,
+>;
 type Channel = (Sender<(u128, Vec<u8>)>, Receiver<(u128, Vec<u8>)>);
 
 pub struct KVStore {
@@ -39,7 +41,6 @@ pub enum Transaction {
     },
 }
 
-
 impl KVStore {
     pub async fn init_maelstrom(
         id: DieselUlid,
@@ -55,14 +56,13 @@ impl KVStore {
         let store_clone = store.clone();
         let transaction_clone = transactions.clone();
         tokio::spawn(async move {
-            if let Err(err) = KVStore::execute(store_clone,transaction_clone,rcv).await {
+            if let Err(err) = KVStore::execute(store_clone, transaction_clone, rcv).await {
                 eprintln!("Execution loop: {err}");
             }
         });
 
         let mut node =
-            Node::new_with_parameters_and_replica(id, serial, network, path, sdx)
-                .await?;
+            Node::new_with_parameters_and_replica(id, serial, network, path, sdx).await?;
         for (ulid, id, host) in members {
             node.0.add_member(ulid, id, host).await?;
         }
@@ -90,7 +90,7 @@ impl KVStore {
         let store_clone = store.clone();
         let transaction_clone = transactions.clone();
         tokio::spawn(async move {
-            if let Err(err) = KVStore::execute(store_clone,transaction_clone, rcv).await {
+            if let Err(err) = KVStore::execute(store_clone, transaction_clone, rcv).await {
                 eprintln!("Execution error: {err}");
             }
         });
@@ -107,35 +107,44 @@ impl KVStore {
     }
 
     pub async fn read(&self, key: String) -> Result<String, KVError> {
+        eprintln!("STARTED READ with {key}");
         let id = DieselUlid::generate();
         let log = format!("READ: {id} - {key}");
-        eprintln!("{log}; {:?}", self.store);
-        let (sdx, rcv)  = oneshot::channel();
+        eprintln!("{log}");
+        let (sdx, rcv) = oneshot::channel();
         self.transactions.lock().await.insert(id, sdx);
         let payload = Transaction::Read { key: key.clone() };
-        self.node.transaction(u128::from_be_bytes(id.as_byte_array()), payload.into()).await?;
-        rcv.await?.map(|(_k,v)|v)
+        self.node
+            .transaction(u128::from_be_bytes(id.as_byte_array()), payload.into())
+            .await?;
+        let response = timeout(Duration::from_secs(5), rcv).await.unwrap()?.map(|(_k, v)| v);
+        eprintln!("GOT READ RESPONSE with key {key} and {response:?}");
+        response
     }
 
     pub async fn write(&mut self, key: String, value: String) -> Result<(), KVError> {
         let id = DieselUlid::generate();
         let log = format!("WRITE: {id} - {key}: {value}");
         eprintln!("{log}");
-        let (sdx, rcv)  = oneshot::channel();
+        let (sdx, rcv) = oneshot::channel();
         self.transactions.lock().await.insert(id, sdx);
         let payload = Transaction::Write { key, value };
-        self.node.transaction(u128::from_be_bytes(id.as_byte_array()), payload.into()).await?;
+        self.node
+            .transaction(u128::from_be_bytes(id.as_byte_array()), payload.into())
+            .await?;
         rcv.await??;
         Ok(())
     }
     pub async fn cas(&mut self, key: String, from: String, to: String) -> Result<(), KVError> {
         let id = DieselUlid::generate();
         let log = format!("CAS: {id} - {key}: from: {from} to: {to}");
-        let (sdx, rcv)  = oneshot::channel();
+        let (sdx, rcv) = oneshot::channel();
         self.transactions.lock().await.insert(id, sdx);
         eprintln!("{log}");
         let payload = Transaction::Cas { key, from, to };
-        self.node.transaction(u128::from_be_bytes(id.as_byte_array()), payload.into()).await?;
+        self.node
+            .transaction(u128::from_be_bytes(id.as_byte_array()), payload.into())
+            .await?;
         rcv.await??;
         Ok(())
     }
@@ -143,25 +152,29 @@ impl KVStore {
     async fn execute(
         store: Arc<Mutex<HashMap<String, String, RandomState>>>,
         transactions: TransactionMap,
-        mut rcv: Receiver<(u128, Vec<u8>)>) -> Result<()> {
+        mut rcv: Receiver<(u128, Vec<u8>)>,
+    ) -> Result<()> {
         loop {
-            while let Some((id , transaction)) = rcv.recv().await {
+            while let Some((id, transaction)) = rcv.recv().await {
                 let transaction: Transaction = transaction.try_into()?;
                 let id = DieselUlid::from(id.to_be_bytes());
                 match transaction {
                     Transaction::Read { key } => {
                         eprintln!("READ EXEC");
                         if let Some(sdx) = transactions.lock().await.remove(&id) {
-                            if let Some(value) = store
-                                .lock()
-                                .await
-                                .get(&key)
-                                .cloned() {
+                            eprintln!("READ LOCK ACQUIRED");
+                            let lock = store.lock().await;
+                            eprintln!("STORE LOCK ACQUIRED");
+                            if let Some(value) = lock.get(&key).cloned() {
                                 if let Err(err) = sdx.send(Ok((key.clone(), value.clone()))) {
                                     eprintln!("Receiver dropped: {err:?}");
+                                } else {
+                                    eprintln!("Sent message with id {id:?}");
                                 };
                             } else if let Err(err) = sdx.send(Err(KVError::KeyNotFound)) {
                                 eprintln!("Receiver dropped: {err:?}");
+                            } else {
+                                eprintln!("Sent message with id {id:?}");
                             };
                         }
                     }
@@ -200,7 +213,6 @@ impl KVStore {
                                 }
                             }
                         }
-
                     }
                 }
             }

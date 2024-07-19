@@ -11,4 +11,3 @@ pub enum KVError {
     #[error("Receive error")]
     RcvError(#[from] tokio::sync::oneshot::error::RecvError),
 }
-

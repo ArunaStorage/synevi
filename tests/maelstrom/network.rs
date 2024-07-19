@@ -1,10 +1,14 @@
+use std::io::BufRead;
 use crate::maelstrom_config::MaelstromConfig;
 use crate::messages::{Body, Message, MessageType};
 use crate::protocol::MessageHandler;
 use async_trait::async_trait;
 use diesel_ulid::DieselUlid;
+use lazy_static::lazy_static;
 use monotime::MonoTime;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
     PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse,
@@ -12,6 +16,11 @@ use synevi_network::consensus_transport::{
 use synevi_network::error::BroadCastError;
 use synevi_network::network::{BroadcastRequest, BroadcastResponse, Network, NetworkInterface};
 use synevi_network::replica::Replica;
+use tokio::sync::mpsc::{Receiver, Sender};
+
+lazy_static! {
+    pub(crate) static ref GLOBAL_COUNTER: Arc<AtomicU64> = Arc::new(AtomicU64::default());
+}
 
 #[async_trait]
 impl Network for MaelstromConfig {
@@ -29,51 +38,120 @@ impl Network for MaelstromConfig {
         let (mut kv_store, network, replica) = MaelstromConfig::init().await?;
         let handler_clone = self.message_handler.clone();
 
-        tokio::spawn(async move {
+        let (kv_send, mut kv_rcv) = tokio::sync::mpsc::channel(1);
+        let (replica_send, mut replica_rcv) = tokio::sync::mpsc::channel(1);
+        let (response_send, mut response_rcv) = tokio::sync::mpsc::channel(1);
+        let (responder_send, mut responder_rcv): (Sender<Message>, Receiver<Message>) =
+            tokio::sync::mpsc::channel(1);
+        let responder_send = Arc::new(responder_send);
+        let responder = tokio::spawn(async move {
+            while let Some(reply) = responder_rcv.recv().await {
+                if let Err(err) = MessageHandler::send(reply) {
+                    eprintln!("ERROR sending reply: {err}");
+                }
+            }
+        });
+        let stdin_receiver = tokio::spawn(async move {
+            //let mut stdin_lock = tokio::io::stdin().read_line();
             loop {
-                let msg = handler_clone.lock().await.next();
-                eprintln!("GOT: {msg:?}");
-                if let Some(msg) = msg {
-                    match msg.body.msg_type {
-                        MessageType::Read{..} | MessageType::Write { .. } => {
-                            if let Err(err) = network.kv_dispatch(&mut kv_store, msg.clone()).await
-                            {
-                                eprintln!("{err:?}");
-                                continue;
-                            };
-                        }
-                            MessageType::PreAccept{..}
-                            | MessageType::Commit {..}
-                            | MessageType::Accept {..}
-                            | MessageType::Apply  {..}
-                            | MessageType::Recover{..}
-                         => {
-                            if let Err(err) =
-                                network.replica_dispatch(replica.clone(), msg.clone()).await
-                            {
-                                eprintln!("{err:?}");
+                //let mut lock = handler_clone.lock().await;
+                let mut buffer = String::new();
+                while let Ok(x) = BufReader::new(tokio::io::stdin()).read_line(&mut buffer).await {
+                    if x != 0 {
+                        eprintln!("GOT: {}", buffer);
+                        let msg: Message = serde_json::from_str(&buffer).unwrap();
+                        GLOBAL_COUNTER.fetch_add(1, Ordering::Relaxed);
+                        match msg.body.msg_type {
+                            MessageType::Read { .. } | MessageType::Write { .. } | MessageType::Cas {..} => {
+                                if let Err(err) = kv_send.send(msg.clone()).await {
+                                    eprintln!("Send failed");
+                                    buffer.clear();
+                                    continue;
+                                };
+                                eprintln!("Next");
+                            }
+                            MessageType::PreAccept { .. }
+                            | MessageType::Commit { .. }
+                            | MessageType::Accept { .. }
+                            | MessageType::Apply { .. }
+                            | MessageType::Recover { .. } => {
+                                if let Err(err) = replica_send.send(msg.clone()).await {
+                                    eprintln!("Send failed");
+                                    buffer.clear();
+                                    continue;
+                                };
+                                eprintln!("Next");
+                            }
+                            MessageType::PreAcceptOk { .. }
+                            | MessageType::AcceptOk { .. }
+                            | MessageType::CommitOk { .. }
+                            | MessageType::ApplyOk { .. }
+                            | MessageType::RecoverOk { .. } => {
+                                if let Err(err) = response_send.send(msg.clone()).await {
+                                    eprintln!("{err:?}");
+                                    buffer.clear();
+                                    continue;
+                                };
+                                eprintln!("Next");
+                            }
+                            err => {
+                                eprintln!("Unexpected message type {:?}", err);
+                                buffer.clear();
                                 continue;
                             }
                         }
-                            MessageType::PreAcceptOk{..} 
-                            | MessageType::AcceptOk {..}
-                            | MessageType::CommitOk {..}
-                            | MessageType::ApplyOk  {..}
-                            | MessageType::RecoverOk{..}
-                        => {
-                            if let Err(err) = network.broadcast_collect(msg.clone()).await {
-                                eprintln!("{err:?}");
-                                continue;
-                            }
-                        }
-                        err => {
-                            eprintln!("Unexpected message type {:?}", err);
-                            continue;
-                        }
+                        buffer.clear();
                     }
                 }
             }
         });
+
+        let network_clone = network.clone();
+        let responder_clone = responder_send.clone();
+        let lin_kv_handler = tokio::spawn(async move {
+                while let Some(msg) = kv_rcv.recv().await {
+                    eprintln!("KV: {msg:?}");
+                    if let Err(err) = network_clone
+                        .kv_dispatch(&mut kv_store, msg.clone(), responder_clone.clone())
+                        .await
+                    {
+                        eprintln!("{err:?}");
+                    }
+                }
+        });
+        let network_clone = network.clone();
+        let replica_handler = tokio::spawn(async move {
+                while let Some(msg) = replica_rcv.recv().await {
+                    eprintln!("REPLICA: {msg:?}");
+                    if let Err(err) = network_clone
+                        .replica_dispatch(replica.clone(), msg.clone(), responder_send.clone())
+                        .await
+                    {
+                        eprintln!("{err:?}");
+                        continue;
+                    }
+                }
+        });
+        let response_handler = tokio::spawn(async move {
+                while let Some(msg) = response_rcv.recv().await {
+                    if let Err(err) = network.broadcast_collect(msg.clone()).await {
+                        eprintln!("{err:?}");
+                        continue;
+                    }
+                }
+        });
+        let (responder, stdin, kv, rep, resp) = tokio::join!(
+            responder,
+            stdin_receiver,
+            lin_kv_handler,
+            replica_handler,
+            response_handler
+        );
+        responder?;
+        stdin?;
+        kv?;
+        rep?;
+        resp?;
         Ok(())
     }
 
@@ -98,6 +176,7 @@ impl NetworkInterface for MaelstromConfig {
         &self,
         request: BroadcastRequest,
     ) -> anyhow::Result<Vec<BroadcastResponse>, BroadCastError> {
+        let counter = GLOBAL_COUNTER.load(Ordering::Relaxed);
         let mut await_majority = true;
         let mut broadcast_all = false;
         let mut rcv = match &request {
@@ -106,7 +185,7 @@ impl NetworkInterface for MaelstromConfig {
                 let mut lock = self.broadcast_responses.lock().await;
                 let entry = lock
                     .entry(t0)
-                    .or_insert(tokio::sync::broadcast::channel(self.members.len() * 5));
+                    .or_insert(tokio::sync::broadcast::channel(1));
                 let rcv = entry.0.subscribe();
                 drop(lock);
                 for replica in &self.members {
@@ -114,7 +193,7 @@ impl NetworkInterface for MaelstromConfig {
                         src: self.node_id.clone(),
                         dest: replica.clone(),
                         body: Body {
-                            msg_id: None,
+                            msg_id: Some(counter),
                             in_reply_to: None,
                             msg_type: MessageType::PreAccept {
                                 id: req.id.clone(),
@@ -135,7 +214,7 @@ impl NetworkInterface for MaelstromConfig {
                 let mut lock = self.broadcast_responses.lock().await;
                 let entry = lock
                     .entry(t0)
-                    .or_insert(tokio::sync::broadcast::channel(self.members.len() * 5));
+                    .or_insert(tokio::sync::broadcast::channel(1));
                 let rcv = entry.0.subscribe();
                 drop(lock);
                 for replica in &self.members {
@@ -143,8 +222,7 @@ impl NetworkInterface for MaelstromConfig {
                         src: self.node_id.clone(),
                         dest: replica.clone(),
                         body: Body {
-                            
-                            msg_id: None,
+                            msg_id: Some(counter),
                             in_reply_to: None,
                             msg_type: MessageType::Accept {
                                 id: req.id.clone(),
@@ -168,7 +246,7 @@ impl NetworkInterface for MaelstromConfig {
                 let mut lock = self.broadcast_responses.lock().await;
                 let entry = lock
                     .entry(t0)
-                    .or_insert(tokio::sync::broadcast::channel(self.members.len() * 5));
+                    .or_insert(tokio::sync::broadcast::channel(1));
                 let rcv = entry.0.subscribe();
                 drop(lock);
                 for replica in &self.members {
@@ -200,7 +278,7 @@ impl NetworkInterface for MaelstromConfig {
                 let mut lock = self.broadcast_responses.lock().await;
                 let entry = lock
                     .entry(t0)
-                    .or_insert(tokio::sync::broadcast::channel(self.members.len() * 5));
+                    .or_insert(tokio::sync::broadcast::channel(1));
                 let rcv = entry.0.subscribe();
                 drop(lock);
                 await_majority = false;
@@ -235,7 +313,7 @@ impl NetworkInterface for MaelstromConfig {
                 let mut lock = self.broadcast_responses.lock().await;
                 let entry = lock
                     .entry(t0)
-                    .or_insert(tokio::sync::broadcast::channel(self.members.len() * 5));
+                    .or_insert(tokio::sync::broadcast::channel(1));
                 let rcv = entry.0.subscribe();
                 drop(lock);
                 for replica in &self.members {
@@ -246,7 +324,7 @@ impl NetworkInterface for MaelstromConfig {
                             msg_id: None,
                             in_reply_to: None,
 
-                            msg_type: MessageType::Recover { 
+                            msg_type: MessageType::Recover {
                                 id: req.id.clone(),
                                 ballot: req.ballot.clone(),
                                 event: req.event.clone(),
@@ -300,33 +378,37 @@ impl NetworkInterface for MaelstromConfig {
         } else {
             // TODO: Differentiate between push and forget and wait for all response
             // -> Apply vs Recover
-            while let Ok(message) = rcv.recv().await {
-                match (&request, message) {
-                    (
-                        &BroadcastRequest::PreAccept(..),
-                        response @ BroadcastResponse::PreAccept(_),
-                    ) => {
-                        result.push(response);
-                    }
-                    (&BroadcastRequest::Accept(_), response @ BroadcastResponse::Accept(_)) => {
-                        result.push(response);
-                    }
-                    (&BroadcastRequest::Commit(_), response @ BroadcastResponse::Commit(_)) => {
-                        result.push(response);
-                    }
-                    (&BroadcastRequest::Apply(_), response @ BroadcastResponse::Apply(_)) => {
-                        result.push(response);
-                    }
-                    (&BroadcastRequest::Recover(_), response @ BroadcastResponse::Recover(_)) => {
-                        result.push(response);
-                    }
-                    _ => continue,
-                };
-            }
+           while let Ok(message) = rcv.recv().await {
+               counter += 1;
+               match (&request, message) {
+                   (
+                       &BroadcastRequest::PreAccept(..),
+                       response @ BroadcastResponse::PreAccept(_),
+                   ) => {
+                       result.push(response);
+                   }
+                   (&BroadcastRequest::Accept(_), response @ BroadcastResponse::Accept(_)) => {
+                       result.push(response);
+                   }
+                   (&BroadcastRequest::Commit(_), response @ BroadcastResponse::Commit(_)) => {
+                       result.push(response);
+                   }
+                   (&BroadcastRequest::Apply(_), response @ BroadcastResponse::Apply(_)) => {
+                       result.push(response);
+                   }
+                   (&BroadcastRequest::Recover(_), response @ BroadcastResponse::Recover(_)) => {
+                       result.push(response);
+                   }
+                   _ => continue,
+               };
+               if counter >= self.members.len() {
+                   break;
+               }
+           }
         }
 
         if result.len() < majority {
-            println!("Majority not reached: {:?}", result);
+            eprintln!("Majority not reached: {:?}", result);
             return Err(BroadCastError::MajorityNotReached);
         }
         Ok(result)

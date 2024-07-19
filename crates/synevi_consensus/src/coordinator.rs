@@ -608,6 +608,7 @@ impl Coordinator<Accepted> {
 impl Coordinator<Committed> {
     #[instrument(level = "trace", skip(self))]
     pub async fn apply(mut self) -> Result<Coordinator<Applied>> {
+        eprintln!("START APPLY {}", self.transaction.id);
         self.execute_consensus().await?;
 
         let applied_request = ApplyRequest {
@@ -622,6 +623,7 @@ impl Coordinator<Committed> {
         self.network_interface
             .broadcast(BroadcastRequest::Apply(applied_request))
             .await?; // This should not be awaited
+        eprintln!("APPLIED {}", self.transaction.id);
 
         Ok(Coordinator::<Applied> {
             node: self.node,
@@ -650,7 +652,9 @@ impl Coordinator<Committed> {
                 self.transaction.id,
             )
             .await?;
-
+        
+        eprintln!("EXECUTED {}", self.transaction.id);
+        
         Ok(())
     }
 }
@@ -670,11 +674,11 @@ mod tests {
     use diesel_ulid::DieselUlid;
     use monotime::MonoTime;
     use std::{collections::HashSet, sync::Arc, vec};
-    use tokio::sync::mpsc::channel;
     use synevi_network::{
         consensus_transport::{PreAcceptResponse, State},
         network::NodeInfo,
     };
+    use tokio::sync::mpsc::channel;
     use tokio::sync::Mutex;
 
     #[tokio::test]
@@ -693,7 +697,7 @@ mod tests {
             Vec::from("test"),
             Arc::new(Default::default()),
             WaitHandler::new(event_store, network, Default::default(), Default::default()),
-            0
+            0,
         )
         .await;
         assert_eq!(coordinator.transaction.state, State::PreAccepted);
@@ -708,7 +712,7 @@ mod tests {
     async fn pre_accepted_fast_path_test() {
         let (sdx, _) = channel(100);
         let event_store = Arc::new(Mutex::new(EventStore::init(None, 1, sdx).unwrap()));
-        
+
         let id = u128::from_be_bytes(DieselUlid::generate().as_byte_array());
 
         let state_machine = TransactionStateMachine {
@@ -857,7 +861,7 @@ mod tests {
     async fn pre_accepted_slow_path_test() {
         let (sdx, _rcv) = channel(100);
         let event_store = Arc::new(Mutex::new(EventStore::init(None, 1, sdx).unwrap()));
-        
+
         let id = u128::from_be_bytes(DieselUlid::generate().as_byte_array());
 
         let state_machine = TransactionStateMachine {

@@ -1,5 +1,7 @@
 use crate::messages::Message;
+use crate::network::GLOBAL_COUNTER;
 use std::io::{self, Write};
+use std::sync::atomic::Ordering;
 
 #[derive(Debug)]
 pub struct MessageHandler;
@@ -20,11 +22,11 @@ impl Iterator for MessageHandler {
 }
 
 impl MessageHandler {
-    pub fn send(message: Message) -> Result<(), io::Error> {
+    pub fn send(mut message: Message) -> Result<(), io::Error> {
+        //message.id = GLOBAL_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut serialized = serde_json::to_string(&message)?;
         serialized.push('\n');
         io::stdout().write_all(serialized.as_bytes())?;
-        eprintln!("Replied message: {:?}", message);
         io::stdout().flush()
     }
 }
