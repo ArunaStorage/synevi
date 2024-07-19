@@ -38,11 +38,11 @@ impl Network for MaelstromConfig {
         let (mut kv_store, network, replica) = MaelstromConfig::init().await?;
         let handler_clone = self.message_handler.clone();
 
-        let (kv_send, mut kv_rcv) = tokio::sync::mpsc::channel(1);
-        let (replica_send, mut replica_rcv) = tokio::sync::mpsc::channel(1);
-        let (response_send, mut response_rcv) = tokio::sync::mpsc::channel(1);
+        let (kv_send, mut kv_rcv) = tokio::sync::mpsc::channel(100);
+        let (replica_send, mut replica_rcv) = tokio::sync::mpsc::channel(100);
+        let (response_send, mut response_rcv) = tokio::sync::mpsc::channel(100);
         let (responder_send, mut responder_rcv): (Sender<Message>, Receiver<Message>) =
-            tokio::sync::mpsc::channel(1);
+            tokio::sync::mpsc::channel(100);
         let responder_send = Arc::new(responder_send);
         let responder = tokio::spawn(async move {
             while let Some(reply) = responder_rcv.recv().await {
@@ -180,12 +180,12 @@ impl NetworkInterface for MaelstromConfig {
         let mut await_majority = true;
         let mut broadcast_all = false;
         let mut rcv = match &request {
-            BroadcastRequest::PreAccept(req, serial) => {
+            BroadcastRequest::PreAccept(req, _serial) => {
                 let t0 = MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap();
                 let mut lock = self.broadcast_responses.lock().await;
                 let entry = lock
                     .entry(t0)
-                    .or_insert(tokio::sync::broadcast::channel(1));
+                    .or_insert(tokio::sync::broadcast::channel(100));
                 let rcv = entry.0.subscribe();
                 drop(lock);
                 for replica in &self.members {
@@ -214,7 +214,7 @@ impl NetworkInterface for MaelstromConfig {
                 let mut lock = self.broadcast_responses.lock().await;
                 let entry = lock
                     .entry(t0)
-                    .or_insert(tokio::sync::broadcast::channel(1));
+                    .or_insert(tokio::sync::broadcast::channel(100));
                 let rcv = entry.0.subscribe();
                 drop(lock);
                 for replica in &self.members {
@@ -246,7 +246,7 @@ impl NetworkInterface for MaelstromConfig {
                 let mut lock = self.broadcast_responses.lock().await;
                 let entry = lock
                     .entry(t0)
-                    .or_insert(tokio::sync::broadcast::channel(1));
+                    .or_insert(tokio::sync::broadcast::channel(100));
                 let rcv = entry.0.subscribe();
                 drop(lock);
                 for replica in &self.members {
@@ -278,7 +278,7 @@ impl NetworkInterface for MaelstromConfig {
                 let mut lock = self.broadcast_responses.lock().await;
                 let entry = lock
                     .entry(t0)
-                    .or_insert(tokio::sync::broadcast::channel(1));
+                    .or_insert(tokio::sync::broadcast::channel(100));
                 let rcv = entry.0.subscribe();
                 drop(lock);
                 await_majority = false;
@@ -313,7 +313,7 @@ impl NetworkInterface for MaelstromConfig {
                 let mut lock = self.broadcast_responses.lock().await;
                 let entry = lock
                     .entry(t0)
-                    .or_insert(tokio::sync::broadcast::channel(1));
+                    .or_insert(tokio::sync::broadcast::channel(100));
                 let rcv = entry.0.subscribe();
                 drop(lock);
                 for replica in &self.members {
@@ -379,7 +379,6 @@ impl NetworkInterface for MaelstromConfig {
             // TODO: Differentiate between push and forget and wait for all response
             // -> Apply vs Recover
            while let Ok(message) = rcv.recv().await {
-               counter += 1;
                match (&request, message) {
                    (
                        &BroadcastRequest::PreAccept(..),
@@ -401,6 +400,7 @@ impl NetworkInterface for MaelstromConfig {
                    }
                    _ => continue,
                };
+               counter += 1;
                if counter >= self.members.len() {
                    break;
                }
