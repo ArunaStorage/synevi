@@ -29,7 +29,7 @@ pub async fn maelstrom_only_setup() -> Result<()> {
 }
 
 pub async fn maelstrom_kv_setup() -> Result<()> {
-    let mut handler = MessageHandler;
+    let mut handler = MessageHandler::new();
 
     if let Some(msg) = handler.next() {
         if let MessageType::Init {
@@ -57,7 +57,7 @@ pub async fn maelstrom_kv_setup() -> Result<()> {
                 msg_type: MessageType::InitOk,
                 ..Default::default()
             });
-            MessageHandler::send(reply)?;
+            handler.send(&reply)?;
             let mut kv_store = KVStore::init(
                 DieselUlid::generate(),
                 id as u16,
@@ -80,7 +80,7 @@ pub async fn maelstrom_kv_setup() -> Result<()> {
                                     },
                                     ..Default::default()
                                 });
-                                MessageHandler::send(reply)?;
+                                handler.send(&reply)?;
                             }
                             Err(err) => {
                                 let reply = msg.reply(Body {
@@ -90,7 +90,7 @@ pub async fn maelstrom_kv_setup() -> Result<()> {
                                     },
                                     ..Default::default()
                                 });
-                                MessageHandler::send(reply)?;
+                                handler.send(&reply)?;
                             }
                         };
                     }
@@ -109,7 +109,7 @@ pub async fn maelstrom_kv_setup() -> Result<()> {
                             }
                         };
 
-                        MessageHandler::send(reply)?;
+                        handler.send(&reply)?;
                     }
                     MessageType::Cas {
                         ref key,
@@ -149,7 +149,7 @@ pub async fn maelstrom_kv_setup() -> Result<()> {
                                 }
                             },
                         };
-                        MessageHandler::send(reply)?;
+                        handler.send(&reply)?;
                     }
                     msg => eprintln!("Unexpected msg type {msg:?}"),
                 }

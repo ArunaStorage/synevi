@@ -173,7 +173,7 @@ pub struct TransactionStateMachine {
 }
 
 impl<X> Coordinator<X> {
-    #[instrument(level = "trace")]
+    #[instrument(level = "trace", skip(network_interface, wait_handler))]
     pub async fn new(
         node: Arc<NodeInfo>,
         event_store: Arc<Mutex<EventStore>>,
@@ -202,7 +202,7 @@ impl<X> Coordinator<X> {
 }
 
 impl Coordinator<Recover> {
-    #[instrument(level = "trace")]
+    #[instrument(level = "trace", skip(network_interface, wait_handler))]
     pub async fn recover(
         node: Arc<NodeInfo>,
         event_store: Arc<Mutex<EventStore>>,
@@ -250,7 +250,7 @@ impl Coordinator<Recover> {
         .await
     }
 
-    #[instrument(level = "trace")]
+    #[instrument(level = "trace", skip(network_interface, wait_handler))]
     async fn recover_consensus(
         node: Arc<NodeInfo>,
         event_store: Arc<Mutex<EventStore>>,
@@ -652,9 +652,9 @@ impl Coordinator<Committed> {
                 self.transaction.id,
             )
             .await?;
-        
+
         eprintln!("EXECUTED {}", self.transaction.id);
-        
+
         Ok(())
     }
 }

@@ -10,7 +10,7 @@ use std::{sync::Arc, time};
 use tonic::{Request, Response, Status};
 
 #[async_trait::async_trait]
-pub trait Replica: std::fmt::Debug + Send + Sync {
+pub trait Replica: Send + Sync {
     async fn pre_accept(
         &self,
         request: PreAcceptRequest,
@@ -26,7 +26,7 @@ pub trait Replica: std::fmt::Debug + Send + Sync {
     async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ReplicaBox {
     inner: Arc<dyn Replica>,
 }

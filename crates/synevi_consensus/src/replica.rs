@@ -12,7 +12,6 @@ use synevi_network::replica::Replica;
 use tokio::sync::Mutex;
 use tracing::instrument;
 
-#[derive(Debug)]
 pub struct ReplicaConfig {
     pub _node_info: Arc<NodeInfo>, // For tracing
     pub event_store: Arc<Mutex<EventStore>>,

@@ -1,16 +1,16 @@
+use ahash::RandomState;
+use anyhow::Result;
+use diesel_ulid::DieselUlid;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
-use ahash::RandomState;
-use anyhow::Result;
-use diesel_ulid::DieselUlid;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::sync::{oneshot, Mutex};
-use tokio::time::timeout;
 use synevi_consensus::node::Node;
 use synevi_consensus::replica::ReplicaConfig;
 use synevi_network::network::Network;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::{oneshot, Mutex};
+use tokio::time::timeout;
 
 use crate::error::KVError;
 
@@ -42,40 +42,6 @@ pub enum Transaction {
 }
 
 impl KVStore {
-    pub async fn init_maelstrom(
-        id: DieselUlid,
-        serial: u16,
-        network: Arc<dyn Network + Send + Sync>,
-        members: Vec<(DieselUlid, u16, String)>,
-        path: Option<String>,
-    ) -> Result<(Self, Arc<ReplicaConfig>), KVError> {
-        let store = Arc::new(Mutex::new(HashMap::default()));
-        let transactions = Arc::new(Mutex::new(HashMap::default()));
-        let (sdx, rcv): Channel = channel(100);
-
-        let store_clone = store.clone();
-        let transaction_clone = transactions.clone();
-        tokio::spawn(async move {
-            if let Err(err) = KVStore::execute(store_clone, transaction_clone, rcv).await {
-                eprintln!("Execution loop: {err}");
-            }
-        });
-
-        let mut node =
-            Node::new_with_parameters_and_replica(id, serial, network, path, sdx).await?;
-        for (ulid, id, host) in members {
-            node.0.add_member(ulid, id, host).await?;
-        }
-        Ok((
-            KVStore {
-                store,
-                transactions,
-                node: node.0,
-            },
-            node.1,
-        ))
-    }
-
     pub async fn init(
         id: DieselUlid,
         serial: u16,
@@ -117,7 +83,10 @@ impl KVStore {
         self.node
             .transaction(u128::from_be_bytes(id.as_byte_array()), payload.into())
             .await?;
-        let response = timeout(Duration::from_secs(5), rcv).await.unwrap()?.map(|(_k, v)| v);
+        let response = timeout(Duration::from_secs(5), rcv)
+            .await
+            .unwrap()?
+            .map(|(_k, v)| v);
         eprintln!("GOT READ RESPONSE with key {key} and {response:?}");
         response
     }

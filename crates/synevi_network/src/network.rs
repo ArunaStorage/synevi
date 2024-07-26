@@ -21,7 +21,7 @@ use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
 use tonic::transport::{Channel, Server};
 
 #[async_trait::async_trait]
-pub trait NetworkInterface: std::fmt::Debug + Send + Sync {
+pub trait NetworkInterface: Send + Sync {
     async fn broadcast(
         &self,
         request: BroadcastRequest,
@@ -29,7 +29,7 @@ pub trait NetworkInterface: std::fmt::Debug + Send + Sync {
 }
 
 #[async_trait::async_trait]
-pub trait Network: std::fmt::Debug {
+pub trait Network {
     async fn add_members(&self, members: Vec<(DieselUlid, u16, String)>);
     async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<()>;
     async fn spawn_server(&self, server: Arc<dyn Replica>) -> Result<()>;

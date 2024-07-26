@@ -39,7 +39,7 @@ pub struct WaitMessage {
     notify: Option<oneshot::Sender<()>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct WaitHandler {
     sender: Sender<WaitMessage>,
     receiver: Receiver<WaitMessage>,

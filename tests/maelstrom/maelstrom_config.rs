@@ -1,13 +1,17 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use ahash::RandomState;
 use anyhow::{anyhow, Result};
 use diesel_ulid::DieselUlid;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 
+use crate::messages::MessageType::WriteOk;
+use crate::messages::{Body, Message, MessageType};
+use crate::network::GLOBAL_COUNTER;
+use crate::protocol::MessageHandler;
 use monotime::MonoTime;
 use synevi_consensus::replica::ReplicaConfig;
 use synevi_kv::error::KVError;
@@ -19,42 +23,29 @@ use synevi_network::consensus_transport::{
 use synevi_network::network::BroadcastResponse;
 use synevi_network::replica::Replica;
 
-use crate::messages::{Body, Message, MessageType};
-use crate::messages::MessageType::WriteOk;
-use crate::network::GLOBAL_COUNTER;
-use crate::protocol::MessageHandler;
-
-type ResponseHandler = Arc<
-    Mutex<
-        HashMap<
-            MonoTime,
-            (
-                tokio::sync::broadcast::Sender<BroadcastResponse>,
-                tokio::sync::broadcast::Receiver<BroadcastResponse>,
-            ),
-            RandomState,
-        >,
-    >,
->;
-#[derive(Debug)]
 pub struct MaelstromConfig {
     pub members: Vec<String>,
     pub node_id: String,
-    pub message_handler: Arc<Mutex<MessageHandler>>,
-    pub broadcast_responses: ResponseHandler, // in response to : broadcast responses
+    pub message_sender: Sender<Message>,
+    pub message_receiver: Receiver<Message>,
+    pub broadcast_responses: HashMap<u128, Sender<BroadcastResponse>>,
 }
 
 impl MaelstromConfig {
     pub async fn new(node_id: String, members: Vec<String>) -> Self {
+
+        let (message_sender, message_receiver) = MessageHandler::new();
+
+
         MaelstromConfig {
             members,
             node_id,
-            message_handler: Arc::new(Mutex::new(MessageHandler)),
+            message_sender: MessageHandler::new(),
             broadcast_responses: Arc::new(Mutex::new(HashMap::default())),
         }
     }
     pub async fn init() -> Result<(KVStore, Arc<Self>, Arc<ReplicaConfig>)> {
-        let mut handler = MessageHandler;
+        let mut handler = MessageHandler::new();
 
         let (kv_store, network) = if let Some(msg) = handler.next() {
             if let MessageType::Init {
@@ -80,9 +71,9 @@ impl MaelstromConfig {
                     msg_type: MessageType::InitOk,
                     ..Default::default()
                 });
-                MessageHandler::send(reply)?;
+                handler.send(&reply)?;
                 (
-                    KVStore::init_maelstrom(
+                    KVStore::init(
                         DieselUlid::generate(),
                         id as u16,
                         network.clone(),
@@ -112,27 +103,21 @@ impl MaelstromConfig {
         responder: Arc<Sender<Message>>,
     ) -> Result<()> {
         let reply = match msg.body.msg_type {
-            MessageType::Read { ref key } => {
-                match kv_store.read(key.to_string()).await {
-                    Ok(value) => {
-                        msg.reply(Body {
-                            msg_type: MessageType::ReadOk {
-                                value: value.parse()?,
-                            },
-                            ..Default::default()
-                        })
-                    }
-                    Err(err) => {
-                        msg.reply(Body {
-                            msg_type: MessageType::Error {
-                                code: 20,
-                                text: format!("{err}"),
-                            },
-                            ..Default::default()
-                        })
-                    }
-                }
-            }
+            MessageType::Read { ref key } => match kv_store.read(key.to_string()).await {
+                Ok(value) => msg.reply(Body {
+                    msg_type: MessageType::ReadOk {
+                        value: value.parse()?,
+                    },
+                    ..Default::default()
+                }),
+                Err(err) => msg.reply(Body {
+                    msg_type: MessageType::Error {
+                        code: 20,
+                        text: format!("{err}"),
+                    },
+                    ..Default::default()
+                }),
+            },
             MessageType::Write { ref key, ref value } => {
                 kv_store.write(key.to_string(), value.to_string()).await?;
                 eprintln!("WRITE OK REACHED");
@@ -179,7 +164,6 @@ impl MaelstromConfig {
                         }
                     },
                 }
-                
             }
             err => {
                 return Err(anyhow!("{err:?}"));
