@@ -7,7 +7,7 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-synevi_consensus = { path = "../crates/synevi_consensus" }
+synevi_consensus = { path = "../crates/synevi_core" }
 synevi_network = { path = "../crates/synevi_network" }
 synevi_kv = { path = "../crates/synevi_kv" }
 monotime = { path = "../crates/monotime" }

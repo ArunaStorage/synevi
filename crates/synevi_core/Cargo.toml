@@ -1,5 +1,5 @@
 [package]
-name = "synevi_consensus"
+name = "synevi_core"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -8,10 +8,10 @@ license.workspace = true
 
 [dependencies]
 synevi_network = { path = "../synevi_network" }
-synevi_persistence = {path = "../synevi_persistence"}
+synevi_persistence = { path = "../synevi_persistence" }
 monotime = { path = "../monotime" }
 anyhow = { workspace = true }
-bytes = { workspace = true}
+bytes = { workspace = true }
 chrono = "0.4.38"
 diesel-ulid = { workspace = true }
 futures = "0.3.30"
@@ -25,7 +25,7 @@ rand = "0.8.5"
 async-trait = { workspace = true }
 thiserror = "1.0.61"
 async-channel = "2.3.1"
-ahash = {workspace = true}
+ahash = { workspace = true }
 sha3 = "0.10.8"
 
 [dev-dependencies]
