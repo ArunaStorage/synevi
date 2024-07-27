@@ -1,18 +1,16 @@
-use std::fmt::Debug;
-use std::sync::{atomic::AtomicU64, Arc};
-
-use anyhow::Result;
-use diesel_ulid::DieselUlid;
-use tokio::sync::mpsc::Sender;
-use tokio::sync::Mutex;
-use tracing::instrument;
-
-use synevi_network::network::{Network, NodeInfo};
-
 use crate::event_store::EventStore;
 use crate::reorder_buffer::ReorderBuffer;
 use crate::replica::ReplicaConfig;
+use crate::utils::{Executor, Transaction};
 use crate::{coordinator::CoordinatorIterator, wait_handler::WaitHandler};
+use anyhow::Result;
+use diesel_ulid::DieselUlid;
+use std::fmt::Debug;
+use std::sync::{atomic::AtomicU64, Arc};
+use synevi_network::network::{Network, NodeInfo};
+use tokio::sync::mpsc::Sender;
+use tokio::sync::{oneshot, Mutex};
+use tracing::instrument;
 
 #[derive(Debug, Default)]
 pub struct Stats {
@@ -21,39 +19,48 @@ pub struct Stats {
     pub total_recovers: AtomicU64,
 }
 
-pub struct Node {
-    info: Arc<NodeInfo>,
-    network: Arc<dyn Network + Send + Sync>,
-    event_store: Arc<Mutex<EventStore>>,
-    wait_handler: Arc<WaitHandler>,
-    stats: Arc<Stats>,
-    semaphore: Arc<tokio::sync::Semaphore>,
+pub struct Node<N, E>
+where
+    N: Network + Send + Sync,
+    E: Executor + Send + Sync,
+{
+    info: NodeInfo,
+    network: N,
+    executor: E,
+    event_store: Mutex<EventStore>,
+    wait_handler: WaitHandler<N, E>,
+    stats: Stats,
+    semaphore: tokio::sync::Semaphore,
 }
 
-impl Node {
+impl<N, E> Node<N, E>
+where
+    N: Network + Send + Sync,
+    E: Executor + Send + Sync,
+{
     #[instrument(level = "trace", skip(network))]
     pub async fn new_with_parameters(
         id: DieselUlid,
         serial: u16,
-        network: Arc<dyn Network + Send + Sync>,
+        network: N,
         db_path: Option<String>,
-        sender: Sender<(u128, Vec<u8>)>,
+        sender: Sender<(u128, Vec<u8>, oneshot::Sender<Option<Vec<u8>>>)>,
     ) -> Result<Self> {
-        let node_name = Arc::new(NodeInfo { id, serial });
-        let event_store = Arc::new(Mutex::new(EventStore::init(db_path, serial, sender)?));
+        let node_name = NodeInfo { id, serial };
+        let event_store = Mutex::new(EventStore::init(db_path, serial, sender)?);
 
-        let stats = Arc::new(Stats {
+        let stats = Stats {
             total_requests: AtomicU64::new(0),
             total_accepts: AtomicU64::new(0),
             total_recovers: AtomicU64::new(0),
-        });
+        };
 
-        let reorder_buffer = ReorderBuffer::new(event_store.clone());
+        //let reorder_buffer = ReorderBuffer::new(event_store.clone());
 
-        let reorder_clone = reorder_buffer.clone();
-        tokio::spawn(async move {
-            reorder_clone.run().await.unwrap();
-        });
+        // let reorder_clone = reorder_buffer.clone();
+        // tokio::spawn(async move {
+        //     reorder_clone.run().await.unwrap();
+        // });
 
         let wait_handler = WaitHandler::new(
             event_store.clone(),
@@ -92,8 +99,12 @@ impl Node {
         self.network.add_member(id, serial, host).await
     }
 
-    #[instrument(level = "trace", skip(self))]
-    pub async fn transaction(&self, id: u128, transaction: Vec<u8>) -> Result<()> {
+    #[instrument(level = "trace", skip(self, transaction))]
+    pub async fn transaction<T: Transaction>(
+        &self,
+        id: u128,
+        transaction: T,
+    ) -> Result<T::ExecutionResult> {
         let _permit = self.semaphore.clone().acquire_owned().await?;
         let interface = self.network.get_interface().await;
         let mut coordinator_iter = CoordinatorIterator::new(
@@ -108,8 +119,7 @@ impl Node {
         .await;
 
         while coordinator_iter.next().await?.is_some() {}
-        eprintln!("Finished coordinator");
-        Ok(())
+        Ok(coordinator_iter.get_result())
     }
 
     #[instrument(level = "trace", skip(self))]

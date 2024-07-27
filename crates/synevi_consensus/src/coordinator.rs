@@ -1,7 +1,7 @@
 use crate::error::ConsensusError;
 use crate::event_store::EventStore;
 use crate::node::Stats;
-use crate::utils::{from_dependency, into_dependency, Ballot, T, T0};
+use crate::utils::{from_dependency, into_dependency, Ballot, Transaction, T, T0};
 use crate::wait_handler::{WaitAction, WaitHandler};
 use ahash::RandomState;
 use anyhow::Result;
@@ -21,28 +21,31 @@ use tracing::instrument;
 
 /// An iterator that goes through the different states of the coordinator
 
-pub enum CoordinatorIterator {
-    Initialized(Option<Coordinator<Initialized>>),
-    PreAccepted(Option<Coordinator<PreAccepted>>),
-    Accepted(Option<Coordinator<Accepted>>),
-    Committed(Option<Coordinator<Committed>>),
+pub enum CoordinatorIterator<Tx: Transaction> {
+    Initialized(Option<Coordinator<Initialized, Tx>>),
+    PreAccepted(Option<Coordinator<PreAccepted, Tx>>),
+    Accepted(Option<Coordinator<Accepted, Tx>>),
+    Committed(Option<Coordinator<Committed, Tx>>),
     Applied,
     Recovering,
     RestartRecovery,
 }
 
-impl CoordinatorIterator {
+impl<Tx> CoordinatorIterator<Tx>
+where
+    Tx: Transaction,
+{
     pub async fn new(
         node: Arc<NodeInfo>,
         event_store: Arc<Mutex<EventStore>>,
         network_interface: Arc<dyn NetworkInterface>,
-        transaction: Vec<u8>,
+        transaction: Tx,
         stats: Arc<Stats>,
         wait_handler: Arc<WaitHandler>,
         id: u128,
     ) -> Self {
         CoordinatorIterator::Initialized(Some(
-            Coordinator::<Initialized>::new(
+            Coordinator::<Initialized, Tx>::new(
                 node,
                 event_store,
                 network_interface,
@@ -117,7 +120,7 @@ impl CoordinatorIterator {
     pub async fn recover(t0_recover: T0, wait_handler: Arc<WaitHandler>) -> Result<()> {
         let mut backoff_counter: u8 = 0;
         while backoff_counter <= MAX_RETRIES {
-            let mut coordinator_iter = Coordinator::<Recover>::recover(
+            let mut coordinator_iter = Coordinator::<Recover, Tx>::recover(
                 wait_handler.node_info.clone(),
                 wait_handler.event_store.clone(),
                 wait_handler.network.get_interface().await,
@@ -151,45 +154,49 @@ pub struct Committed;
 pub struct Applied;
 pub struct Recover;
 
-pub struct Coordinator<X> {
+pub struct Coordinator<X, Tx: Transaction> {
     pub node: Arc<NodeInfo>,
     pub network_interface: Arc<dyn NetworkInterface>,
     pub event_store: Arc<Mutex<EventStore>>,
-    pub transaction: TransactionStateMachine,
+    pub transaction: TransactionStateMachine<Tx>,
     pub phantom: PhantomData<X>,
     pub stats: Arc<Stats>,
     pub wait_handler: Arc<WaitHandler>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct TransactionStateMachine {
+pub struct TransactionStateMachine<Tx: Transaction> {
     pub id: u128,
     pub state: State,
-    pub transaction: Vec<u8>,
+    pub transaction: Tx,
     pub t_zero: T0,
     pub t: T,
     pub dependencies: HashSet<T0, RandomState>,
     pub ballot: Ballot,
+    pub tx_result: Option<Tx::ExecutionResult>,
 }
 
-impl<X> Coordinator<X> {
-    #[instrument(level = "trace", skip(network_interface, wait_handler))]
+impl<X, Tx> Coordinator<X, Tx>
+where
+    Tx: Transaction,
+{
+    #[instrument(level = "trace", skip(network_interface, wait_handler, transaction))]
     pub async fn new(
         node: Arc<NodeInfo>,
         event_store: Arc<Mutex<EventStore>>,
         network_interface: Arc<dyn NetworkInterface>,
-        transaction: Vec<u8>,
+        transaction: Tx,
         stats: Arc<Stats>,
         wait_handler: Arc<WaitHandler>,
         id: u128,
-    ) -> Coordinator<Initialized> {
+    ) -> Coordinator<Initialized, Tx> {
         // Create struct
         let transaction = event_store
             .lock()
             .await
             .init_transaction(transaction, node.serial, id)
             .await;
-        Coordinator::<Initialized> {
+        Coordinator::<Initialized, Tx> {
             node,
             network_interface,
             event_store,
@@ -201,7 +208,10 @@ impl<X> Coordinator<X> {
     }
 }
 
-impl Coordinator<Recover> {
+impl<Tx> Coordinator<Recover, Tx>
+where
+    Tx: Transaction,
+{
     #[instrument(level = "trace", skip(network_interface, wait_handler))]
     pub async fn recover(
         node: Arc<NodeInfo>,
@@ -210,7 +220,7 @@ impl Coordinator<Recover> {
         t0_recover: T0,
         stats: Arc<Stats>,
         wait_handler: Arc<WaitHandler>,
-    ) -> Result<CoordinatorIterator> {
+    ) -> Result<CoordinatorIterator<Tx>> {
         let mut event_store_lock = event_store.lock().await;
         let event = event_store_lock.get_or_insert(t0_recover).await;
         if matches!(event.state, State::Undefined) {
@@ -260,18 +270,20 @@ impl Coordinator<Recover> {
         stats: Arc<Stats>,
         ballot: Ballot,
         wait_handler: Arc<WaitHandler>,
-    ) -> Result<CoordinatorIterator> {
+    ) -> Result<CoordinatorIterator<Tx>> {
         // Query the newest state
         let event = event_store.lock().await.get_or_insert(t0).await;
         let previous_state = event.state;
 
         let mut state_machine = TransactionStateMachine {
-            transaction: event.event,
+            transaction: Tx::from_bytes(event.event)?,
             t_zero: event.t_zero,
             t: event.t,
             ballot,
             state: previous_state,
-            ..Default::default()
+            tx_result: None,
+            id: event.id,
+            dependencies: event.dependencies,
         };
 
         // Keep track of values to replace
@@ -352,7 +364,7 @@ impl Coordinator<Recover> {
         // Wait for deps
 
         Ok(match state_machine.state {
-            State::Applied => CoordinatorIterator::Committed(Some(Coordinator::<Committed> {
+            State::Applied => CoordinatorIterator::Committed(Some(Coordinator::<Committed, Tx> {
                 node,
                 network_interface,
                 event_store,
@@ -361,7 +373,7 @@ impl Coordinator<Recover> {
                 wait_handler,
                 phantom: Default::default(),
             })),
-            State::Commited => CoordinatorIterator::Accepted(Some(Coordinator::<Accepted> {
+            State::Commited => CoordinatorIterator::Accepted(Some(Coordinator::<Accepted, Tx> {
                 node,
                 network_interface,
                 event_store,
@@ -370,19 +382,21 @@ impl Coordinator<Recover> {
                 wait_handler,
                 phantom: Default::default(),
             })),
-            State::Accepted => CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted> {
-                node,
-                network_interface,
-                event_store,
-                transaction: state_machine,
-                stats,
-                wait_handler,
-                phantom: Default::default(),
-            })),
+            State::Accepted => {
+                CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted, Tx> {
+                    node,
+                    network_interface,
+                    event_store,
+                    transaction: state_machine,
+                    stats,
+                    wait_handler,
+                    phantom: Default::default(),
+                }))
+            }
 
             State::PreAccepted => {
                 if superseding {
-                    CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted> {
+                    CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted, Tx> {
                         node,
                         network_interface,
                         event_store,
@@ -396,7 +410,7 @@ impl Coordinator<Recover> {
                     return Ok(CoordinatorIterator::RestartRecovery);
                 } else {
                     state_machine.t = T(*state_machine.t_zero);
-                    CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted> {
+                    CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted, Tx> {
                         node,
                         network_interface,
                         event_store,
@@ -408,22 +422,25 @@ impl Coordinator<Recover> {
                 }
             }
             _ => {
-                tracing::warn!(?state_machine, "Recovery state not matched");
+                tracing::warn!("Recovery state not matched");
                 CoordinatorIterator::Recovering
             }
         })
     }
 }
 
-impl Coordinator<Initialized> {
+impl<Tx> Coordinator<Initialized, Tx>
+where
+    Tx: Transaction,
+{
     #[instrument(level = "trace", skip(self))]
-    pub async fn pre_accept(mut self) -> Result<Coordinator<PreAccepted>, ConsensusError> {
+    pub async fn pre_accept(mut self) -> Result<Coordinator<PreAccepted, Tx>, ConsensusError> {
         self.stats.total_requests.fetch_add(1, Ordering::Relaxed);
 
         // Create the PreAccepted msg
         let pre_accepted_request = PreAcceptRequest {
             id: self.transaction.id.to_be_bytes().into(),
-            event: self.transaction.transaction.clone(),
+            event: self.transaction.transaction.as_bytes(),
             timestamp_zero: (*self.transaction.t_zero).into(),
         };
 
@@ -449,7 +466,7 @@ impl Coordinator<Initialized> {
 
         self.pre_accept_consensus(&pa_responses).await?;
 
-        Ok(Coordinator::<PreAccepted> {
+        Ok(Coordinator::<PreAccepted, Tx> {
             node: self.node,
             network_interface: self.network_interface,
             event_store: self.event_store,
@@ -484,9 +501,12 @@ impl Coordinator<Initialized> {
     }
 }
 
-impl Coordinator<PreAccepted> {
+impl<Tx> Coordinator<PreAccepted, Tx>
+where
+    Tx: Transaction,
+{
     #[instrument(level = "trace", skip(self))]
-    pub async fn accept(mut self) -> Result<Coordinator<Accepted>, ConsensusError> {
+    pub async fn accept(mut self) -> Result<Coordinator<Accepted, Tx>, ConsensusError> {
         // Safeguard: T0 <= T
         assert!(*self.transaction.t_zero <= *self.transaction.t);
 
@@ -495,7 +515,7 @@ impl Coordinator<PreAccepted> {
             let accepted_request = AcceptRequest {
                 id: self.transaction.id.to_be_bytes().into(),
                 ballot: self.transaction.ballot.into(),
-                event: self.transaction.transaction.clone(),
+                event: self.transaction.transaction.as_bytes(),
                 timestamp_zero: (*self.transaction.t_zero).into(),
                 timestamp: (*self.transaction.t).into(),
                 dependencies: into_dependency(&self.transaction.dependencies),
@@ -517,7 +537,7 @@ impl Coordinator<PreAccepted> {
             self.accept_consensus(&pa_responses).await?;
         }
 
-        Ok(Coordinator::<Accepted> {
+        Ok(Coordinator::<Accepted, Tx> {
             node: self.node,
             network_interface: self.network_interface,
             event_store: self.event_store,
@@ -552,12 +572,15 @@ impl Coordinator<PreAccepted> {
     }
 }
 
-impl Coordinator<Accepted> {
+impl<Tx> Coordinator<Accepted, Tx>
+where
+    Tx: Transaction,
+{
     #[instrument(level = "trace", skip(self))]
-    pub async fn commit(mut self) -> Result<Coordinator<Committed>> {
+    pub async fn commit(mut self) -> Result<Coordinator<Committed, Tx>> {
         let committed_request = CommitRequest {
             id: self.transaction.id.to_be_bytes().into(),
-            event: self.transaction.transaction.clone(),
+            event: self.transaction.transaction.as_bytes(),
             timestamp_zero: (*self.transaction.t_zero).into(),
             timestamp: (*self.transaction.t).into(),
             dependencies: into_dependency(&self.transaction.dependencies),
@@ -572,7 +595,7 @@ impl Coordinator<Accepted> {
         committed_result.unwrap();
         broadcast_result.unwrap(); // TODO Recovery
 
-        Ok(Coordinator::<Committed> {
+        Ok(Coordinator::<Committed, Tx> {
             node: self.node,
             network_interface: self.network_interface,
             event_store: self.event_store,
@@ -593,7 +616,7 @@ impl Coordinator<Accepted> {
                 self.transaction.t_zero,
                 self.transaction.t,
                 self.transaction.dependencies.clone(),
-                self.transaction.transaction.clone(),
+                self.transaction.transaction.as_bytes(),
                 WaitAction::CommitBefore,
                 sx,
                 self.transaction.id,
@@ -605,15 +628,18 @@ impl Coordinator<Accepted> {
     }
 }
 
-impl Coordinator<Committed> {
+impl<Tx> Coordinator<Committed, Tx>
+where
+    Tx: Transaction,
+{
     #[instrument(level = "trace", skip(self))]
-    pub async fn apply(mut self) -> Result<Coordinator<Applied>> {
+    pub async fn apply(mut self) -> Result<Coordinator<Applied, Tx>> {
         eprintln!("START APPLY {}", self.transaction.id);
         self.execute_consensus().await?;
 
         let applied_request = ApplyRequest {
             id: self.transaction.id.to_be_bytes().into(),
-            event: self.transaction.transaction.clone(),
+            event: self.transaction.transaction.as_bytes(),
             timestamp: (*self.transaction.t).into(),
             timestamp_zero: (*self.transaction.t_zero).into(),
             dependencies: into_dependency(&self.transaction.dependencies),
@@ -623,9 +649,8 @@ impl Coordinator<Committed> {
         self.network_interface
             .broadcast(BroadcastRequest::Apply(applied_request))
             .await?; // This should not be awaited
-        eprintln!("APPLIED {}", self.transaction.id);
 
-        Ok(Coordinator::<Applied> {
+        Ok(Coordinator::<Applied, Tx> {
             node: self.node,
             network_interface: self.network_interface,
             event_store: self.event_store,
@@ -637,7 +662,7 @@ impl Coordinator<Committed> {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn execute_consensus(&mut self) -> Result<()> {
+    async fn execute_consensus(&mut self) -> Result<Tx::ExecutionResult> {
         // TODO: Apply in backend
         self.transaction.state = State::Applied;
         let (sx, _) = tokio::sync::oneshot::channel();
@@ -646,16 +671,14 @@ impl Coordinator<Committed> {
                 self.transaction.t_zero,
                 self.transaction.t,
                 self.transaction.dependencies.clone(),
-                self.transaction.transaction.clone(),
+                self.transaction.transaction.as_bytes(),
                 WaitAction::ApplyAfter,
                 sx,
                 self.transaction.id,
             )
             .await?;
 
-        eprintln!("EXECUTED {}", self.transaction.id);
-
-        Ok(())
+        self.transaction.transaction.execute()
     }
 }
 
@@ -667,10 +690,11 @@ mod tests {
         event_store::{Event, EventStore},
         node::Stats,
         tests::NetworkMock,
-        utils::{from_dependency, Ballot, T, T0},
+        utils::{from_dependency, Ballot, Transaction, T, T0},
         wait_handler::WaitHandler,
     };
-    use bytes::{BufMut, Bytes};
+    use anyhow::Result;
+    use bytes::BufMut;
     use diesel_ulid::DieselUlid;
     use monotime::MonoTime;
     use std::{collections::HashSet, sync::Arc, vec};
@@ -681,27 +705,41 @@ mod tests {
     use tokio::sync::mpsc::channel;
     use tokio::sync::Mutex;
 
+    #[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+    struct TestTx;
+    impl Transaction for TestTx {
+        type ExecutionResult = ();
+        fn as_bytes(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn from_bytes(_bytes: Vec<u8>) -> Result<Self> {
+            Ok(Self)
+        }
+        fn execute(&self) -> Result<Self::ExecutionResult> {
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn init_test() {
         let (sdx, _rcv) = channel(100);
         let event_store = Arc::new(Mutex::new(EventStore::init(None, 1, sdx).unwrap()));
 
         let network = Arc::new(NetworkMock::default());
-        let coordinator = Coordinator::<Initialized>::new(
+        let coordinator = Coordinator::<Initialized, TestTx>::new(
             Arc::new(NodeInfo {
                 id: DieselUlid::generate(),
                 serial: 0,
             }),
             event_store.clone(),
             network.clone(),
-            Vec::from("test"),
+            TestTx::from_bytes(b"test".to_vec()).unwrap(),
             Arc::new(Default::default()),
             WaitHandler::new(event_store, network, Default::default(), Default::default()),
             0,
         )
         .await;
         assert_eq!(coordinator.transaction.state, State::PreAccepted);
-        assert_eq!(coordinator.transaction.transaction, Bytes::from("test"));
         assert_eq!(*coordinator.transaction.t_zero, *coordinator.transaction.t);
         assert_eq!(coordinator.transaction.t_zero.0.get_node(), 0);
         assert_eq!(coordinator.transaction.t_zero.0.get_seq(), 1);
@@ -715,14 +753,15 @@ mod tests {
 
         let id = u128::from_be_bytes(DieselUlid::generate().as_byte_array());
 
-        let state_machine = TransactionStateMachine {
+        let state_machine = TransactionStateMachine::<TestTx> {
             id,
             state: State::PreAccepted,
-            transaction: Vec::new(),
+            transaction: TestTx,
             t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
             t: T(MonoTime::new_with_time(10u128, 0, 0)),
             dependencies: HashSet::default(),
             ballot: Ballot::default(),
+            tx_result: None,
         };
 
         let network = Arc::new(NetworkMock::default());
@@ -732,7 +771,7 @@ mod tests {
             serial: 0,
         });
 
-        let mut coordinator = Coordinator::<Initialized> {
+        let mut coordinator = Coordinator::<Initialized, TestTx> {
             node: node_info.clone(),
             network_interface: network.clone(),
             event_store: event_store.clone(),
@@ -760,7 +799,6 @@ mod tests {
             .pre_accept_consensus(&pre_accepted_ok)
             .await
             .unwrap();
-        assert_eq!(coordinator.transaction, state_machine);
         assert_eq!(event_store.lock().await.events.len(), 1);
         assert_eq!(event_store.lock().await.mappings.len(), 1);
         assert_eq!(event_store.lock().await.last_applied, T::default());
@@ -816,7 +854,7 @@ mod tests {
         let state_machine = TransactionStateMachine {
             id,
             state: State::PreAccepted,
-            transaction: Vec::new(),
+            transaction: TestTx,
             t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
             t: T(MonoTime::new_with_time(10u128, 0, 0)),
             dependencies: HashSet::from_iter(
@@ -829,9 +867,10 @@ mod tests {
                 .cloned(),
             ),
             ballot: Ballot::default(),
+            tx_result: None,
         };
 
-        assert_eq!(coordinator.transaction, state_machine);
+        assert_eq!(state_machine, coordinator.transaction);
         assert_eq!(event_store.lock().await.events.len(), 1);
         assert_eq!(event_store.lock().await.mappings.len(), 1);
         assert_eq!(event_store.lock().await.last_applied, T::default());
@@ -867,11 +906,12 @@ mod tests {
         let state_machine = TransactionStateMachine {
             id,
             state: State::PreAccepted,
-            transaction: Vec::new(),
+            transaction: TestTx,
             t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
             t: T(MonoTime::new_with_time(10u128, 0, 0)),
             dependencies: HashSet::default(),
             ballot: Ballot::default(),
+            tx_result: None,
         };
 
         let node_info = Arc::new(NodeInfo {

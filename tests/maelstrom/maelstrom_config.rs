@@ -33,15 +33,14 @@ pub struct MaelstromConfig {
 
 impl MaelstromConfig {
     pub async fn new(node_id: String, members: Vec<String>) -> Self {
-
-        let (message_sender, message_receiver) = MessageHandler::new();
-
+        let (message_receiver, message_sender) = MessageHandler::new();
 
         MaelstromConfig {
             members,
             node_id,
-            message_sender: MessageHandler::new(),
-            broadcast_responses: Arc::new(Mutex::new(HashMap::default())),
+            message_sender,
+            message_receiver,
+            broadcast_responses: HashMap::new(),
         }
     }
     pub async fn init() -> Result<(KVStore, Arc<Self>, Arc<ReplicaConfig>)> {

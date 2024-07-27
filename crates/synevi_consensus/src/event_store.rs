@@ -1,6 +1,6 @@
 use crate::{
     coordinator::TransactionStateMachine,
-    utils::{from_dependency, Ballot, T, T0},
+    utils::{from_dependency, Ballot, Transaction, T, T0},
 };
 use ahash::RandomState;
 use anyhow::Result;
@@ -8,25 +8,18 @@ use bytes::{BufMut, Bytes, BytesMut};
 use monotime::MonoTime;
 use sha3::Digest;
 use sha3::Sha3_256;
-use std::fmt::Debug;
 use std::{
     collections::{BTreeMap, HashSet},
     time::{SystemTime, UNIX_EPOCH},
 };
+use std::{fmt::Debug, sync::Arc};
 use synevi_network::consensus_transport::State;
 use synevi_persistence::{Database, SplitEvent};
+use tokio::sync::{oneshot, Notify};
 use tracing::instrument;
 
 #[derive(Debug)]
 pub struct EventStore {
-    // Has both temp and persisted data
-    // pros:
-    //  - Only iterate once for deps
-    //  - Reordering separate from events
-    //  - RwLock allows less blocking for read deps
-    // cons:
-    //  - Updates need to consider both maps (when t is changing)
-    //  - Events and mappings need clean up cron jobs and some form of consolidation
     pub events: BTreeMap<T0, Event>, // Key: t0, value: Event
     pub database: Option<Database>,
     pub(crate) mappings: BTreeMap<T, T0>, // Key: t, value t0
@@ -34,9 +27,7 @@ pub struct EventStore {
     pub(crate) latest_t0: T0,             // last created or recognized t0
     pub node_serial: u16,
     latest_hash: [u8; 32],
-    sender: tokio::sync::mpsc::Sender<(u128, Vec<u8>)>,
-    // This is only needed for debugging purposes
-    // pub last_applied_series: Vec<T>,
+    sender: tokio::sync::mpsc::Sender<(u128, Vec<u8>, oneshot::Sender<Option<Vec<u8>>>)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -44,14 +35,10 @@ pub struct Event {
     pub id: u128,
     pub t_zero: T0,
     pub t: T,
-
-    // This holds the state and can be used by waiters to watch for a state change
-    // In contrast to notify this can also be used if the state is already reached
     pub state: State,
     pub event: Vec<u8>,
-    pub dependencies: HashSet<T0, RandomState>, // t and t_zero
+    pub dependencies: HashSet<T0, RandomState>, // t_zero
     pub ballot: Ballot,
-
     pub previous_hash: Option<[u8; 32]>,
     pub last_updated: u128,
 }
@@ -135,7 +122,7 @@ impl EventStore {
     pub fn init(
         path: Option<String>,
         node_serial: u16,
-        sender: tokio::sync::mpsc::Sender<(u128, Vec<u8>)>,
+        sender: tokio::sync::mpsc::Sender<(u128, Vec<u8>, oneshot::Sender<Option<Vec<u8>>>)>,
     ) -> Result<Self> {
         match path {
             Some(path) => {
@@ -189,22 +176,23 @@ impl EventStore {
         self.mappings.insert(event.t, event.t_zero);
     }
 
-    #[instrument(level = "trace")]
-    pub async fn init_transaction(
+    #[instrument(level = "trace", skip(transaction))]
+    pub async fn init_transaction<Tx: Transaction>(
         &mut self,
-        body: Vec<u8>,
+        transaction: Tx,
         node_serial: u16,
         id: u128,
-    ) -> TransactionStateMachine {
+    ) -> TransactionStateMachine<Tx> {
         let t0 = self.latest_t0.next_with_node(node_serial).into_time();
         TransactionStateMachine {
             id,
             state: State::PreAccepted,
-            transaction: body,
+            transaction,
             t_zero: T0(t0),
             t: T(t0),
             dependencies: HashSet::default(),
             ballot: Ballot::default(),
+            tx_result: None,
         }
     }
 
@@ -276,6 +264,7 @@ impl EventStore {
             .map(|event| event.ballot)
             .unwrap_or_default()
     }
+
     #[instrument(level = "trace")]
     pub fn update_ballot(&mut self, t_zero: &T0, ballot: Ballot) {
         if let Some(event) = self.events.get_mut(t_zero) {
@@ -324,8 +313,14 @@ impl EventStore {
             old_event.previous_hash = Some(self.latest_hash);
             self.latest_hash = old_event.hash_event();
             let payload = old_event.event.clone();
-            eprintln!("EXECUTE");
-            self.sender.send((old_event.id, payload)).await.unwrap();
+            let notify = Arc::new(Notify::new());
+            let notify_clone = notify.clone();
+            let notified = notify_clone.notified();
+            self.sender
+                .send((old_event.id, payload, notify))
+                .await
+                .unwrap();
+            notified.await;
         }
 
         if let Some(db) = &self.database {

@@ -1,8 +1,8 @@
 use crate::{
     coordinator::CoordinatorIterator,
     event_store::{Event, EventStore},
-    node::Stats,
-    utils::{T, T0},
+    node::{Node, Stats},
+    utils::{Executor, Transaction, T, T0},
 };
 use ahash::RandomState;
 use anyhow::Result;
@@ -40,13 +40,14 @@ pub struct WaitMessage {
 }
 
 #[derive(Clone)]
-pub struct WaitHandler {
+pub struct WaitHandler<N, E>
+where
+    N: Network + Send + Sync,
+    E: Executor + Send + Sync,
+{
     sender: Sender<WaitMessage>,
     receiver: Receiver<WaitMessage>,
-    pub event_store: Arc<Mutex<EventStore>>,
-    pub stats: Arc<Stats>,
-    pub node_info: Arc<NodeInfo>,
-    pub network: Arc<dyn Network + Send + Sync>,
+    node: Arc<Node<N, E>>,
 }
 
 #[derive(Debug)]
@@ -193,13 +194,17 @@ impl WaitHandler {
             .await;
     }
 
-    async fn recover(self: Arc<Self>, t0_recover: T0, waiter_state: &mut WaiterState) {
+    async fn recover<Tx: Transaction>(
+        self: Arc<Self>,
+        t0_recover: T0,
+        waiter_state: &mut WaiterState,
+    ) {
         let wait_handler = self.clone();
         if let Some(event) = waiter_state.events.get_mut(&t0_recover) {
             event.started_at = Instant::now();
         }
         tokio::spawn(async move {
-            if let Err(e) = CoordinatorIterator::recover(t0_recover, wait_handler).await {
+            if let Err(e) = CoordinatorIterator::<Tx>::recover(t0_recover, wait_handler).await {
                 println!("Error during recovery: {:?}", e);
             };
         });

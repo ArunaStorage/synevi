@@ -1,27 +1,30 @@
 use crate::event_store::{Event, EventStore};
-use crate::node::Stats;
+use crate::node::{Node, Stats};
 use crate::reorder_buffer::ReorderBuffer;
-use crate::utils::{from_dependency, into_dependency, Ballot, T, T0};
-use crate::wait_handler::{WaitAction, WaitHandler};
+use crate::utils::{from_dependency, into_dependency, Ballot, Executor, T, T0};
+use crate::wait_handler::WaitAction;
 use anyhow::Result;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use synevi_network::consensus_transport::*;
-use synevi_network::network::NodeInfo;
+use synevi_network::network::Network;
 use synevi_network::replica::Replica;
-use tokio::sync::Mutex;
 use tracing::instrument;
 
-pub struct ReplicaConfig {
-    pub _node_info: Arc<NodeInfo>, // For tracing
-    pub event_store: Arc<Mutex<EventStore>>,
-    pub stats: Arc<Stats>,
-    pub _reorder_buffer: Arc<ReorderBuffer>,
-    pub wait_handler: Arc<WaitHandler>,
+pub struct ReplicaConfig<N, E>
+where
+    N: Network + Send + Sync,
+    E: Executor + Send + Sync,
+{
+    node: Arc<Node<N, E>>,
 }
 
 #[async_trait::async_trait]
-impl Replica for ReplicaConfig {
+impl<N, E> Replica for ReplicaConfig<N, E>
+where
+    N: Network + Send + Sync,
+    E: Executor + Send + Sync,
+{
     #[instrument(level = "trace", skip(self))]
     async fn pre_accept(
         &self,
@@ -34,7 +37,7 @@ impl Replica for ReplicaConfig {
 
         // TODO(perf): Remove the lock here
         // Creates contention on the event store
-        let ballot = self.event_store.lock().await.get_ballot(&t0);
+        let ballot = self.node.get_event_store().lock().await.get_ballot(&t0);
         if ballot != Ballot::default() {
             return Ok(PreAcceptResponse {
                 nack: true,

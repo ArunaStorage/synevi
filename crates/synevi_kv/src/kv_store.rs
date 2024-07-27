@@ -1,4 +1,4 @@
-use ahash::RandomState;
+use ahash::{HashSet, RandomState};
 use anyhow::Result;
 use diesel_ulid::DieselUlid;
 use std::collections::HashMap;
@@ -6,22 +6,16 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
 use synevi_consensus::node::Node;
-use synevi_consensus::replica::ReplicaConfig;
 use synevi_network::network::Network;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{oneshot, Mutex, Notify};
 use tokio::time::timeout;
 
 use crate::error::KVError;
 
-type TransactionMap = Arc<
-    Mutex<HashMap<DieselUlid, oneshot::Sender<Result<(String, String), KVError>>, RandomState>>,
->;
-type Channel = (Sender<(u128, Vec<u8>)>, Receiver<(u128, Vec<u8>)>);
-
 pub struct KVStore {
-    pub store: Arc<Mutex<HashMap<String, String, RandomState>>>,
-    pub transactions: TransactionMap,
+    pub store: HashMap<String, String, RandomState>,
+    pub transactions: HashSet<DieselUlid>,
     pub node: Node,
 }
 
@@ -48,28 +42,29 @@ impl KVStore {
         network: Arc<dyn Network + Send + Sync>,
         members: Vec<(DieselUlid, u16, String)>,
         path: Option<String>,
-    ) -> Result<Self, KVError> {
+    ) -> Result<Arc<Mutex<Self>>, KVError> {
         let store = Arc::new(Mutex::new(HashMap::default()));
         let transactions = Arc::new(Mutex::new(HashMap::default()));
 
-        let (sdx, rcv): Channel = channel(100);
+        let (sdx, rcv) = tokio::sync::mpsc::channel(100);
         let store_clone = store.clone();
         let transaction_clone = transactions.clone();
-        tokio::spawn(async move {
-            if let Err(err) = KVStore::execute(store_clone, transaction_clone, rcv).await {
-                eprintln!("Execution error: {err}");
-            }
-        });
 
         let mut node = Node::new_with_parameters(id, serial, network, path, sdx).await?;
         for (ulid, id, host) in members {
             node.add_member(ulid, id, host).await?;
         }
-        Ok(KVStore {
-            store,
-            transactions,
+        let store = Arc::new(Mutex::new(KVStore {
+            store: HashMap::default(),
+            transactions: HashSet::default(),
             node,
-        })
+        }));
+
+        let store_clone = store.clone();
+
+        tokio::spawn(async move { KVStore::execute(store_clone, rcv) });
+
+        Ok(store)
     }
 
     pub async fn read(&self, key: String) -> Result<String, KVError> {
@@ -77,8 +72,7 @@ impl KVStore {
         let id = DieselUlid::generate();
         let log = format!("READ: {id} - {key}");
         eprintln!("{log}");
-        let (sdx, rcv) = oneshot::channel();
-        self.transactions.lock().await.insert(id, sdx);
+        self.transactions.insert(id);
         let payload = Transaction::Read { key: key.clone() };
         self.node
             .transaction(u128::from_be_bytes(id.as_byte_array()), payload.into())
@@ -119,12 +113,11 @@ impl KVStore {
     }
 
     async fn execute(
-        store: Arc<Mutex<HashMap<String, String, RandomState>>>,
-        transactions: TransactionMap,
-        mut rcv: Receiver<(u128, Vec<u8>)>,
+        store: Arc<Mutex<KVStore>>,
+        mut rcv: Receiver<(u128, Vec<u8>, Arc<Notify>)>,
     ) -> Result<()> {
         loop {
-            while let Some((id, transaction)) = rcv.recv().await {
+            while let Some((id, transaction, notify)) = rcv.recv().await {
                 let transaction: Transaction = transaction.try_into()?;
                 let id = DieselUlid::from(id.to_be_bytes());
                 match transaction {
