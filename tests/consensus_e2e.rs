@@ -5,8 +5,8 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
-    use synevi_consensus::node::Node;
-    use synevi_consensus::utils::{T, T0};
+    use synevi_core::node::Node;
+    use synevi_core::utils::{T, T0};
     use synevi_network::consensus_transport::State;
     use tokio::runtime::Builder;
 

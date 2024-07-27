@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use diesel_ulid::DieselUlid;
 use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
-use synevi_consensus::node::Node;
+use synevi_core::node::Node;
 use tokio::runtime;
 
 async fn prepare() -> (Vec<Arc<Node>>, Vec<u8>) {

@@ -1,7 +1,7 @@
 use crate::event_store::{Event, EventStore};
 use crate::node::{Node, Stats};
 use crate::reorder_buffer::ReorderBuffer;
-use crate::utils::{from_dependency, into_dependency, Ballot, Executor, T, T0};
+use crate::utils::{from_dependency, into_dependency};
 use crate::wait_handler::WaitAction;
 use anyhow::Result;
 use std::sync::atomic::Ordering;
@@ -9,14 +9,23 @@ use std::sync::Arc;
 use synevi_network::consensus_transport::*;
 use synevi_network::network::Network;
 use synevi_network::replica::Replica;
+use synevi_types::{Ballot, Executor, T, T0};
 use tracing::instrument;
 
-pub struct ReplicaConfig<N, E>
+pub struct ReplicaConfig<N, E, S>
 where
     N: Network + Send + Sync,
     E: Executor + Send + Sync,
+    S: Store + Send + Sync,
 {
-    node: Arc<Node<N, E>>,
+    node: Arc<Node<N, E, S>>,
+    wait_handler: Arc<WaitHandler<N, E, S>>,
+}
+
+impl ReplicaConfig {
+    pub fn new(node: Arc<Node>, wait_handler: Arc<WaitHandler>) -> Self {
+        Self { node, wait_handler }
+    }
 }
 
 #[async_trait::async_trait]

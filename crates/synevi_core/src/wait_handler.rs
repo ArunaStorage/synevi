@@ -64,20 +64,12 @@ struct WaiterState {
 }
 
 impl WaitHandler {
-    pub fn new(
-        event_store: Arc<Mutex<EventStore>>,
-        network: Arc<dyn Network + Send + Sync>,
-        stats: Arc<Stats>,
-        node_info: Arc<NodeInfo>,
-    ) -> Arc<Self> {
+    pub fn new(node: Arc<Node>) -> Arc<Self> {
         let (sender, receiver) = async_channel::bounded(1000);
         Arc::new(Self {
             sender,
             receiver,
-            event_store,
-            stats,
-            node_info,
-            network,
+            node,
         })
     }
 

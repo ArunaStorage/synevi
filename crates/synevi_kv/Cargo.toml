@@ -12,7 +12,7 @@ anyhow = { workspace = true}
 diesel-ulid = { workspace = true}
 synevi_network = { path = "../synevi_network" }
 synevi_persistence = {path = "../synevi_persistence"}
-synevi_consensus = {path = "../synevi_consensus"}
+synevi_core = {path = "../synevi_core"}
 async-trait = "0.1.80"
 tokio = {workspace = true}
 thiserror = "1.0.61"

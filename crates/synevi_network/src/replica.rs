@@ -5,8 +5,8 @@ use crate::{
 use anyhow::Result;
 use bytes::{BufMut, BytesMut};
 use consensus_transport_server::ConsensusTransport;
-use std::str::FromStr;
-use std::{sync::Arc, time};
+use std::time;
+use std::{str::FromStr, sync::Arc};
 use tonic::{Request, Response, Status};
 
 #[async_trait::async_trait]
@@ -26,19 +26,40 @@ pub trait Replica: Send + Sync {
     async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse>;
 }
 
-#[derive(Clone)]
-pub struct ReplicaBox {
-    inner: Arc<dyn Replica>,
+pub struct ReplicaBox<R>
+where
+    R: Replica,
+{
+    inner: Arc<R>,
 }
 
-impl ReplicaBox {
-    pub fn new(replica: Arc<dyn Replica>) -> Self {
-        Self { inner: replica }
+impl<R> Clone for ReplicaBox<R>
+where
+    R: Replica,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<R> ReplicaBox<R>
+where
+    R: Replica,
+{
+    pub fn new(replica: R) -> Self {
+        Self {
+            inner: Arc::new(replica),
+        }
     }
 }
 
 #[tonic::async_trait]
-impl TimeService for ReplicaBox {
+impl<R> TimeService for ReplicaBox<R>
+where
+    R: Replica + 'static,
+{
     async fn get_time(
         &self,
         request: Request<GetTimeRequest>,
@@ -72,7 +93,10 @@ impl TimeService for ReplicaBox {
 }
 
 #[tonic::async_trait]
-impl ConsensusTransport for ReplicaBox {
+impl<R> ConsensusTransport for ReplicaBox<R>
+where
+    R: Replica + 'static,
+{
     async fn pre_accept(
         &self,
         request: Request<PreAcceptRequest>,

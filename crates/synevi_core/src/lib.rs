@@ -1,6 +1,5 @@
 mod coordinator;
 pub(crate) mod error;
-mod event_store;
 pub mod node;
 pub mod reorder_buffer;
 pub mod replica;

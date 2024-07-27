@@ -1,7 +1,7 @@
 use crate::error::ConsensusError;
 use crate::event_store::EventStore;
 use crate::node::Stats;
-use crate::utils::{from_dependency, into_dependency, Ballot, Transaction, T, T0};
+use crate::utils::{from_dependency, into_dependency};
 use crate::wait_handler::{WaitAction, WaitHandler};
 use ahash::RandomState;
 use anyhow::Result;

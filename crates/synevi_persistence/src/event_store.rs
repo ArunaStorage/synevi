@@ -1,21 +1,17 @@
-use crate::{
-    coordinator::TransactionStateMachine,
-    utils::{from_dependency, Ballot, Transaction, T, T0},
-};
+use crate::rocks_db::{Database, SplitEvent};
 use ahash::RandomState;
 use anyhow::Result;
 use bytes::{BufMut, Bytes, BytesMut};
 use monotime::MonoTime;
 use sha3::Digest;
 use sha3::Sha3_256;
+use std::fmt::Debug;
 use std::{
     collections::{BTreeMap, HashSet},
     time::{SystemTime, UNIX_EPOCH},
 };
-use std::{fmt::Debug, sync::Arc};
-use synevi_network::consensus_transport::State;
-use synevi_persistence::{Database, SplitEvent};
-use tokio::sync::{oneshot, Notify};
+use synevi_types::State;
+use synevi_types::{Ballot, T, T0};
 use tracing::instrument;
 
 #[derive(Debug)]
@@ -27,7 +23,26 @@ pub struct EventStore {
     pub(crate) latest_t0: T0,             // last created or recognized t0
     pub node_serial: u16,
     latest_hash: [u8; 32],
-    sender: tokio::sync::mpsc::Sender<(u128, Vec<u8>, oneshot::Sender<Option<Vec<u8>>>)>,
+}
+
+pub trait Store {
+    fn init_t_zero(&mut self, id: u128, transaction: Vec<u8>) -> T0;
+    fn pre_accept_tx(
+        &mut self,
+        id: u128,
+        t_zero: T0,
+        transaction: Vec<u8>,
+    ) -> (T, HashSet<T0, RandomState>);
+    fn get_dependencies(&self, t: &T, t_zero: &T0) -> HashSet<T0, RandomState>;
+    fn upsert_ballot(&mut self, t_zero: T0, ballot: Ballot) -> bool;
+    fn upsert_event(
+        &mut self,
+        t_zero: T0,
+        t: Option<T>,
+        state: Option<State>,
+        dependencies: Option<HashSet<T0, RandomState>>,
+    );
+    fn finalize_event(&mut self, t_zero: T0) -> [u8; 32];
 }
 
 #[derive(Clone, Debug, Default)]
@@ -119,11 +134,7 @@ pub(crate) struct RecoverDependencies {
 
 impl EventStore {
     #[instrument(level = "trace")]
-    pub fn init(
-        path: Option<String>,
-        node_serial: u16,
-        sender: tokio::sync::mpsc::Sender<(u128, Vec<u8>, oneshot::Sender<Option<Vec<u8>>>)>,
-    ) -> Result<Self> {
+    pub fn init(path: Option<String>, node_serial: u16) -> Result<Self> {
         match path {
             Some(path) => {
                 // TODO: Read all from DB and fill event store
@@ -152,8 +163,6 @@ impl EventStore {
                     database: Some(db),
                     node_serial,
                     latest_hash: [0; 32], // TODO: Read from DB
-                    sender,
-                    //last_applied_series: vec![],
                 })
             }
             None => Ok(EventStore {
@@ -164,37 +173,29 @@ impl EventStore {
                 database: None,
                 node_serial,
                 latest_hash: [0; 32],
-                sender,
-                //last_applied_series: vec![],
             }),
         }
     }
 
-    #[instrument(level = "trace")]
-    async fn insert(&mut self, event: Event) {
-        self.events.insert(event.t_zero, event.clone());
-        self.mappings.insert(event.t, event.t_zero);
-    }
-
-    #[instrument(level = "trace", skip(transaction))]
-    pub async fn init_transaction<Tx: Transaction>(
-        &mut self,
-        transaction: Tx,
-        node_serial: u16,
-        id: u128,
-    ) -> TransactionStateMachine<Tx> {
-        let t0 = self.latest_t0.next_with_node(node_serial).into_time();
-        TransactionStateMachine {
-            id,
-            state: State::PreAccepted,
-            transaction,
-            t_zero: T0(t0),
-            t: T(t0),
-            dependencies: HashSet::default(),
-            ballot: Ballot::default(),
-            tx_result: None,
-        }
-    }
+    // #[instrument(level = "trace", skip(transaction))]
+    // pub async fn init_transaction<Tx: Transaction>(
+    //     &mut self,
+    //     transaction: Tx,
+    //     node_serial: u16,
+    //     id: u128,
+    // ) -> TransactionStateMachine<Tx> {
+    //     let t0 = self.latest_t0.next_with_node(node_serial).into_time();
+    //     TransactionStateMachine {
+    //         id,
+    //         state: State::PreAccepted,
+    //         transaction,
+    //         t_zero: T0(t0),
+    //         t: T(t0),
+    //         dependencies: HashSet::default(),
+    //         ballot: Ballot::default(),
+    //         tx_result: None,
+    //     }
+    // }
 
     #[instrument(level = "trace")]
     pub async fn get_event(&self, t_zero: T0) -> Option<Event> {
@@ -226,7 +227,6 @@ impl EventStore {
         let (t, deps) = {
             let t = T(if let Some((last_t, _)) = self.mappings.last_key_value() {
                 if **last_t > *t_zero {
-                    // This unwrap will not panic
                     t_zero
                         .next_with_guard_and_node(last_t, self.node_serial)
                         .into_time()
@@ -238,7 +238,7 @@ impl EventStore {
                 *t_zero
             });
             // This might not be necessary to re-use the write lock here
-            let deps: Vec<u8> = self.get_dependencies(&t, &t_zero).await;
+            let deps = self.get_dependencies(&t, &t_zero).await;
             (t, deps)
         };
 
@@ -250,7 +250,7 @@ impl EventStore {
             t,
             state: State::PreAccepted,
             event: transaction,
-            dependencies: from_dependency(deps.clone())?,
+            dependencies: deps.clone(),
             ..Default::default()
         };
         self.upsert(event).await;
@@ -308,19 +308,10 @@ impl EventStore {
         self.mappings.insert(event.t, event.t_zero);
 
         if old_event.state == State::Applied {
-            //self.last_applied_series.push(event.t);
             self.last_applied = event.t;
             old_event.previous_hash = Some(self.latest_hash);
             self.latest_hash = old_event.hash_event();
             let payload = old_event.event.clone();
-            let notify = Arc::new(Notify::new());
-            let notify_clone = notify.clone();
-            let notified = notify_clone.notified();
-            self.sender
-                .send((old_event.id, payload, notify))
-                .await
-                .unwrap();
-            notified.await;
         }
 
         if let Some(db) = &self.database {
@@ -342,13 +333,13 @@ impl EventStore {
     }
 
     #[instrument(level = "trace")]
-    pub async fn get_dependencies(&self, t: &T, t_zero: &T0) -> Vec<u8> {
+    async fn get_dependencies(&self, t: &T, t_zero: &T0) -> HashSet<T0, RandomState> {
         if &self.last_applied == t {
-            return vec![];
+            return HashSet::default();
         }
         assert!(self.last_applied < *t);
         // What about deps with dep_t0 < last_applied_t0 && dep_t > t?
-        let mut deps = Vec::new();
+        let mut deps = HashSet::default();
 
         // Dependencies are where any of these cases match:
         // - t_dep < t if not applied
@@ -356,7 +347,7 @@ impl EventStore {
         // - t_dep > t if t0_dep < t
         for (_, t0_dep) in self.mappings.range(self.last_applied..) {
             if t0_dep != t_zero && (t0_dep < &T0(**t)) {
-                deps.put::<Bytes>((*t0_dep).into());
+                deps.insert(*t0_dep);
             }
         }
         deps
@@ -412,13 +403,12 @@ impl EventStore {
 #[cfg(test)]
 mod tests {
     use crate::event_store::Event;
-    use crate::utils::{Ballot, T, T0};
+    use crate::rocks_db::SplitEvent;
     use bytes::Bytes;
     use monotime::MonoTime;
     use std::collections::HashSet;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use synevi_network::consensus_transport::State;
-    use synevi_persistence::SplitEvent;
+    use synevi_types::{Ballot, State, T, T0};
 
     #[test]
     fn event_conversion() {

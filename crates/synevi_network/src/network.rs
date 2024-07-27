@@ -32,7 +32,7 @@ pub trait NetworkInterface: Send + Sync {
 pub trait Network {
     async fn add_members(&self, members: Vec<(DieselUlid, u16, String)>);
     async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<()>;
-    async fn spawn_server(&self, server: Arc<dyn Replica>) -> Result<()>;
+    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<()>;
     async fn get_interface(&self) -> Arc<dyn NetworkInterface>;
     async fn get_waiting_time(&self, node_serial: u16) -> u64;
 }
@@ -133,7 +133,7 @@ impl Network for NetworkConfig {
         Ok(())
     }
 
-    async fn spawn_server(&self, server: Arc<dyn Replica>) -> Result<()> {
+    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<()> {
         let new_replica_box = ReplicaBox::new(server);
         let addr = self.socket_addr;
         self.join_set.lock().await.spawn(async move {

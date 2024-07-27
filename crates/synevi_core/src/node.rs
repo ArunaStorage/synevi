@@ -1,13 +1,14 @@
-use crate::event_store::EventStore;
 use crate::reorder_buffer::ReorderBuffer;
 use crate::replica::ReplicaConfig;
-use crate::utils::{Executor, Transaction};
 use crate::{coordinator::CoordinatorIterator, wait_handler::WaitHandler};
 use anyhow::Result;
 use diesel_ulid::DieselUlid;
+use futures::executor;
 use std::fmt::Debug;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::network::{Network, NodeInfo};
+use synevi_persistence::event_store::{EventStoreTrait, Store};
+use synevi_types::{Executor, Transaction};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{oneshot, Mutex};
 use tracing::instrument;
@@ -19,21 +20,21 @@ pub struct Stats {
     pub total_recovers: AtomicU64,
 }
 
-pub struct Node<N, E>
+pub struct Node<N, E, S>
 where
     N: Network + Send + Sync,
     E: Executor + Send + Sync,
+    S: Store + Send + Sync,
 {
     info: NodeInfo,
     network: N,
     executor: E,
-    event_store: Mutex<EventStore>,
-    wait_handler: WaitHandler<N, E>,
+    event_store: Mutex<S>,
     stats: Stats,
     semaphore: tokio::sync::Semaphore,
 }
 
-impl<N, E> Node<N, E>
+impl<N, E, S> Node<N, E, S>
 where
     N: Network + Send + Sync,
     E: Executor + Send + Sync,
@@ -44,8 +45,8 @@ where
         serial: u16,
         network: N,
         db_path: Option<String>,
-        sender: Sender<(u128, Vec<u8>, oneshot::Sender<Option<Vec<u8>>>)>,
-    ) -> Result<Self> {
+        executor: E,
+    ) -> Result<Arc<Self>> {
         let node_name = NodeInfo { id, serial };
         let event_store = Mutex::new(EventStore::init(db_path, serial, sender)?);
 
@@ -62,36 +63,27 @@ where
         //     reorder_clone.run().await.unwrap();
         // });
 
-        let wait_handler = WaitHandler::new(
-            event_store.clone(),
-            network.clone(),
-            stats.clone(),
-            node_name.clone(),
-        );
-        let wait_handler_clone = wait_handler.clone();
-        tokio::spawn(async move {
-            wait_handler_clone.run().await.unwrap();
-        });
-
-        let replica = Arc::new(ReplicaConfig {
-            _node_info: node_name.clone(),
-            event_store: event_store.clone(),
-            stats: stats.clone(),
-            _reorder_buffer: reorder_buffer,
-            wait_handler: wait_handler.clone(),
-        });
-        // Spawn tonic server
-        network.spawn_server(replica).await?;
-
-        // If no config / persistence -> default
-        Ok(Node {
+        let node = Arc::new(Node {
             info: node_name,
             event_store,
             network,
             stats,
             semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
-            wait_handler,
-        })
+            executor,
+        });
+
+        let wait_handler = WaitHandler::new(node.clone());
+        let wait_handler_clone = wait_handler.clone();
+        tokio::spawn(async move {
+            wait_handler_clone.run().await.unwrap();
+        });
+
+        let replica = Arc::new(ReplicaConfig::new(node.clone(), wait_handler));
+        // Spawn tonic server
+        network.spawn_server(replica).await?;
+
+        // If no config / persistence -> default
+        Ok(node)
     }
 
     #[instrument(level = "trace", skip(self))]

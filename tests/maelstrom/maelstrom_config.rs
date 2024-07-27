@@ -13,7 +13,7 @@ use crate::messages::{Body, Message, MessageType};
 use crate::network::GLOBAL_COUNTER;
 use crate::protocol::MessageHandler;
 use monotime::MonoTime;
-use synevi_consensus::replica::ReplicaConfig;
+use synevi_core::replica::ReplicaConfig;
 use synevi_kv::error::KVError;
 use synevi_kv::kv_store::KVStore;
 use synevi_network::consensus_transport::{
