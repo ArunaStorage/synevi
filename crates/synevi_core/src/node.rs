@@ -1,16 +1,13 @@
-use crate::reorder_buffer::ReorderBuffer;
 use crate::replica::ReplicaConfig;
 use crate::{coordinator::CoordinatorIterator, wait_handler::WaitHandler};
 use anyhow::Result;
 use diesel_ulid::DieselUlid;
-use futures::executor;
 use std::fmt::Debug;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::network::{Network, NodeInfo};
-use synevi_persistence::event_store::{EventStoreTrait, Store};
+use synevi_persistence::event_store::Store;
 use synevi_types::{Executor, Transaction};
-use tokio::sync::mpsc::Sender;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::Mutex;
 use tracing::instrument;
 
 #[derive(Debug, Default)]
@@ -39,16 +36,15 @@ where
     N: Network + Send + Sync,
     E: Executor + Send + Sync,
 {
-    #[instrument(level = "trace", skip(network))]
+    #[instrument(level = "trace", skip(network, executor, store))]
     pub async fn new_with_parameters(
         id: DieselUlid,
         serial: u16,
         network: N,
-        db_path: Option<String>,
+        store: S,
         executor: E,
     ) -> Result<Arc<Self>> {
         let node_name = NodeInfo { id, serial };
-        let event_store = Mutex::new(EventStore::init(db_path, serial, sender)?);
 
         let stats = Stats {
             total_requests: AtomicU64::new(0),
@@ -65,7 +61,7 @@ where
 
         let node = Arc::new(Node {
             info: node_name,
-            event_store,
+            event_store: Mutex::new(store),
             network,
             stats,
             semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
@@ -97,7 +93,7 @@ where
         id: u128,
         transaction: T,
     ) -> Result<T::ExecutionResult> {
-        let _permit = self.semaphore.clone().acquire_owned().await?;
+        let _permit = self.semaphore.acquire().await?;
         let interface = self.network.get_interface().await;
         let mut coordinator_iter = CoordinatorIterator::new(
             self.info.clone(),
@@ -115,7 +111,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    pub fn get_event_store(&self) -> Arc<Mutex<EventStore>> {
+    pub fn get_event_store(&self) -> Arc<Mutex<S>> {
         self.event_store.clone()
     }
 
@@ -150,12 +146,11 @@ mod tests {
     use rand::distributions::{Distribution, Uniform};
 
     use synevi_network::consensus_transport::State;
+    use synevi_types::{T, T0};
 
     use crate::coordinator::CoordinatorIterator;
-    use crate::event_store::Event;
     use crate::node::Node;
     use crate::tests::NetworkMock;
-    use crate::utils::{T, T0};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn recovery_single() {
@@ -346,7 +341,8 @@ mod tests {
         let mut event_store = node.event_store.lock().await;
         let db = event_store.database.clone();
         let all = db.unwrap().read_all().unwrap();
-        let db_entry = Event::from_bytes(all.first().cloned().unwrap()).unwrap();
+        let db_entry =
+            synevi_persistence::event::Event::from_bytes(all.first().cloned().unwrap()).unwrap();
         let ev_entry = event_store.events.first_entry().unwrap();
         let ev_entry = ev_entry.get();
 

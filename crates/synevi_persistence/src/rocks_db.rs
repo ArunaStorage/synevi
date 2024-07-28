@@ -2,7 +2,6 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use rocksdb::{ColumnFamilyDescriptor, DBWithThreadMode, IteratorMode, MultiThreaded, Options};
 use std::sync::Arc;
-use tokio::task::spawn_blocking;
 
 #[derive(Clone, Debug)]
 pub struct Database {
@@ -62,41 +61,33 @@ impl Database {
         Ok(result)
     }
 
-    pub async fn init_object(&self, key: Bytes, transaction: Bytes, state: Bytes) -> Result<()> {
-        let db = self.clone();
-        spawn_blocking(move || -> Result<()> {
-            let event_cf = db
-                .db
-                .cf_handle("events")
-                .ok_or_else(|| anyhow!("ColumnFamily for events not found"))?;
-            let state_cf = db
-                .db
-                .cf_handle("states")
-                .ok_or_else(|| anyhow!("ColumnFamily for states not found"))?;
-            db.db
-                .put_cf(&event_cf, &key, transaction)
-                .map_err(|e| anyhow!(e))?;
-            db.db
-                .put_cf(&state_cf, key, state)
-                .map_err(|e| anyhow!(e))?;
-            Ok(())
-        })
-        .await?
+    pub fn init_object(&self, key: Bytes, transaction: Bytes, state: Bytes) -> Result<()> {
+        let event_cf = self
+            .db
+            .cf_handle("events")
+            .ok_or_else(|| anyhow!("ColumnFamily for events not found"))?;
+        let state_cf = self
+            .db
+            .cf_handle("states")
+            .ok_or_else(|| anyhow!("ColumnFamily for states not found"))?;
+        self.db
+            .put_cf(&event_cf, &key, transaction)
+            .map_err(|e| anyhow!(e))?;
+        self.db
+            .put_cf(&state_cf, key, state)
+            .map_err(|e| anyhow!(e))?;
+        Ok(())
     }
 
-    pub async fn update_object(&self, key: Bytes, state: Bytes) -> Result<()> {
-        let db = self.clone();
-        spawn_blocking(move || -> Result<()> {
-            let state_cf = db
-                .db
-                .cf_handle("states")
-                .ok_or_else(|| anyhow!("ColumnFamily for states not found"))?;
-            db.db
-                .put_cf(&state_cf, key, state)
-                .map_err(|e| anyhow!(e))?;
-            Ok(())
-        })
-        .await?
+    pub fn update_object(&self, key: Bytes, state: Bytes) -> Result<()> {
+        let state_cf = self
+            .db
+            .cf_handle("states")
+            .ok_or_else(|| anyhow!("ColumnFamily for states not found"))?;
+        self.db
+            .put_cf(&state_cf, key, state)
+            .map_err(|e| anyhow!(e))?;
+        Ok(())
     }
 }
 

@@ -1,7 +1,8 @@
+use ahash::RandomState;
 use anyhow::{bail, Result};
 use bytes::Bytes;
 use monotime::MonoTime;
-use std::ops::Deref;
+use std::{collections::HashSet, ops::Deref};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
 pub struct T0(pub MonoTime);
@@ -143,4 +144,11 @@ impl From<State> for i32 {
             _ => 0,
         }
     }
+}
+
+#[derive(Debug, Default)]
+pub struct RecoverDependencies {
+    pub dependencies: HashSet<T0, RandomState>,
+    pub wait: HashSet<T0, RandomState>,
+    pub superseding: bool,
 }
