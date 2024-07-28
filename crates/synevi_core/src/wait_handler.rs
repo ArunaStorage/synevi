@@ -1,9 +1,4 @@
-use crate::{
-    coordinator::CoordinatorIterator,
-    event_store::{Event, EventStore},
-    node::{Node, Stats},
-    utils::{Executor, Transaction, T, T0},
-};
+use crate::{coordinator::CoordinatorIterator, node::Node};
 use ahash::RandomState;
 use anyhow::Result;
 use async_channel::{Receiver, Sender};
@@ -13,14 +8,11 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use synevi_network::{
-    consensus_transport::State,
-    network::{Network, NodeInfo},
-};
-use tokio::{
-    sync::{oneshot, Mutex},
-    time::timeout,
-};
+use synevi_network::{consensus_transport::State, network::Network};
+use synevi_persistence::event::UpsertEvent;
+use synevi_persistence::event_store::Store;
+use synevi_types::{Executor, Transaction, T, T0};
+use tokio::{sync::oneshot, time::timeout};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WaitAction {
@@ -34,20 +26,21 @@ pub struct WaitMessage {
     t_zero: T0,
     t: T,
     deps: HashSet<T0, RandomState>,
-    event: Vec<u8>,
+    transaction: Vec<u8>,
     action: WaitAction,
     notify: Option<oneshot::Sender<()>>,
 }
 
 #[derive(Clone)]
-pub struct WaitHandler<N, E>
+pub struct WaitHandler<N, E, S>
 where
     N: Network + Send + Sync,
     E: Executor + Send + Sync,
+    S: Store + Send + Sync,
 {
     sender: Sender<WaitMessage>,
     receiver: Receiver<WaitMessage>,
-    node: Arc<Node<N, E>>,
+    node: Arc<Node<N, E, S>>,
 }
 
 #[derive(Debug)]
@@ -63,8 +56,8 @@ struct WaiterState {
     applied: HashSet<T0, RandomState>,
 }
 
-impl WaitHandler {
-    pub fn new(node: Arc<Node>) -> Arc<Self> {
+impl<N, E, S> WaitHandler<N, E, S> {
+    pub fn new(node: Arc<Node<N, E, S>>) -> Arc<Self> {
         let (sender, receiver) = async_channel::bounded(1000);
         Arc::new(Self {
             sender,
@@ -78,7 +71,7 @@ impl WaitHandler {
         t_zero: T0,
         t: T,
         deps: HashSet<T0, RandomState>,
-        event: Vec<u8>,
+        transaction: Vec<u8>,
         action: WaitAction,
         notify: oneshot::Sender<()>,
         id: u128,
@@ -90,7 +83,7 @@ impl WaitHandler {
                 t_zero,
                 t,
                 deps,
-                event,
+                transaction,
                 action,
                 notify: Some(notify),
             })
@@ -163,7 +156,7 @@ impl WaitHandler {
             t,
             action,
             deps,
-            event,
+            transaction,
             ..
         }: &WaitMessage,
     ) {
@@ -171,19 +164,15 @@ impl WaitHandler {
             WaitAction::CommitBefore => State::Commited,
             WaitAction::ApplyAfter => State::Applied,
         };
-        self.event_store
-            .lock()
-            .await
-            .upsert(Event {
-                id: *id,
-                t_zero: *t_zero,
-                t: *t,
-                state,
-                event: event.clone(),
-                dependencies: deps.clone(),
-                ..Default::default()
-            })
-            .await;
+        self.event_store.lock().await.upsert(UpsertEvent {
+            id: *id,
+            t_zero: *t_zero,
+            t: *t,
+            state,
+            transaction: Some(transaction.clone()),
+            dependencies: Some(deps.clone()),
+            ..Default::default()
+        });
     }
 
     async fn recover<Tx: Transaction>(
@@ -397,13 +386,12 @@ mod tests {
         let (sdx, _) = tokio::sync::mpsc::channel(100);
         let (sender, receiver): (Sender<WaitMessage>, Receiver<WaitMessage>) =
             async_channel::unbounded();
+
+        let node = Arc::new(Node::default());
         let wait_handler = WaitHandler {
             sender,
             receiver,
-            event_store: Arc::new(Mutex::new(EventStore::init(None, 0, sdx).unwrap())),
-            network: Arc::new(crate::tests::NetworkMock::default()),
-            stats: Arc::new(Stats::default()),
-            node_info: Arc::new(NodeInfo::default()),
+            node,
         };
 
         let (sx11, rx11) = tokio::sync::oneshot::channel();

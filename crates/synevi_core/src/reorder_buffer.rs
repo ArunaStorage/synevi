@@ -1,7 +1,3 @@
-use crate::{
-    event_store::EventStore,
-    utils::{T, T0},
-};
 use anyhow::Result;
 use async_channel::{Receiver, Sender};
 use std::{
@@ -9,10 +5,15 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use synevi_network::network::Network;
+use synevi_persistence::event_store::Store;
+use synevi_types::{Executor, T, T0};
 use tokio::{
     sync::{oneshot, Mutex},
     time::timeout,
 };
+
+use crate::node::Node;
 
 pub struct ReorderMessage {
     pub id: u128,
@@ -23,20 +24,25 @@ pub struct ReorderMessage {
 }
 
 #[derive(Clone, Debug)]
-pub struct ReorderBuffer {
+pub struct ReorderBuffer<N, E, S>
+where
+    N: Network,
+    E: Executor,
+    S: Store,
+{
     #[allow(dead_code)]
     sender: Sender<ReorderMessage>,
     receiver: Receiver<ReorderMessage>,
-    event_store: Arc<Mutex<EventStore>>,
+    node: Arc<Node<N, E, S>>,
 }
 
-impl ReorderBuffer {
-    pub fn new(event_store: Arc<Mutex<EventStore>>) -> Arc<Self> {
+impl<N, E, S> ReorderBuffer<N, E, S> {
+    pub fn new(node: Arc<Node<N, E, S>>) -> Arc<Self> {
         let (sender, receiver) = async_channel::bounded(1000);
         Arc::new(Self {
             sender,
             receiver,
-            event_store,
+            node,
         })
     }
 

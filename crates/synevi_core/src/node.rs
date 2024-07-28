@@ -23,11 +23,11 @@ where
     E: Executor + Send + Sync,
     S: Store + Send + Sync,
 {
-    info: NodeInfo,
-    network: N,
-    executor: E,
-    event_store: Mutex<S>,
-    stats: Stats,
+    pub info: NodeInfo,
+    pub network: N,
+    pub executor: E,
+    pub event_store: Mutex<S>,
+    pub stats: Stats,
     semaphore: tokio::sync::Semaphore,
 }
 

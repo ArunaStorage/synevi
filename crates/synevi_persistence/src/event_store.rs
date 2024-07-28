@@ -37,12 +37,14 @@ pub trait Store {
     // Get the dependencies for a transaction
     fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> Dependencies;
     // Get the recover dependencies for a transaction
-    fn get_recover_deps(&self, t: &T, t_zero: &T0) -> Result<RecoverDependencies>;
+    fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies>;
     // Check and update the ballot for a transaction
     // Returns true if the ballot was accepted (current <= ballot)
-    fn upsert_tx_ballot(&mut self, t_zero: &T0, ballot: Ballot) -> bool;
+    fn accept_tx_ballot(&mut self, t_zero: &T0, ballot: Ballot) -> bool;
     // Update or insert a transaction, returns the hash of the transaction if applied
     fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<Option<[u8; 32]>>;
+
+    fn get_event_state(&self, t_zero: &T0) -> Option<State>;
 }
 
 impl Store for EventStore {
@@ -113,13 +115,16 @@ impl Store for EventStore {
     }
 
     #[instrument(level = "trace")]
-    fn upsert_tx_ballot(&mut self, t_zero: &T0, ballot: Ballot) -> bool {
+    fn accept_tx_ballot(&mut self, t_zero: &T0, ballot: Ballot) -> bool {
         let Some(event) = self.events.get_mut(t_zero) else {
             return true;
         };
 
-        if event.ballot <= ballot {
+        if event.ballot < ballot {
             event.ballot = ballot;
+            true
+        // Only allow equal ballots if the event is default
+        } else if event.ballot == ballot && ballot == Ballot::default() {
             true
         } else {
             false
@@ -196,8 +201,13 @@ impl Store for EventStore {
     }
 
     #[instrument(level = "trace")]
-    fn get_recover_deps(&self, t: &T, t_zero: &T0) -> Result<RecoverDependencies> {
+    fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies> {
         let mut recover_deps = RecoverDependencies::default();
+        recover_deps.timestamp = self
+            .events
+            .get(t_zero)
+            .map(|event| event.t)
+            .ok_or_else(|| anyhow::anyhow!("Event not found for t_zero: {:?}", t_zero))?;
         for (t_dep, t_zero_dep) in self.mappings.range(self.last_applied..) {
             let dep_event = self.events.get(t_zero_dep).ok_or_else(|| {
                 anyhow::anyhow!("Dependency not found for t_zero: {:?}", t_zero_dep)
@@ -239,6 +249,10 @@ impl Store for EventStore {
             }
         }
         Ok(recover_deps)
+    }
+
+    fn get_event_state(&self, t_zero: &T0) -> Option<State> {
+        self.events.get(t_zero).map(|event| event.state)
     }
 }
 

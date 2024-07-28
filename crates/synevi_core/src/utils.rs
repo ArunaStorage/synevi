@@ -1,9 +1,11 @@
-use crate::{coordinator::TransactionStateMachine, event_store::Event};
+use crate::coordinator::TransactionStateMachine;
 use ahash::RandomState;
 use anyhow::Result;
-use bytes::{BufMut, Bytes};
+use bytes::BufMut;
 use monotime::MonoTime;
-use std::{collections::HashSet, ops::Deref};
+use std::collections::HashSet;
+use synevi_persistence::event::UpsertEvent;
+use synevi_types::{Transaction, T0};
 
 pub fn into_dependency(map: &HashSet<T0, RandomState>) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(map.len() * 16);
@@ -22,18 +24,18 @@ pub fn from_dependency(deps: Vec<u8>) -> Result<HashSet<T0, RandomState>> {
     Ok(map)
 }
 
-impl<Tx> From<&TransactionStateMachine<Tx>> for Event
+impl<Tx> From<&TransactionStateMachine<Tx>> for UpsertEvent
 where
     Tx: Transaction,
 {
     fn from(value: &TransactionStateMachine<Tx>) -> Self {
-        Event {
+        UpsertEvent {
             id: value.id,
             t_zero: value.t_zero,
             t: value.t,
             state: value.state,
-            event: value.transaction.as_bytes(),
-            dependencies: value.dependencies.clone(),
+            transaction: Some(value.transaction.as_bytes()),
+            dependencies: Some(value.dependencies.clone()),
             ballot: value.ballot,
             ..Default::default()
         }

@@ -151,4 +151,5 @@ pub struct RecoverDependencies {
     pub dependencies: HashSet<T0, RandomState>,
     pub wait: HashSet<T0, RandomState>,
     pub superseding: bool,
+    pub timestamp: T,
 }
