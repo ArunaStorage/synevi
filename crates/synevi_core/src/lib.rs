@@ -42,17 +42,18 @@ pub mod tests {
 
     #[async_trait::async_trait]
     impl Network for NetworkMock {
+        type Ni = Self;
         async fn add_members(&self, _members: Vec<(DieselUlid, u16, String)>) {}
 
         async fn add_member(&self, _id: DieselUlid, _serial: u16, _host: String) -> Result<()> {
             Ok(())
         }
 
-        async fn spawn_server(&self, _server: Arc<dyn Replica>) -> Result<()> {
+        async fn spawn_server<R: Replica>(&self, _server: R) -> Result<()> {
             Ok(())
         }
 
-        async fn get_interface(&self) -> Arc<dyn NetworkInterface> {
+        async fn get_interface(&self) -> Arc<NetworkMock> {
             Arc::new(NetworkMock {
                 got_requests: self.got_requests.clone(),
             })

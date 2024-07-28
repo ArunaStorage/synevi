@@ -1,226 +1,292 @@
 use crate::error::ConsensusError;
-use crate::event_store::EventStore;
-use crate::node::Stats;
+use crate::node::{Node, Stats};
 use crate::utils::{from_dependency, into_dependency};
 use crate::wait_handler::{WaitAction, WaitHandler};
 use ahash::RandomState;
 use anyhow::Result;
 use std::collections::HashSet;
-use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
 use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, CommitRequest, PreAcceptRequest,
     PreAcceptResponse, RecoverRequest, RecoverResponse, State,
 };
-use synevi_network::network::{BroadcastRequest, NetworkInterface, NodeInfo};
+use synevi_network::network::{BroadcastRequest, Network, NetworkInterface, NodeInfo};
 use synevi_network::utils::IntoInner;
+use synevi_persistence::event_store::Store;
+use synevi_types::{Ballot, Executor, Transaction, T, T0};
 use tokio::sync::Mutex;
 use tracing::instrument;
 
-/// An iterator that goes through the different states of the coordinator
-
-pub enum CoordinatorIterator<Tx: Transaction> {
-    Initialized(Option<Coordinator<Initialized, Tx>>),
-    PreAccepted(Option<Coordinator<PreAccepted, Tx>>),
-    Accepted(Option<Coordinator<Accepted, Tx>>),
-    Committed(Option<Coordinator<Committed, Tx>>),
-    Applied,
-    Recovering,
-    RestartRecovery,
-}
-
-impl<Tx> CoordinatorIterator<Tx>
+pub struct Coordinator<Tx, N, E, S>
 where
     Tx: Transaction,
+    N: Network,
+    E: Executor,
+    S: Store,
 {
-    pub async fn new(
-        node: Arc<NodeInfo>,
-        event_store: Arc<Mutex<EventStore>>,
-        network_interface: Arc<dyn NetworkInterface>,
-        transaction: Tx,
-        stats: Arc<Stats>,
-        wait_handler: Arc<WaitHandler>,
-        id: u128,
-    ) -> Self {
-        CoordinatorIterator::Initialized(Some(
-            Coordinator::<Initialized, Tx>::new(
-                node,
-                event_store,
-                network_interface,
-                transaction,
-                stats,
-                wait_handler,
-                id,
-            )
-            .await,
-        ))
-    }
-
-    pub async fn next(&mut self) -> Result<Option<()>> {
-        match self {
-            CoordinatorIterator::Initialized(coordinator) => {
-                if let Some(c) = coordinator.take() {
-                    let pre_accepted = c.pre_accept().await;
-                    match pre_accepted {
-                        Ok(c) => {
-                            *self = CoordinatorIterator::PreAccepted(Some(c));
-                            Ok(Some(()))
-                        }
-                        Err(ConsensusError::CompetingCoordinator) => {
-                            *self = CoordinatorIterator::Recovering;
-                            Ok(None)
-                        }
-                        Err(e) => Err(e.into()),
-                    }
-                } else {
-                    Ok(None)
-                }
-            }
-            CoordinatorIterator::PreAccepted(coordinator) => {
-                if let Some(c) = coordinator.take() {
-                    let accepted = c.accept().await;
-                    match accepted {
-                        Ok(c) => {
-                            *self = CoordinatorIterator::Accepted(Some(c));
-                            Ok(Some(()))
-                        }
-                        Err(ConsensusError::CompetingCoordinator) => {
-                            *self = CoordinatorIterator::Recovering;
-                            Ok(None)
-                        }
-                        Err(e) => Err(e.into()),
-                    }
-                } else {
-                    Ok(None)
-                }
-            }
-            CoordinatorIterator::Accepted(coordinator) => {
-                if let Some(c) = coordinator.take() {
-                    *self = CoordinatorIterator::Committed(Some(c.commit().await?));
-                    Ok(Some(()))
-                } else {
-                    Ok(None)
-                }
-            }
-            CoordinatorIterator::Committed(coordinator) => {
-                if let Some(c) = coordinator.take() {
-                    c.apply().await?;
-                    *self = CoordinatorIterator::Applied;
-                    Ok(Some(()))
-                } else {
-                    Ok(None)
-                }
-            }
-            _ => Ok(None),
-        }
-    }
-
-    pub async fn recover(t0_recover: T0, wait_handler: Arc<WaitHandler>) -> Result<()> {
-        let mut backoff_counter: u8 = 0;
-        while backoff_counter <= MAX_RETRIES {
-            let mut coordinator_iter = Coordinator::<Recover, Tx>::recover(
-                wait_handler.node_info.clone(),
-                wait_handler.event_store.clone(),
-                wait_handler.network.get_interface().await,
-                t0_recover,
-                wait_handler.stats.clone(),
-                wait_handler.clone(),
-            )
-            .await?;
-            if let CoordinatorIterator::RestartRecovery = coordinator_iter {
-                backoff_counter += 1;
-                tokio::time::sleep(Duration::from_millis(1000)).await;
-                continue;
-            }
-            wait_handler
-                .stats
-                .total_recovers
-                .fetch_add(1, Ordering::Relaxed);
-            while coordinator_iter.next().await?.is_some() {}
-            break;
-        }
-        Ok(())
-    }
-}
-
-const MAX_RETRIES: u8 = 5;
-
-pub struct Initialized;
-pub struct PreAccepted;
-pub struct Accepted;
-pub struct Committed;
-pub struct Applied;
-pub struct Recover;
-
-pub struct Coordinator<X, Tx: Transaction> {
-    pub node: Arc<NodeInfo>,
-    pub network_interface: Arc<dyn NetworkInterface>,
-    pub event_store: Arc<Mutex<EventStore>>,
+    pub node: Arc<Node<N, E, S>>,
+    pub network_interface: Arc<N::Ni>,
     pub transaction: TransactionStateMachine<Tx>,
-    pub phantom: PhantomData<X>,
-    pub stats: Arc<Stats>,
-    pub wait_handler: Arc<WaitHandler>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TransactionStateMachine<Tx: Transaction> {
     pub id: u128,
     pub state: State,
-    pub transaction: Tx,
+    pub transaction: Option<Tx>,
     pub t_zero: T0,
     pub t: T,
     pub dependencies: HashSet<T0, RandomState>,
     pub ballot: Ballot,
-    pub tx_result: Option<Tx::ExecutionResult>,
 }
 
-impl<X, Tx> Coordinator<X, Tx>
+impl<Tx, N, E, S> Coordinator<Tx, N, E, S>
 where
     Tx: Transaction,
+    N: Network,
+    E: Executor<Tx = Tx>,
+    S: Store,
 {
-    #[instrument(level = "trace", skip(network_interface, wait_handler, transaction))]
-    pub async fn new(
-        node: Arc<NodeInfo>,
-        event_store: Arc<Mutex<EventStore>>,
-        network_interface: Arc<dyn NetworkInterface>,
-        transaction: Tx,
-        stats: Arc<Stats>,
-        wait_handler: Arc<WaitHandler>,
-        id: u128,
-    ) -> Coordinator<Initialized, Tx> {
-        // Create struct
-        let transaction = event_store
-            .lock()
-            .await
-            .init_transaction(transaction, node.serial, id)
-            .await;
-        Coordinator::<Initialized, Tx> {
+    #[instrument(level = "trace", skip(node, transaction))]
+    pub async fn new(node: Arc<Node<N, E, S>>, transaction: Tx, id: u128) -> Self {
+        let t0 = node.event_store.lock().await.init_t_zero(node.info.serial);
+        let network_interface = node.network.get_interface().await;
+        Coordinator {
             node,
             network_interface,
-            event_store,
-            transaction,
-            phantom: PhantomData,
-            stats,
-            wait_handler,
+            transaction: TransactionStateMachine {
+                id,
+                state: State::Undefined,
+                transaction: Some(transaction),
+                t_zero: t0,
+                t: T(*t0),
+                ..Default::default()
+            },
         }
     }
-}
 
-impl<Tx> Coordinator<Recover, Tx>
-where
-    Tx: Transaction,
-{
-    #[instrument(level = "trace", skip(network_interface, wait_handler))]
-    pub async fn recover(
-        node: Arc<NodeInfo>,
-        event_store: Arc<Mutex<EventStore>>,
-        network_interface: Arc<dyn NetworkInterface>,
-        t0_recover: T0,
-        stats: Arc<Stats>,
-        wait_handler: Arc<WaitHandler>,
-    ) -> Result<CoordinatorIterator<Tx>> {
+    #[instrument(level = "trace", skip(self))]
+    pub async fn run(&mut self) -> Result<Tx::ExecutionResult> {
+        match self.pre_accept().await {
+            Ok(result) => Ok(result),
+            Err(_e) => todo!(), // Handle error / recover
+        }
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    pub async fn pre_accept(&mut self) -> Result<Tx::ExecutionResult, ConsensusError> {
+        self.node
+            .stats
+            .total_requests
+            .fetch_add(1, Ordering::Relaxed);
+
+        // Create the PreAccepted msg
+        let pre_accepted_request = PreAcceptRequest {
+            id: self.transaction.id.to_be_bytes().into(),
+            event: self.transaction.transaction.as_bytes(),
+            timestamp_zero: (*self.transaction.t_zero).into(),
+        };
+
+        let pre_accepted_responses = self
+            .network_interface
+            .broadcast(BroadcastRequest::PreAccept(
+                pre_accepted_request,
+                self.node.info.serial,
+            ))
+            .await?;
+
+        let pa_responses = pre_accepted_responses
+            .into_iter()
+            .map(|res| res.into_inner())
+            .collect::<Result<Vec<_>>>()?;
+
+        if pa_responses
+            .iter()
+            .any(|PreAcceptResponse { nack, .. }| *nack)
+        {
+            return Err(ConsensusError::CompetingCoordinator);
+        }
+
+        self.pre_accept_consensus(&pa_responses).await?;
+
+        self.accept().await
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn pre_accept_consensus(&mut self, responses: &[PreAcceptResponse]) -> Result<()> {
+        // Collect deps by t_zero and only keep the max t
+        for response in responses {
+            let t_response = T::try_from(response.timestamp.as_slice())?;
+            if t_response > self.transaction.t {
+                self.transaction.t = t_response;
+            }
+            self.transaction
+                .dependencies
+                .extend(from_dependency(response.dependencies.clone())?);
+        }
+
+        // Upsert store
+        self.node
+            .event_store
+            .lock()
+            .await
+            .upsert_tx((&self.transaction).into());
+
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    pub async fn accept(&mut self) -> Result<Tx::ExecutionResult, ConsensusError> {
+        // Safeguard: T0 <= T
+        assert!(*self.transaction.t_zero <= *self.transaction.t);
+
+        if *self.transaction.t_zero != *self.transaction.t {
+            self.node
+                .stats
+                .total_accepts
+                .fetch_add(1, Ordering::Relaxed);
+            let accepted_request = AcceptRequest {
+                id: self.transaction.id.to_be_bytes().into(),
+                ballot: self.transaction.ballot.into(),
+                event: self.transaction.transaction.as_bytes(),
+                timestamp_zero: (*self.transaction.t_zero).into(),
+                timestamp: (*self.transaction.t).into(),
+                dependencies: into_dependency(&self.transaction.dependencies),
+            };
+            let accepted_responses = self
+                .network_interface
+                .broadcast(BroadcastRequest::Accept(accepted_request))
+                .await?;
+
+            let pa_responses = accepted_responses
+                .into_iter()
+                .map(|res| res.into_inner())
+                .collect::<Result<Vec<_>>>()?;
+
+            if pa_responses.iter().any(|AcceptResponse { nack, .. }| *nack) {
+                return Err(ConsensusError::CompetingCoordinator);
+            }
+
+            self.accept_consensus(&pa_responses).await?;
+        }
+        self.commit().await
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn accept_consensus(&mut self, responses: &[AcceptResponse]) -> Result<()> {
+        // A little bit redundant, but I think the alternative to create a common behavior between responses may be even worse
+        // Handle returned dependencies
+        for response in responses {
+            for dep in from_dependency(response.dependencies.clone())?.iter() {
+                if !self.transaction.dependencies.contains(dep) {
+                    self.transaction.dependencies.insert(*dep);
+                }
+            }
+        }
+
+        // Mut state and update entry
+        self.transaction.state = State::Accepted;
+        self.node
+            .event_store
+            .lock()
+            .await
+            .upsert_tx((&self.transaction).into());
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    pub async fn commit(&mut self) -> Result<Tx::ExecutionResult, ConsensusError> {
+        let committed_request = CommitRequest {
+            id: self.transaction.id.to_be_bytes().into(),
+            event: self.transaction.transaction.as_bytes(),
+            timestamp_zero: (*self.transaction.t_zero).into(),
+            timestamp: (*self.transaction.t).into(),
+            dependencies: into_dependency(&self.transaction.dependencies),
+        };
+        let network_interface_clone = self.network_interface.clone();
+
+        let (committed_result, broadcast_result) = tokio::join!(
+            self.commit_consensus(),
+            network_interface_clone.broadcast(BroadcastRequest::Commit(committed_request))
+        );
+
+        committed_result.unwrap();
+        broadcast_result.unwrap(); // TODO Recovery
+
+        self.apply().await
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn commit_consensus(&mut self) -> Result<()> {
+        self.transaction.state = State::Commited;
+
+        let (sx, rx) = tokio::sync::oneshot::channel();
+        self.node
+            .wait_handler
+            .read()
+            .await
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Missing wait handler"))?
+            .send_msg(
+                self.transaction.t_zero,
+                self.transaction.t,
+                self.transaction.dependencies.clone(),
+                self.transaction.transaction.as_bytes(),
+                WaitAction::CommitBefore,
+                sx,
+                self.transaction.id,
+            )
+            .await?;
+        let _ = rx.await;
+
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    pub async fn apply(&mut self) -> Result<Tx::ExecutionResult, ConsensusError> {
+        eprintln!("START APPLY {}", self.transaction.id);
+        let result = self.execute_consensus().await?;
+
+        let applied_request = ApplyRequest {
+            id: self.transaction.id.to_be_bytes().into(),
+            event: self.transaction.transaction.as_bytes(),
+            timestamp: (*self.transaction.t).into(),
+            timestamp_zero: (*self.transaction.t_zero).into(),
+            dependencies: into_dependency(&self.transaction.dependencies),
+            //result: vec![], // Theoretically not needed right?
+        };
+
+        self.network_interface
+            .broadcast(BroadcastRequest::Apply(applied_request))
+            .await?; // This should not be awaited
+
+        Ok(result)
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn execute_consensus(&mut self) -> Result<Tx::ExecutionResult> {
+        self.transaction.state = State::Applied;
+        let (sx, _) = tokio::sync::oneshot::channel();
+        self.node
+            .get_wait_handler()
+            .await?
+            .send_msg(
+                self.transaction.t_zero,
+                self.transaction.t,
+                self.transaction.dependencies.clone(),
+                self.transaction.transaction.as_bytes(),
+                WaitAction::ApplyAfter,
+                sx,
+                self.transaction.id,
+            )
+            .await?;
+
+        self.node.executor.execute(self.transaction.transaction)
+    }
+
+    #[instrument(level = "trace", skip(node))]
+    pub async fn recover(node: Arc<Node<N, E, S>>, t0_recover: T0) -> Result<Tx::ExecutionResult> {
         let mut event_store_lock = event_store.lock().await;
         let event = event_store_lock.get_or_insert(t0_recover).await;
         if matches!(event.state, State::Undefined) {
@@ -426,259 +492,6 @@ where
                 CoordinatorIterator::Recovering
             }
         })
-    }
-}
-
-impl<Tx> Coordinator<Initialized, Tx>
-where
-    Tx: Transaction,
-{
-    #[instrument(level = "trace", skip(self))]
-    pub async fn pre_accept(mut self) -> Result<Coordinator<PreAccepted, Tx>, ConsensusError> {
-        self.stats.total_requests.fetch_add(1, Ordering::Relaxed);
-
-        // Create the PreAccepted msg
-        let pre_accepted_request = PreAcceptRequest {
-            id: self.transaction.id.to_be_bytes().into(),
-            event: self.transaction.transaction.as_bytes(),
-            timestamp_zero: (*self.transaction.t_zero).into(),
-        };
-
-        let pre_accepted_responses = self
-            .network_interface
-            .broadcast(BroadcastRequest::PreAccept(
-                pre_accepted_request,
-                self.node.serial,
-            ))
-            .await?;
-
-        let pa_responses = pre_accepted_responses
-            .into_iter()
-            .map(|res| res.into_inner())
-            .collect::<Result<Vec<_>>>()?;
-
-        if pa_responses
-            .iter()
-            .any(|PreAcceptResponse { nack, .. }| *nack)
-        {
-            return Err(ConsensusError::CompetingCoordinator);
-        }
-
-        self.pre_accept_consensus(&pa_responses).await?;
-
-        Ok(Coordinator::<PreAccepted, Tx> {
-            node: self.node,
-            network_interface: self.network_interface,
-            event_store: self.event_store,
-            transaction: self.transaction,
-            stats: self.stats,
-            wait_handler: self.wait_handler,
-            phantom: PhantomData,
-        })
-    }
-
-    #[instrument(level = "trace", skip(self))]
-    async fn pre_accept_consensus(&mut self, responses: &[PreAcceptResponse]) -> Result<()> {
-        // Collect deps by t_zero and only keep the max t
-        for response in responses {
-            let t_response = T::try_from(response.timestamp.as_slice())?;
-            if t_response > self.transaction.t {
-                self.transaction.t = t_response;
-            }
-            self.transaction
-                .dependencies
-                .extend(from_dependency(response.dependencies.clone())?);
-        }
-
-        // Upsert store
-        self.event_store
-            .lock()
-            .await
-            .upsert((&self.transaction).into())
-            .await;
-
-        Ok(())
-    }
-}
-
-impl<Tx> Coordinator<PreAccepted, Tx>
-where
-    Tx: Transaction,
-{
-    #[instrument(level = "trace", skip(self))]
-    pub async fn accept(mut self) -> Result<Coordinator<Accepted, Tx>, ConsensusError> {
-        // Safeguard: T0 <= T
-        assert!(*self.transaction.t_zero <= *self.transaction.t);
-
-        if *self.transaction.t_zero != *self.transaction.t {
-            self.stats.total_accepts.fetch_add(1, Ordering::Relaxed);
-            let accepted_request = AcceptRequest {
-                id: self.transaction.id.to_be_bytes().into(),
-                ballot: self.transaction.ballot.into(),
-                event: self.transaction.transaction.as_bytes(),
-                timestamp_zero: (*self.transaction.t_zero).into(),
-                timestamp: (*self.transaction.t).into(),
-                dependencies: into_dependency(&self.transaction.dependencies),
-            };
-            let accepted_responses = self
-                .network_interface
-                .broadcast(BroadcastRequest::Accept(accepted_request))
-                .await?;
-
-            let pa_responses = accepted_responses
-                .into_iter()
-                .map(|res| res.into_inner())
-                .collect::<Result<Vec<_>>>()?;
-
-            if pa_responses.iter().any(|AcceptResponse { nack, .. }| *nack) {
-                return Err(ConsensusError::CompetingCoordinator);
-            }
-
-            self.accept_consensus(&pa_responses).await?;
-        }
-
-        Ok(Coordinator::<Accepted, Tx> {
-            node: self.node,
-            network_interface: self.network_interface,
-            event_store: self.event_store,
-            transaction: self.transaction,
-            stats: self.stats,
-            wait_handler: self.wait_handler,
-            phantom: PhantomData,
-        })
-    }
-
-    #[instrument(level = "trace", skip(self))]
-    async fn accept_consensus(&mut self, responses: &[AcceptResponse]) -> Result<()> {
-        // A little bit redundant, but I think the alternative to create a common behavior between responses may be even worse
-        // Handle returned dependencies
-        for response in responses {
-            for dep in from_dependency(response.dependencies.clone())?.iter() {
-                if !self.transaction.dependencies.contains(dep) {
-                    self.transaction.dependencies.insert(*dep);
-                }
-            }
-        }
-
-        // Mut state and update entry
-        self.transaction.state = State::Accepted;
-        self.event_store
-            .lock()
-            .await
-            .upsert((&self.transaction).into())
-            .await;
-
-        Ok(())
-    }
-}
-
-impl<Tx> Coordinator<Accepted, Tx>
-where
-    Tx: Transaction,
-{
-    #[instrument(level = "trace", skip(self))]
-    pub async fn commit(mut self) -> Result<Coordinator<Committed, Tx>> {
-        let committed_request = CommitRequest {
-            id: self.transaction.id.to_be_bytes().into(),
-            event: self.transaction.transaction.as_bytes(),
-            timestamp_zero: (*self.transaction.t_zero).into(),
-            timestamp: (*self.transaction.t).into(),
-            dependencies: into_dependency(&self.transaction.dependencies),
-        };
-        let network_interface_clone = self.network_interface.clone();
-
-        let (committed_result, broadcast_result) = tokio::join!(
-            self.commit_consensus(),
-            network_interface_clone.broadcast(BroadcastRequest::Commit(committed_request))
-        );
-
-        committed_result.unwrap();
-        broadcast_result.unwrap(); // TODO Recovery
-
-        Ok(Coordinator::<Committed, Tx> {
-            node: self.node,
-            network_interface: self.network_interface,
-            event_store: self.event_store,
-            transaction: self.transaction,
-            stats: self.stats,
-            wait_handler: self.wait_handler,
-            phantom: PhantomData,
-        })
-    }
-
-    #[instrument(level = "trace", skip(self))]
-    async fn commit_consensus(&mut self) -> Result<()> {
-        self.transaction.state = State::Commited;
-
-        let (sx, rx) = tokio::sync::oneshot::channel();
-        self.wait_handler
-            .send_msg(
-                self.transaction.t_zero,
-                self.transaction.t,
-                self.transaction.dependencies.clone(),
-                self.transaction.transaction.as_bytes(),
-                WaitAction::CommitBefore,
-                sx,
-                self.transaction.id,
-            )
-            .await?;
-        let _ = rx.await;
-
-        Ok(())
-    }
-}
-
-impl<Tx> Coordinator<Committed, Tx>
-where
-    Tx: Transaction,
-{
-    #[instrument(level = "trace", skip(self))]
-    pub async fn apply(mut self) -> Result<Coordinator<Applied, Tx>> {
-        eprintln!("START APPLY {}", self.transaction.id);
-        self.execute_consensus().await?;
-
-        let applied_request = ApplyRequest {
-            id: self.transaction.id.to_be_bytes().into(),
-            event: self.transaction.transaction.as_bytes(),
-            timestamp: (*self.transaction.t).into(),
-            timestamp_zero: (*self.transaction.t_zero).into(),
-            dependencies: into_dependency(&self.transaction.dependencies),
-            //result: vec![], // Theoretically not needed right?
-        };
-
-        self.network_interface
-            .broadcast(BroadcastRequest::Apply(applied_request))
-            .await?; // This should not be awaited
-
-        Ok(Coordinator::<Applied, Tx> {
-            node: self.node,
-            network_interface: self.network_interface,
-            event_store: self.event_store,
-            transaction: self.transaction,
-            stats: self.stats,
-            wait_handler: self.wait_handler,
-            phantom: PhantomData,
-        })
-    }
-
-    #[instrument(level = "trace", skip(self))]
-    async fn execute_consensus(&mut self) -> Result<Tx::ExecutionResult> {
-        // TODO: Apply in backend
-        self.transaction.state = State::Applied;
-        let (sx, _) = tokio::sync::oneshot::channel();
-        self.wait_handler
-            .send_msg(
-                self.transaction.t_zero,
-                self.transaction.t,
-                self.transaction.dependencies.clone(),
-                self.transaction.transaction.as_bytes(),
-                WaitAction::ApplyAfter,
-                sx,
-                self.transaction.id,
-            )
-            .await?;
-
-        self.transaction.transaction.execute()
     }
 }
 

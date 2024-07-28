@@ -1,13 +1,14 @@
+use crate::coordinator::Coordinator;
 use crate::replica::ReplicaConfig;
-use crate::{coordinator::CoordinatorIterator, wait_handler::WaitHandler};
-use anyhow::Result;
+use crate::wait_handler::WaitHandler;
+use anyhow::{anyhow, Result};
 use diesel_ulid::DieselUlid;
 use std::fmt::Debug;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::network::{Network, NodeInfo};
 use synevi_persistence::event_store::Store;
 use synevi_types::{Executor, Transaction};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tracing::instrument;
 
 #[derive(Debug, Default)]
@@ -28,13 +29,15 @@ where
     pub executor: E,
     pub event_store: Mutex<S>,
     pub stats: Stats,
-    semaphore: tokio::sync::Semaphore,
+    pub wait_handler: RwLock<Option<Arc<WaitHandler<N, E, S>>>>,
+    semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl<N, E, S> Node<N, E, S>
 where
-    N: Network + Send + Sync,
-    E: Executor + Send + Sync,
+    N: Network,
+    E: Executor,
+    S: Store,
 {
     #[instrument(level = "trace", skip(network, executor, store))]
     pub async fn new_with_parameters(
@@ -66,6 +69,7 @@ where
             stats,
             semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
             executor,
+            wait_handler: RwLock::new(None),
         });
 
         let wait_handler = WaitHandler::new(node.clone());
@@ -74,9 +78,11 @@ where
             wait_handler_clone.run().await.unwrap();
         });
 
-        let replica = Arc::new(ReplicaConfig::new(node.clone(), wait_handler));
+        *node.wait_handler.write().await = Some(wait_handler);
+
+        let replica = ReplicaConfig::new(node.clone());
         // Spawn tonic server
-        network.spawn_server(replica).await?;
+        node.network.spawn_server(replica).await?;
 
         // If no config / persistence -> default
         Ok(node)
@@ -88,36 +94,23 @@ where
     }
 
     #[instrument(level = "trace", skip(self, transaction))]
-    pub async fn transaction<T: Transaction>(
-        &self,
+    pub async fn transaction(
+        self: Arc<Self>,
         id: u128,
-        transaction: T,
-    ) -> Result<T::ExecutionResult> {
+        transaction: E::Tx,
+    ) -> Result<<E::Tx as Transaction>::ExecutionResult> {
         let _permit = self.semaphore.acquire().await?;
-        let interface = self.network.get_interface().await;
-        let mut coordinator_iter = CoordinatorIterator::new(
-            self.info.clone(),
-            self.event_store.clone(),
-            interface,
-            transaction,
-            self.stats.clone(),
-            self.wait_handler.clone(),
-            id,
-        )
-        .await;
-
-        while coordinator_iter.next().await?.is_some() {}
-        Ok(coordinator_iter.get_result())
+        let mut coordinator = Coordinator::new(self.clone(), transaction, id).await;
+        coordinator.run().await
     }
 
-    #[instrument(level = "trace", skip(self))]
-    pub fn get_event_store(&self) -> Arc<Mutex<S>> {
-        self.event_store.clone()
-    }
-
-    #[instrument(level = "trace", skip(self))]
-    pub fn get_info(&self) -> Arc<NodeInfo> {
-        self.info.clone()
+    pub async fn get_wait_handler(&self) -> Result<Arc<WaitHandler<N, E, S>>> {
+        let lock = self.wait_handler.read().await;
+        let handler = lock
+            .as_ref()
+            .ok_or_else(|| anyhow!("Missing wait_handler"))?
+            .clone();
+        Ok(handler)
     }
 
     pub fn get_stats(&self) -> (u64, u64, u64) {
@@ -137,20 +130,16 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::node::Node;
+    use crate::tests::NetworkMock;
+    use diesel_ulid::DieselUlid;
+    use rand::distributions::{Distribution, Uniform};
     use std::collections::BTreeMap;
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
-
-    use diesel_ulid::DieselUlid;
-    use rand::distributions::{Distribution, Uniform};
-
     use synevi_network::consensus_transport::State;
     use synevi_types::{T, T0};
-
-    use crate::coordinator::CoordinatorIterator;
-    use crate::node::Node;
-    use crate::tests::NetworkMock;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn recovery_single() {

@@ -19,12 +19,11 @@ where
     S: Store + Send + Sync,
 {
     node: Arc<Node<N, E, S>>,
-    wait_handler: Arc<WaitHandler<N, E, S>>,
 }
 
 impl<N, E, S> ReplicaConfig<N, E, S> {
-    pub fn new(node: Arc<Node<N, E, S>>, wait_handler: Arc<WaitHandler<N, E, S>>) -> Self {
-        Self { node, wait_handler }
+    pub fn new(node: Arc<Node<N, E, S>>) -> Self {
+        Self { node }
     }
 }
 

@@ -24,7 +24,7 @@ pub struct EventStore {
 
 type Dependencies = HashSet<T0, RandomState>;
 
-pub trait Store {
+pub trait Store: Send + Sync + 'static {
     // Initialize a new t0
     fn init_t_zero(&mut self, node_serial: u16) -> T0;
     // Pre-accept a transaction

@@ -1,4 +1,4 @@
-use crate::{coordinator::CoordinatorIterator, node::Node};
+use crate::node::Node;
 use ahash::RandomState;
 use anyhow::Result;
 use async_channel::{Receiver, Sender};

@@ -29,11 +29,12 @@ pub trait NetworkInterface: Send + Sync {
 }
 
 #[async_trait::async_trait]
-pub trait Network {
+pub trait Network: Send + Sync + 'static {
+    type Ni: NetworkInterface;
     async fn add_members(&self, members: Vec<(DieselUlid, u16, String)>);
     async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<()>;
     async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<()>;
-    async fn get_interface(&self) -> Arc<dyn NetworkInterface>;
+    async fn get_interface(&self) -> Arc<Self::Ni>;
     async fn get_waiting_time(&self, node_serial: u16) -> u64;
 }
 
@@ -113,6 +114,8 @@ impl NetworkConfig {
 
 #[async_trait::async_trait]
 impl Network for NetworkConfig {
+    type Ni = NetworkSet;
+
     async fn add_members(&self, members: Vec<(DieselUlid, u16, String)>) {
         for (id, serial, host) in members {
             self.add_member(id, serial, host).await.unwrap();
@@ -149,7 +152,7 @@ impl Network for NetworkConfig {
         Ok(())
     }
 
-    async fn get_interface(&self) -> Arc<dyn NetworkInterface> {
+    async fn get_interface(&self) -> Arc<NetworkSet> {
         self.create_network_set().await
     }
 

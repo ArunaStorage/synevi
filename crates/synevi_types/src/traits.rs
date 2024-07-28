@@ -9,9 +9,7 @@ pub trait Transaction: Default + std::fmt::Debug + Send {
         Self: Sized;
 }
 
-pub trait Executor {
+pub trait Executor: Send + Sync + 'static {
     type Tx: Transaction;
-    type TxResult: Send;
-
-    fn execute(&self, transaction: Self::Tx) -> Result<Self::TxResult>;
+    fn execute(&self, transaction: Self::Tx) -> Result<<Self::Tx as Transaction>::ExecutionResult>;
 }
