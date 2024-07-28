@@ -9,12 +9,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, CommitRequest, PreAcceptRequest,
-    PreAcceptResponse, RecoverRequest, RecoverResponse, State,
+    PreAcceptResponse, RecoverRequest, RecoverResponse,
 };
 use synevi_network::network::{BroadcastRequest, Network, NetworkInterface, NodeInfo};
 use synevi_network::utils::IntoInner;
 use synevi_persistence::event_store::Store;
-use synevi_types::{Ballot, Executor, Transaction, T, T0};
+use synevi_types::types::RecoverEvent;
+use synevi_types::{Ballot, Executor, State, Transaction, T, T0};
 use tokio::sync::Mutex;
 use tracing::instrument;
 
@@ -39,6 +40,17 @@ pub struct TransactionStateMachine<Tx: Transaction> {
     pub t: T,
     pub dependencies: HashSet<T0, RandomState>,
     pub ballot: Ballot,
+}
+
+impl<Tx> TransactionStateMachine<Tx>
+where
+    Tx: Transaction,
+{
+    fn get_transaction_bytes(&self) -> Vec<u8> {
+        self.transaction
+            .as_ref()
+            .map_or_else(Vec::new, |tx| tx.as_bytes())
+    }
 }
 
 impl<Tx, N, E, S> Coordinator<Tx, N, E, S>
@@ -84,7 +96,7 @@ where
         // Create the PreAccepted msg
         let pre_accepted_request = PreAcceptRequest {
             id: self.transaction.id.to_be_bytes().into(),
-            event: self.transaction.transaction.as_bytes(),
+            event: self.transaction.get_transaction_bytes(),
             timestamp_zero: (*self.transaction.t_zero).into(),
         };
 
@@ -149,7 +161,7 @@ where
             let accepted_request = AcceptRequest {
                 id: self.transaction.id.to_be_bytes().into(),
                 ballot: self.transaction.ballot.into(),
-                event: self.transaction.transaction.as_bytes(),
+                event: self.transaction.get_transaction_bytes(),
                 timestamp_zero: (*self.transaction.t_zero).into(),
                 timestamp: (*self.transaction.t).into(),
                 dependencies: into_dependency(&self.transaction.dependencies),
@@ -199,7 +211,7 @@ where
     pub async fn commit(&mut self) -> Result<Tx::ExecutionResult, ConsensusError> {
         let committed_request = CommitRequest {
             id: self.transaction.id.to_be_bytes().into(),
-            event: self.transaction.transaction.as_bytes(),
+            event: self.transaction.get_transaction_bytes(),
             timestamp_zero: (*self.transaction.t_zero).into(),
             timestamp: (*self.transaction.t).into(),
             dependencies: into_dependency(&self.transaction.dependencies),
@@ -232,7 +244,7 @@ where
                 self.transaction.t_zero,
                 self.transaction.t,
                 self.transaction.dependencies.clone(),
-                self.transaction.transaction.as_bytes(),
+                self.transaction.get_transaction_bytes(),
                 WaitAction::CommitBefore,
                 sx,
                 self.transaction.id,
@@ -250,7 +262,7 @@ where
 
         let applied_request = ApplyRequest {
             id: self.transaction.id.to_be_bytes().into(),
-            event: self.transaction.transaction.as_bytes(),
+            event: self.transaction.get_transaction_bytes(),
             timestamp: (*self.transaction.t).into(),
             timestamp_zero: (*self.transaction.t_zero).into(),
             dependencies: into_dependency(&self.transaction.dependencies),
@@ -275,82 +287,68 @@ where
                 self.transaction.t_zero,
                 self.transaction.t,
                 self.transaction.dependencies.clone(),
-                self.transaction.transaction.as_bytes(),
+                self.transaction.get_transaction_bytes(),
                 WaitAction::ApplyAfter,
                 sx,
                 self.transaction.id,
             )
             .await?;
 
-        self.node.executor.execute(self.transaction.transaction)
+        let transaction = self
+            .transaction
+            .transaction
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Transaction not found in coordinator"))?;
+
+        self.node.executor.execute(transaction)
     }
 
     #[instrument(level = "trace", skip(node))]
     pub async fn recover(node: Arc<Node<N, E, S>>, t0_recover: T0) -> Result<Tx::ExecutionResult> {
-        let mut event_store_lock = event_store.lock().await;
-        let event = event_store_lock.get_or_insert(t0_recover).await;
-        if matches!(event.state, State::Undefined) {
-            tracing::debug!("Node {} with undefined recovery", node.serial);
-            return Ok(CoordinatorIterator::Recovering);
-        }
-
-        // Just for sanity purposes
-        assert_eq!(event.t_zero, t0_recover);
-
-        let ballot = Ballot(event.ballot.next_with_node(node.serial).into_time());
-        event_store_lock.update_ballot(&t0_recover, ballot);
-        drop(event_store_lock);
+        let recover_event = node.event_store.lock().await.recover_event(&t0_recover)?;
+        let network_interface = node.network.get_interface().await;
 
         let recover_responses = network_interface
             .broadcast(BroadcastRequest::Recover(RecoverRequest {
-                id: event.id.to_be_bytes().to_vec(),
-                ballot: ballot.into(),
-                event: event.event,
+                id: recover_event.id.to_be_bytes().to_vec(),
+                ballot: recover_event.ballot.into(),
+                event: recover_event.transaction.clone(),
                 timestamp_zero: t0_recover.into(),
             }))
             .await?;
 
-        Self::recover_consensus(
+        let mut recover_coordinator = Coordinator::<Tx, N, E, S> {
             node,
-            event_store,
             network_interface,
-            recover_responses
-                .into_iter()
-                .map(|res| res.into_inner())
-                .collect::<Result<Vec<_>>>()?,
-            t0_recover,
-            stats,
-            ballot,
-            wait_handler,
-        )
-        .await
+            transaction: TransactionStateMachine {
+                transaction: Some(Tx::from_bytes(recover_event.transaction)?),
+                t_zero: recover_event.t_zero,
+                t: recover_event.t,
+                ballot: recover_event.ballot,
+                state: recover_event.state,
+                id: recover_event.id,
+                dependencies: recover_event.dependencies,
+            },
+        };
+
+        recover_coordinator
+            .recover_consensus(
+                recover_responses
+                    .into_iter()
+                    .map(|res| res.into_inner())
+                    .collect::<Result<Vec<_>>>()?,
+            )
+            .await
     }
 
-    #[instrument(level = "trace", skip(network_interface, wait_handler))]
+    #[instrument(level = "trace", skip(self))]
     async fn recover_consensus(
-        node: Arc<NodeInfo>,
-        event_store: Arc<Mutex<EventStore>>,
-        network_interface: Arc<dyn NetworkInterface>,
-        mut responses: Vec<RecoverResponse>,
-        t0: T0,
-        stats: Arc<Stats>,
-        ballot: Ballot,
-        wait_handler: Arc<WaitHandler>,
-    ) -> Result<CoordinatorIterator<Tx>> {
+        &mut self,
+        responses: Vec<RecoverResponse>,
+    ) -> Result<Tx::ExecutionResult> {
         // Query the newest state
-        let event = event_store.lock().await.get_or_insert(t0).await;
-        let previous_state = event.state;
-
-        let mut state_machine = TransactionStateMachine {
-            transaction: Tx::from_bytes(event.event)?,
-            t_zero: event.t_zero,
-            t: event.t,
-            ballot,
-            state: previous_state,
-            tx_result: None,
-            id: event.id,
-            dependencies: event.dependencies,
-        };
+        // let event = event_store.lock().await.get_or_insert(t0).await;
+        // let previous_state = event.state;
 
         // Keep track of values to replace
         let mut highest_ballot: Option<Ballot> = None;
@@ -380,34 +378,35 @@ where
             waiting.extend(from_dependency(response.wait.clone())?);
 
             // Update state
-            let replica_state = response.local_state();
+            let replica_state = State::from(response.local_state() as i32);
 
             match replica_state {
-                State::PreAccepted if state_machine.state <= State::PreAccepted => {
-                    if replica_t > state_machine.t {
-                        state_machine.t = replica_t;
+                State::PreAccepted if self.transaction.state <= State::PreAccepted => {
+                    if replica_t > self.transaction.t {
+                        self.transaction.t = replica_t;
                     }
-                    state_machine.state = State::PreAccepted;
-                    state_machine
+                    self.transaction.state = State::PreAccepted;
+                    self.transaction
                         .dependencies
                         .extend(from_dependency(response.dependencies.clone())?);
                 }
-                State::Accepted if state_machine.state < State::Accepted => {
-                    state_machine.t = replica_t;
-                    state_machine.state = State::Accepted;
-                    state_machine.dependencies = from_dependency(response.dependencies.clone())?;
+                State::Accepted if self.transaction.state < State::Accepted => {
+                    self.transaction.t = replica_t;
+                    self.transaction.state = State::Accepted;
+                    self.transaction.dependencies = from_dependency(response.dependencies.clone())?;
                 }
                 State::Accepted
-                    if state_machine.state == State::Accepted && replica_t > state_machine.t =>
+                    if self.transaction.state == State::Accepted
+                        && replica_t > self.transaction.t =>
                 {
-                    state_machine.t = replica_t;
-                    state_machine.dependencies = from_dependency(response.dependencies.clone())?;
+                    self.transaction.t = replica_t;
+                    self.transaction.dependencies = from_dependency(response.dependencies.clone())?;
                 }
-                any_state if any_state > state_machine.state => {
-                    state_machine.state = any_state;
-                    state_machine.t = replica_t;
-                    if state_machine.state >= State::Accepted {
-                        state_machine.dependencies =
+                any_state if any_state > self.transaction.state => {
+                    self.transaction.state = any_state;
+                    self.transaction.t = replica_t;
+                    if self.transaction.state >= State::Accepted {
+                        self.transaction.dependencies =
                             from_dependency(response.dependencies.clone())?;
                     }
                 }
@@ -429,62 +428,20 @@ where
 
         // Wait for deps
 
-        Ok(match state_machine.state {
-            State::Applied => CoordinatorIterator::Committed(Some(Coordinator::<Committed, Tx> {
-                node,
-                network_interface,
-                event_store,
-                transaction: state_machine,
-                stats,
-                wait_handler,
-                phantom: Default::default(),
-            })),
-            State::Commited => CoordinatorIterator::Accepted(Some(Coordinator::<Accepted, Tx> {
-                node,
-                network_interface,
-                event_store,
-                transaction: state_machine,
-                stats,
-                wait_handler,
-                phantom: Default::default(),
-            })),
-            State::Accepted => {
-                CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted, Tx> {
-                    node,
-                    network_interface,
-                    event_store,
-                    transaction: state_machine,
-                    stats,
-                    wait_handler,
-                    phantom: Default::default(),
-                }))
-            }
+        Ok(match self.transaction.state {
+            State::Applied => self.apply().await?,
+            State::Commited => self.commit().await?,
+            State::Accepted => self.accept().await?,
 
             State::PreAccepted => {
                 if superseding {
-                    CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted, Tx> {
-                        node,
-                        network_interface,
-                        event_store,
-                        transaction: state_machine,
-                        stats,
-                        wait_handler,
-                        phantom: Default::default(),
-                    }))
+                    self.pre_accept().await?
                 } else if !waiting.is_empty() {
                     // We will wait anyway if RestartRecovery is returned
                     return Ok(CoordinatorIterator::RestartRecovery);
                 } else {
                     state_machine.t = T(*state_machine.t_zero);
-                    CoordinatorIterator::PreAccepted(Some(Coordinator::<PreAccepted, Tx> {
-                        node,
-                        network_interface,
-                        event_store,
-                        transaction: state_machine,
-                        stats,
-                        wait_handler,
-                        phantom: Default::default(),
-                    }))
+                    self.pre_accept().await?
                 }
             }
             _ => {

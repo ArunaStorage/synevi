@@ -121,15 +121,14 @@ pub enum State {
     Applied = 4,
 }
 
-impl TryFrom<i32> for State {
-    type Error = anyhow::Error;
-    fn try_from(value: i32) -> Result<Self> {
+impl From<i32> for State {
+    fn from(value: i32) -> Self {
         match value {
-            1 => Ok(State::PreAccepted),
-            2 => Ok(State::Accepted),
-            3 => Ok(State::Commited),
-            4 => Ok(State::Applied),
-            _ => bail!("Invalid state"),
+            1 => Self::PreAccepted,
+            2 => Self::Accepted,
+            3 => Self::Commited,
+            4 => Self::Applied,
+            _ => Self::Undefined,
         }
     }
 }
@@ -152,4 +151,15 @@ pub struct RecoverDependencies {
     pub wait: HashSet<T0, RandomState>,
     pub superseding: bool,
     pub timestamp: T,
+}
+
+#[derive(Debug, Default)]
+pub struct RecoverEvent {
+    pub id: u128,
+    pub t_zero: T0,
+    pub t: T,
+    pub ballot: Ballot,
+    pub state: State,
+    pub transaction: Vec<u8>,
+    pub dependencies: HashSet<T0, RandomState>,
 }

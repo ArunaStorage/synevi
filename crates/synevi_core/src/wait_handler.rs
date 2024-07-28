@@ -56,7 +56,12 @@ struct WaiterState {
     applied: HashSet<T0, RandomState>,
 }
 
-impl<N, E, S> WaitHandler<N, E, S> {
+impl<N, E, S> WaitHandler<N, E, S>
+where
+    N: Network + Send + Sync,
+    E: Executor + Send + Sync,
+    S: Store + Send + Sync,
+{
     pub fn new(node: Arc<Node<N, E, S>>) -> Arc<Self> {
         let (sender, receiver) = async_channel::bounded(1000);
         Arc::new(Self {
@@ -164,7 +169,7 @@ impl<N, E, S> WaitHandler<N, E, S> {
             WaitAction::CommitBefore => State::Commited,
             WaitAction::ApplyAfter => State::Applied,
         };
-        self.event_store.lock().await.upsert(UpsertEvent {
+        self.node.event_store.lock().await.upsert_tx(UpsertEvent {
             id: *id,
             t_zero: *t_zero,
             t: *t,

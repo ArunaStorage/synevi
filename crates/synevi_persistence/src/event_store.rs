@@ -7,6 +7,7 @@ use bytes::Bytes;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
 use synevi_types::types::RecoverDependencies;
+use synevi_types::types::RecoverEvent;
 use synevi_types::State;
 use synevi_types::{Ballot, T, T0};
 use tracing::instrument;
@@ -38,6 +39,8 @@ pub trait Store: Send + Sync + 'static {
     fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> Dependencies;
     // Get the recover dependencies for a transaction
     fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies>;
+    // Tries to recover an unfinished event from the store
+    fn recover_event(&self, t_zero_recover: &T0) -> Result<RecoverEvent>;
     // Check and update the ballot for a transaction
     // Returns true if the ballot was accepted (current <= ballot)
     fn accept_tx_ballot(&mut self, t_zero: &T0, ballot: Ballot) -> bool;
@@ -253,6 +256,19 @@ impl Store for EventStore {
 
     fn get_event_state(&self, t_zero: &T0) -> Option<State> {
         self.events.get(t_zero).map(|event| event.state)
+    }
+
+    fn recover_event(&self, t_zero_recover: &T0) -> Result<RecoverEvent> {
+        let Some(state) = self.get_event_state(&t_zero_recover) else {
+            return Err(anyhow::anyhow!(
+                "No state found for t0 {:?}",
+                t_zero_recover
+            ));
+        };
+        if matches!(state, synevi_types::State::Undefined) {
+            return Err(anyhow::anyhow!("Undefined recovery"));
+        }
+        todo!()
     }
 }
 
