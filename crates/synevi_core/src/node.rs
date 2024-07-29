@@ -90,7 +90,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    pub async fn add_member(&mut self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
+    pub async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
         self.network.add_member(id, serial, host).await
     }
 
@@ -127,23 +127,26 @@ where
                 .load(std::sync::atomic::Ordering::Relaxed),
         )
     }
+
+    pub fn get_info(&self) -> NodeInfo {
+        self.info.clone()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::coordinator::Coordinator;
-    use crate::tests::NetworkMock;
     use crate::{node::Node, tests::DummyExecutor};
     use anyhow::Result;
     use diesel_ulid::DieselUlid;
-    use rand::distributions::{Distribution, Uniform};
     use std::collections::BTreeMap;
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
+    use synevi_network::network::GrpcNetwork;
     use synevi_network::network::Network;
-    use synevi_network::{consensus_transport::State, network::GrpcNetwork};
-    use synevi_types::{Executor, T, T0};
+    use synevi_persistence::event_store::Store;
+    use synevi_types::{Executor, State, T, T0};
 
     impl<N, E> Node<N, E>
     where
@@ -170,7 +173,6 @@ mod tests {
         for (i, m) in node_names.iter().enumerate() {
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13100 + i)).unwrap();
             let network = synevi_network::network::GrpcNetwork::new(socket_addr);
-            let (sdx, _) = tokio::sync::mpsc::channel(100);
             let node = Node::new_with_network_and_executor(*m, i as u16, network, DummyExecutor)
                 .await
                 .unwrap();
@@ -186,8 +188,8 @@ mod tests {
             }
         }
         let coordinator = nodes.pop().unwrap();
-        let interface = coordinator.network.get_interface().await;
         coordinator
+            .clone()
             .failing_transaction(1, b"failing".to_vec())
             .await
             .unwrap();
@@ -196,27 +198,27 @@ mod tests {
         // let committed = coordinator_iter.next().await.unwrap();
         // let applied = coordinator_iter.next().await.unwrap();
 
-        let result = coordinator
+        let _result = coordinator
+            .clone()
             .transaction(1, Vec::from("First"))
             .await
             .unwrap();
 
-        let coord = coordinator.get_event_store().lock().await.events.clone();
+        let coord = coordinator.event_store.lock().await.get_event_store();
         for node in nodes {
-            assert_eq!(node.get_event_store().lock().await.events, coord);
+            assert_eq!(node.event_store.lock().await.get_event_store(), coord);
         }
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn recovery_random_test() {
         let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
-        let mut nodes: Vec<Node> = vec![];
+        let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor>>> = vec![];
 
         for (i, m) in node_names.iter().enumerate() {
-            let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13000 + i)).unwrap();
-            let network = Arc::new(synevi_network::network::GrpcNetwork::new(socket_addr));
-            let (sdx, _) = tokio::sync::mpsc::channel(100);
-            let node = Node::new_with_parameters(*m, i as u16, network, None, sdx)
+            let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13100 + i)).unwrap();
+            let network = synevi_network::network::GrpcNetwork::new(socket_addr);
+            let node = Node::new_with_network_and_executor(*m, i as u16, network, DummyExecutor)
                 .await
                 .unwrap();
             nodes.push(node);
@@ -231,72 +233,53 @@ mod tests {
             }
         }
         let coordinator = nodes.pop().unwrap();
-        let arc_coordinator = Arc::new(coordinator);
-
-        let coordinator = arc_coordinator.clone();
-
-        let mut rng = rand::thread_rng();
-        let die = Uniform::from(0..10);
 
         // Working coordinator
         for _ in 0..10 {
             // Working coordinator
-            let mut coordinator_iter = CoordinatorIterator::new(
-                coordinator.info.clone(),
-                coordinator.event_store.clone(),
-                coordinator.network.get_interface().await,
-                Vec::from("Recovery transaction"),
-                coordinator.stats.clone(),
-                coordinator.wait_handler.clone(),
-                0,
-            )
-            .await;
-            while coordinator_iter.next().await.unwrap().is_some() {
-                let throw = die.sample(&mut rng);
-                if throw == 0 {
-                    break;
-                }
-            }
+            coordinator
+                .clone()
+                .failing_transaction(1, b"failing".to_vec())
+                .await
+                .unwrap();
         }
         coordinator
+            .clone()
             .transaction(0, Vec::from("last transaction"))
             .await
             .unwrap();
 
-        let coordinator_store: BTreeMap<T0, T> = arc_coordinator
-            .get_event_store()
+        let coordinator_store: BTreeMap<T0, T> = coordinator
+            .event_store
             .lock()
             .await
-            .events
-            .clone()
+            .get_event_store()
             .into_values()
             .map(|e| (e.t_zero, e.t))
             .collect();
-        assert!(arc_coordinator
-            .get_event_store()
+        assert!(coordinator
+            .event_store
             .lock()
             .await
-            .events
-            .clone()
+            .get_event_store()
             .iter()
             .all(|(_, e)| e.state == State::Applied));
 
         let mut got_mismatch = false;
         for node in nodes {
             let node_store: BTreeMap<T0, T> = node
-                .get_event_store()
+                .event_store
                 .lock()
                 .await
-                .events
-                .clone()
+                .get_event_store()
                 .into_values()
                 .map(|e| (e.t_zero, e.t))
                 .collect();
             assert!(node
-                .get_event_store()
+                .event_store
                 .lock()
                 .await
-                .events
+                .get_event_store()
                 .clone()
                 .iter()
                 .all(|(_, e)| e.state == State::Applied));
@@ -317,30 +300,5 @@ mod tests {
 
             assert!(!got_mismatch);
         }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn database_test() {
-        let network = Arc::new(NetworkMock::default());
-        let path = "../../tests/database/init_test_db".to_string();
-        let (sdx, _) = tokio::sync::mpsc::channel(100);
-        let node = Node::new_with_parameters(DieselUlid::generate(), 0, network, Some(path), sdx)
-            .await
-            .unwrap();
-        node.transaction(
-            u128::from_be_bytes(DieselUlid::generate().as_byte_array()),
-            Vec::from("this is a transaction test"),
-        )
-        .await
-        .unwrap();
-        let mut event_store = node.event_store.lock().await;
-        let db = event_store.database.clone();
-        let all = db.unwrap().read_all().unwrap();
-        let db_entry =
-            synevi_persistence::event::Event::from_bytes(all.first().cloned().unwrap()).unwrap();
-        let ev_entry = event_store.events.first_entry().unwrap();
-        let ev_entry = ev_entry.get();
-
-        assert_eq!(&db_entry, ev_entry);
     }
 }

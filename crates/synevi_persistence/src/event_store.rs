@@ -49,6 +49,8 @@ pub trait Store: Send + Sync + Sized + 'static {
     fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<Option<[u8; 32]>>;
 
     fn get_event_state(&self, t_zero: &T0) -> Option<State>;
+
+    fn get_event_store(&self) -> BTreeMap<T0, Event>;
 }
 
 impl Store for EventStore {
@@ -315,6 +317,10 @@ impl Store for EventStore {
             return Err(anyhow::anyhow!("Undefined recovery"));
         }
         todo!()
+    }
+
+    fn get_event_store(&self) -> BTreeMap<T0, Event> {
+        self.events.clone()
     }
 }
 
