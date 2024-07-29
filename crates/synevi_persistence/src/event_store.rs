@@ -25,7 +25,8 @@ pub struct EventStore {
 
 type Dependencies = HashSet<T0, RandomState>;
 
-pub trait Store: Send + Sync + 'static {
+pub trait Store: Send + Sync + Sized + 'static {
+    fn new(node_serial: u16) -> Result<Self>;
     // Initialize a new t0
     fn init_t_zero(&mut self, node_serial: u16) -> T0;
     // Pre-accept a transaction
@@ -51,6 +52,51 @@ pub trait Store: Send + Sync + 'static {
 }
 
 impl Store for EventStore {
+    fn new(node_serial: u16) -> Result<Self> {
+        // match path {
+        //     Some(path) => {
+        //         // TODO: Read all from DB and fill event store
+        //         let mut events = BTreeMap::default();
+        //         let mut mappings = BTreeMap::default();
+        //         let mut last_applied = T::default();
+        //         let mut latest_t0 = T0::default();
+        //         let db = Database::new(path)?;
+        //         let result = db.read_all()?;
+        //         for entry in result {
+        //             let event = Event::from_bytes(entry)?;
+        //             if event.state == State::Applied && event.t > last_applied {
+        //                 last_applied = event.t;
+        //             }
+        //             if latest_t0 < event.t_zero {
+        //                 latest_t0 = event.t_zero;
+        //             }
+        //             mappings.insert(event.t, event.t_zero);
+        //             events.insert(event.t_zero, event);
+        //         }
+        //         Ok(EventStore {
+        //             events,
+        //             mappings,
+        //             last_applied,
+        //             latest_t0,
+        //             database: Some(db),
+        //             node_serial,
+        //             latest_hash: [0; 32], // TODO: Read from DB
+        //         })
+        //     }
+        //     None =>
+        Ok(EventStore {
+            events: BTreeMap::default(),
+            mappings: BTreeMap::default(),
+            last_applied: T::default(),
+            latest_t0: T0::default(),
+            database: None,
+            node_serial,
+            latest_hash: [0; 32],
+        })
+        // ),
+        // }
+    }
+
     #[instrument(level = "trace")]
     fn init_t_zero(&mut self, node_serial: u16) -> T0 {
         let t0 = T0(self.latest_t0.next_with_node(node_serial).into_time());

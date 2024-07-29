@@ -6,7 +6,7 @@ use diesel_ulid::DieselUlid;
 use std::fmt::Debug;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::network::{Network, NodeInfo};
-use synevi_persistence::event_store::Store;
+use synevi_persistence::event_store::{EventStore, Store};
 use synevi_types::{Executor, Transaction};
 use tokio::sync::{Mutex, RwLock};
 use tracing::instrument;
@@ -18,7 +18,7 @@ pub struct Stats {
     pub total_recovers: AtomicU64,
 }
 
-pub struct Node<N, E, S>
+pub struct Node<N, E, S = EventStore>
 where
     N: Network + Send + Sync,
     E: Executor + Send + Sync,
@@ -39,12 +39,11 @@ where
     E: Executor,
     S: Store,
 {
-    #[instrument(level = "trace", skip(network, executor, store))]
-    pub async fn new_with_parameters(
+    #[instrument(level = "trace", skip(network, executor))]
+    pub async fn new_with_network_and_executor(
         id: DieselUlid,
         serial: u16,
         network: N,
-        store: S,
         executor: E,
     ) -> Result<Arc<Self>> {
         let node_name = NodeInfo { id, serial };
@@ -61,6 +60,8 @@ where
         // tokio::spawn(async move {
         //     reorder_clone.run().await.unwrap();
         // });
+
+        let store = S::new(serial)?;
 
         let node = Arc::new(Node {
             info: node_name,
@@ -130,27 +131,47 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::node::Node;
+    use crate::coordinator::Coordinator;
     use crate::tests::NetworkMock;
+    use crate::{node::Node, tests::DummyExecutor};
+    use anyhow::Result;
     use diesel_ulid::DieselUlid;
     use rand::distributions::{Distribution, Uniform};
     use std::collections::BTreeMap;
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
-    use synevi_network::consensus_transport::State;
-    use synevi_types::{T, T0};
+    use synevi_network::network::Network;
+    use synevi_network::{consensus_transport::State, network::GrpcNetwork};
+    use synevi_types::{Executor, T, T0};
+
+    impl<N, E> Node<N, E>
+    where
+        N: Network,
+        E: Executor<Tx = Vec<u8>>,
+    {
+        pub async fn failing_transaction(
+            self: Arc<Self>,
+            id: u128,
+            transaction: Vec<u8>,
+        ) -> Result<()> {
+            let _permit = self.semaphore.acquire().await?;
+            let mut coordinator = Coordinator::new(self.clone(), transaction, id).await;
+            coordinator.failing_pre_accept().await?;
+            Ok(())
+        }
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn recovery_single() {
         let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
-        let mut nodes: Vec<Node> = vec![];
+        let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor>>> = vec![];
 
         for (i, m) in node_names.iter().enumerate() {
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13100 + i)).unwrap();
-            let network = Arc::new(synevi_network::network::NetworkConfig::new(socket_addr));
+            let network = synevi_network::network::GrpcNetwork::new(socket_addr);
             let (sdx, _) = tokio::sync::mpsc::channel(100);
-            let node = Node::new_with_parameters(*m, i as u16, network, None, sdx)
+            let node = Node::new_with_network_and_executor(*m, i as u16, network, DummyExecutor)
                 .await
                 .unwrap();
             nodes.push(node);
@@ -165,37 +186,22 @@ mod tests {
             }
         }
         let coordinator = nodes.pop().unwrap();
-        let arc_coordinator = Arc::new(coordinator);
-
-        let coordinator = arc_coordinator.clone();
         let interface = coordinator.network.get_interface().await;
-        let mut coordinator_iter = CoordinatorIterator::new(
-            coordinator.info.clone(),
-            coordinator.event_store.clone(),
-            interface,
-            Vec::from("Recovery transaction"),
-            coordinator.stats.clone(),
-            coordinator.wait_handler.clone(),
-            0,
-        )
-        .await;
-        coordinator_iter.next().await.unwrap();
+        coordinator
+            .failing_transaction(1, b"failing".to_vec())
+            .await
+            .unwrap();
 
         // let accepted = coordinator_iter.next().await.unwrap();
         // let committed = coordinator_iter.next().await.unwrap();
         // let applied = coordinator_iter.next().await.unwrap();
 
-        arc_coordinator
+        let result = coordinator
             .transaction(1, Vec::from("First"))
             .await
             .unwrap();
 
-        let coord = arc_coordinator
-            .get_event_store()
-            .lock()
-            .await
-            .events
-            .clone();
+        let coord = coordinator.get_event_store().lock().await.events.clone();
         for node in nodes {
             assert_eq!(node.get_event_store().lock().await.events, coord);
         }
@@ -208,7 +214,7 @@ mod tests {
 
         for (i, m) in node_names.iter().enumerate() {
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13000 + i)).unwrap();
-            let network = Arc::new(synevi_network::network::NetworkConfig::new(socket_addr));
+            let network = Arc::new(synevi_network::network::GrpcNetwork::new(socket_addr));
             let (sdx, _) = tokio::sync::mpsc::channel(100);
             let node = Node::new_with_parameters(*m, i as u16, network, None, sdx)
                 .await

@@ -1,5 +1,5 @@
 use ahash::RandomState;
-use anyhow::{bail, Result};
+use anyhow::Result;
 use bytes::Bytes;
 use monotime::MonoTime;
 use std::{collections::HashSet, ops::Deref};
@@ -162,4 +162,11 @@ pub struct RecoverEvent {
     pub state: State,
     pub transaction: Vec<u8>,
     pub dependencies: HashSet<T0, RandomState>,
+}
+
+#[derive(Debug)]
+pub enum RecoveryState<R> {
+    RestartRecovery,
+    CompetingCoordinator,
+    Recovered(R),
 }

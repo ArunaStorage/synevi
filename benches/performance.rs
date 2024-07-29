@@ -11,7 +11,7 @@ async fn prepare() -> (Vec<Arc<Node>>, Vec<u8>) {
 
     for (i, m) in node_names.iter().enumerate() {
         let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
-        let network = Arc::new(synevi_network::network::NetworkConfig::new(socket_addr));
+        let network = Arc::new(synevi_network::network::GrpcNetwork::new(socket_addr));
         //let path = format!("../tests/database/{}_test_db", i);
         let (sender, receiver) = tokio::sync::mpsc::channel(100);
         let node = Node::new_with_parameters(*m, i as u16, network, None, sender)

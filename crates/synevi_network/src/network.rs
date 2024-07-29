@@ -79,18 +79,18 @@ pub enum BroadcastResponse {
 }
 
 #[derive(Debug)]
-pub struct NetworkConfig {
+pub struct GrpcNetwork {
     pub socket_addr: SocketAddr,
     pub members: Arc<RwLock<Vec<MemberWithLatency>>>,
     join_set: Mutex<JoinSet<Result<()>>>,
 }
 
 #[derive(Debug)]
-pub struct NetworkSet {
+pub struct GrpcNetworkSet {
     members: Vec<Arc<Member>>,
 }
 
-impl NetworkConfig {
+impl GrpcNetwork {
     pub fn new(socket_addr: SocketAddr) -> Self {
         Self {
             socket_addr,
@@ -99,8 +99,8 @@ impl NetworkConfig {
         }
     }
 
-    pub async fn create_network_set(&self) -> Arc<NetworkSet> {
-        Arc::new(NetworkSet {
+    pub async fn create_network_set(&self) -> Arc<GrpcNetworkSet> {
+        Arc::new(GrpcNetworkSet {
             members: self
                 .members
                 .read()
@@ -113,8 +113,8 @@ impl NetworkConfig {
 }
 
 #[async_trait::async_trait]
-impl Network for NetworkConfig {
-    type Ni = NetworkSet;
+impl Network for GrpcNetwork {
+    type Ni = GrpcNetworkSet;
 
     async fn add_members(&self, members: Vec<(DieselUlid, u16, String)>) {
         for (id, serial, host) in members {
@@ -152,7 +152,7 @@ impl Network for NetworkConfig {
         Ok(())
     }
 
-    async fn get_interface(&self) -> Arc<NetworkSet> {
+    async fn get_interface(&self) -> Arc<GrpcNetworkSet> {
         self.create_network_set().await
     }
 
@@ -175,7 +175,7 @@ impl Network for NetworkConfig {
 }
 
 #[async_trait::async_trait]
-impl NetworkInterface for NetworkSet {
+impl NetworkInterface for GrpcNetworkSet {
     async fn broadcast(
         &self,
         request: BroadcastRequest,

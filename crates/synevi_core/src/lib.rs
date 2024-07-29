@@ -16,6 +16,7 @@ pub mod tests {
     use synevi_network::network::NetworkInterface;
     use synevi_network::network::{BroadcastRequest, Network};
     use synevi_network::replica::Replica;
+    use synevi_types::Executor;
     use tokio::sync::Mutex;
 
     #[derive(Debug, Default)]
@@ -61,6 +62,14 @@ pub mod tests {
 
         async fn get_waiting_time(&self, _node_serial: u16) -> u64 {
             0
+        }
+    }
+
+    pub struct DummyExecutor;
+    impl Executor for DummyExecutor {
+        type Tx = Vec<u8>;
+        fn execute(&self, data: Vec<u8>) -> Result<Vec<u8>> {
+            Ok(data)
         }
     }
 }

@@ -18,7 +18,7 @@ mod tests {
         for (i, m) in node_names.iter().enumerate() {
             let _path = format!("../tests/database/{}_test_db", i);
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
-            let network = Arc::new(synevi_network::network::NetworkConfig::new(socket_addr));
+            let network = Arc::new(synevi_network::network::GrpcNetwork::new(socket_addr));
             let (sdx, _) = tokio::sync::mpsc::channel(100);
             let node = Node::new_with_parameters(*m, i as u16, network, None, sdx)
                 .await
@@ -131,7 +131,7 @@ mod tests {
 
             for (i, m) in node_names.iter().enumerate() {
                 let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 11000 + i)).unwrap();
-                let network = Arc::new(synevi_network::network::NetworkConfig::new(socket_addr));
+                let network = Arc::new(synevi_network::network::GrpcNetwork::new(socket_addr));
                 let (sdx, _) = tokio::sync::mpsc::channel(100);
                 let node = Node::new_with_parameters(*m, i as u16, network, None, sdx)
                     .await
@@ -332,7 +332,7 @@ mod tests {
             let mut nodes: Vec<Node> = vec![];
             for (i, m) in node_names.iter().enumerate() {
                 let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 12000 + i)).unwrap();
-                let network = Arc::new(synevi_network::network::NetworkConfig::new(socket_addr));
+                let network = Arc::new(synevi_network::network::GrpcNetwork::new(socket_addr));
                 let (sdx, _) = tokio::sync::mpsc::channel(100);
                 let node = Node::new_with_parameters(*m, i as u16, network, None, sdx)
                     .await
