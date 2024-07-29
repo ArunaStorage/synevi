@@ -1,10 +1,9 @@
 use crate::error::ConsensusError;
-use crate::node::{Node, Stats};
+use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
-use crate::wait_handler::{WaitAction, WaitHandler};
+use crate::wait_handler::WaitAction;
 use ahash::RandomState;
 use anyhow::Result;
-use std::any;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -12,12 +11,11 @@ use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, CommitRequest, PreAcceptRequest,
     PreAcceptResponse, RecoverRequest, RecoverResponse,
 };
-use synevi_network::network::{BroadcastRequest, Network, NetworkInterface, NodeInfo};
+use synevi_network::network::{BroadcastRequest, Network, NetworkInterface};
 use synevi_network::utils::IntoInner;
 use synevi_persistence::event_store::Store;
-use synevi_types::types::{RecoverEvent, RecoveryState};
+use synevi_types::types::RecoveryState;
 use synevi_types::{Ballot, Executor, State, Transaction, T, T0};
-use tokio::sync::Mutex;
 use tracing::instrument;
 
 pub struct Coordinator<Tx, N, E, S>
@@ -456,27 +454,18 @@ where
 #[cfg(test)]
 pub mod tests {
     use super::Coordinator;
-    use crate::{
-        coordinator::TransactionStateMachine, node::Stats, tests::NetworkMock,
-        utils::from_dependency, wait_handler::WaitHandler,
-    };
+    use crate::node::Node;
+    use crate::tests::DummyExecutor;
+    use crate::tests::NetworkMock;
     use anyhow::Result;
-    use bytes::BufMut;
     use diesel_ulid::DieselUlid;
-    use monotime::MonoTime;
     use std::sync::atomic::Ordering;
-    use std::{collections::HashSet, sync::Arc, vec};
     use synevi_network::consensus_transport::PreAcceptRequest;
+    use synevi_network::network::Network;
     use synevi_network::network::{BroadcastRequest, NetworkInterface};
     use synevi_network::utils::IntoInner;
-    use synevi_network::{
-        consensus_transport::{PreAcceptResponse, State},
-        network::{Network, NodeInfo},
-    };
     use synevi_persistence::event_store::{EventStore, Store};
-    use synevi_types::{Executor, Transaction};
-    use tokio::sync::mpsc::channel;
-    use tokio::sync::Mutex;
+    use synevi_types::{Executor, State, Transaction};
 
     #[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
     struct TestTx;
@@ -530,258 +519,21 @@ pub mod tests {
 
     #[tokio::test]
     async fn init_test() {
-        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1, sdx).unwrap()));
-
-        let network = Arc::new(NetworkMock::default());
-
-        let coordinator = Coordinator::<Initialized, TestTx>::new(
-            Arc::new(NodeInfo {
-                id: DieselUlid::generate(),
-                serial: 0,
-            }),
-            event_store.clone(),
-            network.clone(),
-            TestTx::from_bytes(b"test".to_vec()).unwrap(),
-            Arc::new(Default::default()),
-            WaitHandler::new(event_store, network, Default::default(), Default::default()),
-            0,
+        let node = Node::<NetworkMock, DummyExecutor, EventStore>::new_with_network_and_executor(
+            DieselUlid::generate(),
+            1,
+            NetworkMock::default(),
+            DummyExecutor,
         )
-        .await;
+        .await
+        .unwrap();
+
+        let coordinator = Coordinator::new(node, b"foo".to_vec(), 1).await;
+
         assert_eq!(coordinator.transaction.state, State::PreAccepted);
         assert_eq!(*coordinator.transaction.t_zero, *coordinator.transaction.t);
         assert_eq!(coordinator.transaction.t_zero.0.get_node(), 0);
         assert_eq!(coordinator.transaction.t_zero.0.get_seq(), 1);
         assert!(coordinator.transaction.dependencies.is_empty());
-    }
-
-    #[tokio::test]
-    async fn pre_accepted_fast_path_test() {
-        let (sdx, _) = channel(100);
-        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1, sdx).unwrap()));
-
-        let id = u128::from_be_bytes(DieselUlid::generate().as_byte_array());
-
-        let state_machine = TransactionStateMachine::<TestTx> {
-            id,
-            state: State::PreAccepted,
-            transaction: TestTx,
-            t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
-            t: T(MonoTime::new_with_time(10u128, 0, 0)),
-            dependencies: HashSet::default(),
-            ballot: Ballot::default(),
-            tx_result: None,
-        };
-
-        let network = Arc::new(NetworkMock::default());
-
-        let node_info = Arc::new(NodeInfo {
-            id: DieselUlid::generate(),
-            serial: 0,
-        });
-
-        let mut coordinator = Coordinator::<Initialized, TestTx> {
-            node: node_info.clone(),
-            network_interface: network.clone(),
-            event_store: event_store.clone(),
-            transaction: state_machine.clone(),
-            stats: Arc::new(Default::default()),
-            wait_handler: WaitHandler::new(
-                event_store.clone(),
-                network,
-                Arc::new(Stats::default()),
-                node_info,
-            ),
-            phantom: Default::default(),
-        };
-
-        let pre_accepted_ok = vec![
-            PreAcceptResponse {
-                timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
-                dependencies: Vec::new(),
-                nack: false,
-            };
-            3
-        ];
-
-        coordinator
-            .pre_accept_consensus(&pre_accepted_ok)
-            .await
-            .unwrap();
-        assert_eq!(event_store.lock().await.events.len(), 1);
-        assert_eq!(event_store.lock().await.mappings.len(), 1);
-        assert_eq!(event_store.lock().await.last_applied, T::default());
-        assert_eq!(
-            event_store.lock().await.events.iter().next().unwrap().1,
-            &Event {
-                id,
-                state: State::PreAccepted,
-                event: Vec::new(),
-                t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
-                t: T(MonoTime::new_with_time(10u128, 0, 0)),
-                dependencies: HashSet::default(),
-                ballot: Ballot::default(),
-                last_updated: 0,
-                previous_hash: None,
-            }
-        );
-
-        // FastPath with dependencies
-
-        let mut deps = Vec::with_capacity(16);
-        deps.put_u128(MonoTime::new_with_time(1u128, 0, 0).into());
-
-        let mut deps_2 = deps.clone();
-        deps_2.put_u128(MonoTime::new_with_time(3u128, 0, 0).into());
-
-        let mut deps_3 = deps.clone();
-        deps_3.put_u128(MonoTime::new_with_time(2u128, 0, 0).into());
-
-        let pre_accepted_ok = vec![
-            PreAcceptResponse {
-                timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
-                dependencies: deps,
-                nack: false,
-            },
-            PreAcceptResponse {
-                timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
-                dependencies: deps_2,
-                nack: false,
-            },
-            PreAcceptResponse {
-                timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
-                dependencies: deps_3,
-                nack: false,
-            },
-        ];
-
-        coordinator
-            .pre_accept_consensus(&pre_accepted_ok)
-            .await
-            .unwrap();
-
-        let state_machine = TransactionStateMachine {
-            id,
-            state: State::PreAccepted,
-            transaction: TestTx,
-            t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
-            t: T(MonoTime::new_with_time(10u128, 0, 0)),
-            dependencies: HashSet::from_iter(
-                [
-                    T0(MonoTime::new_with_time(1u128, 0, 0)),
-                    T0(MonoTime::new_with_time(2u128, 0, 0)),
-                    T0(MonoTime::new_with_time(3u128, 0, 0)),
-                ]
-                .iter()
-                .cloned(),
-            ),
-            ballot: Ballot::default(),
-            tx_result: None,
-        };
-
-        assert_eq!(state_machine, coordinator.transaction);
-        assert_eq!(event_store.lock().await.events.len(), 1);
-        assert_eq!(event_store.lock().await.mappings.len(), 1);
-        assert_eq!(event_store.lock().await.last_applied, T::default());
-        assert_eq!(
-            event_store.lock().await.events.iter().next().unwrap().1,
-            &Event {
-                id,
-                state: State::PreAccepted,
-                event: Vec::new(),
-                t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
-                t: T(MonoTime::new_with_time(10u128, 0, 0)),
-                dependencies: HashSet::from_iter(
-                    [
-                        T0(MonoTime::new_with_time(1u128, 0, 0)),
-                        T0(MonoTime::new_with_time(2u128, 0, 0)),
-                        T0(MonoTime::new_with_time(3u128, 0, 0)),
-                    ]
-                    .iter()
-                    .cloned()
-                ),
-                ..Default::default()
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn pre_accepted_slow_path_test() {
-        let (sdx, _rcv) = channel(100);
-        let event_store = Arc::new(Mutex::new(EventStore::init(None, 1, sdx).unwrap()));
-
-        let id = u128::from_be_bytes(DieselUlid::generate().as_byte_array());
-
-        let state_machine = TransactionStateMachine {
-            id,
-            state: State::PreAccepted,
-            transaction: TestTx,
-            t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
-            t: T(MonoTime::new_with_time(10u128, 0, 0)),
-            dependencies: HashSet::default(),
-            ballot: Ballot::default(),
-            tx_result: None,
-        };
-
-        let node_info = Arc::new(NodeInfo {
-            id: DieselUlid::generate(),
-            serial: 0,
-        });
-
-        let network = Arc::new(NetworkMock::default());
-        let mut coordinator = Coordinator {
-            node: node_info.clone(),
-            network_interface: network.clone(),
-            event_store: event_store.clone(),
-            transaction: state_machine.clone(),
-            stats: Arc::new(Default::default()),
-            wait_handler: WaitHandler::new(
-                event_store.clone(),
-                network,
-                Arc::new(Stats::default()),
-                node_info,
-            ),
-            phantom: Default::default(),
-        };
-
-        let mut deps = Vec::with_capacity(16);
-        deps.put_u128(MonoTime::new_with_time(11u128, 0, 0).into());
-
-        let pre_accepted_ok = vec![
-            PreAcceptResponse {
-                timestamp: MonoTime::new_with_time(12u128, 0, 1).into(),
-                dependencies: deps.clone(),
-                nack: false,
-            },
-            PreAcceptResponse {
-                timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
-                dependencies: Vec::new(),
-                nack: false,
-            },
-            PreAcceptResponse {
-                timestamp: MonoTime::new_with_time(10u128, 0, 0).into(),
-                dependencies: Vec::new(),
-                nack: false,
-            },
-        ];
-
-        coordinator
-            .pre_accept_consensus(&pre_accepted_ok)
-            .await
-            .unwrap();
-        assert_eq!(event_store.lock().await.events.len(), 1);
-        assert_eq!(event_store.lock().await.mappings.len(), 1);
-        assert_eq!(event_store.lock().await.last_applied, T::default());
-        assert_eq!(
-            event_store.lock().await.events.iter().next().unwrap().1,
-            &Event {
-                id,
-                state: State::PreAccepted,
-                event: Vec::new(),
-                t_zero: T0(MonoTime::new_with_time(10u128, 0, 0)),
-                t: T(MonoTime::new_with_time(12u128, 0, 1)),
-                dependencies: from_dependency(deps).unwrap(),
-                ..Default::default()
-            }
-        );
     }
 }

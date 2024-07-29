@@ -34,9 +34,9 @@ where
             t_zero: value.t_zero,
             t: value.t,
             state: value.state,
-            transaction: Some(value.transaction.as_bytes()),
+            transaction: value.transaction.as_ref().map(|v| v.as_bytes()),
             dependencies: Some(value.dependencies.clone()),
-            ballot: value.ballot,
+            ballot: Some(value.ballot),
             ..Default::default()
         }
     }
