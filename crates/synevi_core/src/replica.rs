@@ -1,27 +1,35 @@
 use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
-use crate::wait_handler::{WaitAction, WaitHandler};
+use crate::wait_handler::WaitAction;
 use anyhow::Result;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use synevi_network::consensus_transport::*;
+use synevi_network::consensus_transport::{
+    AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
+    PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse,
+};
 use synevi_network::network::Network;
 use synevi_network::replica::Replica;
 use synevi_persistence::event::UpsertEvent;
 use synevi_persistence::event_store::Store;
-use synevi_types::{Ballot, Executor, T, T0};
+use synevi_types::{Ballot, Executor, State, T, T0};
 use tracing::instrument;
 
 pub struct ReplicaConfig<N, E, S>
 where
-    N: Network + Send + Sync,
-    E: Executor + Send + Sync,
-    S: Store + Send + Sync,
+    N: Network,
+    E: Executor,
+    S: Store,
 {
     node: Arc<Node<N, E, S>>,
 }
 
-impl<N, E, S> ReplicaConfig<N, E, S> {
+impl<N, E, S> ReplicaConfig<N, E, S>
+where
+    N: Network,
+    E: Executor,
+    S: Store,
+{
     pub fn new(node: Arc<Node<N, E, S>>) -> Self {
         Self { node }
     }
@@ -46,24 +54,26 @@ where
 
         // TODO(perf): Remove the lock here
         // Creates contention on the event store
-        if !self
+        if let Some(ballot) = self
             .node
             .event_store
             .lock()
             .await
             .accept_tx_ballot(&t0, Ballot::default())
         {
-            return Ok(PreAcceptResponse {
-                nack: true,
-                ..Default::default()
-            });
+            if ballot != Ballot::default() {
+                return Ok(PreAcceptResponse {
+                    nack: true,
+                    ..Default::default()
+                });
+            }
         }
 
         // let waiting_time = self.network.get_waiting_time(node_serial).await;
 
         // let (sx, rx) = oneshot::channel();
 
-        let (deps, t) = self.node.event_store.lock().await.pre_accept_tx(
+        let (t, deps) = self.node.event_store.lock().await.pre_accept_tx(
             u128::from_be_bytes(request.id.as_slice().try_into()?),
             t0,
             request.event,
@@ -77,7 +87,7 @@ where
 
         Ok(PreAcceptResponse {
             timestamp: t.into(),
-            dependencies: deps.to_vec(),
+            dependencies: into_dependency(&deps),
             nack: false,
         })
     }
@@ -94,13 +104,15 @@ where
         let dependencies = {
             let mut store = self.node.event_store.lock().await;
 
-            if !store.accept_tx_ballot(&t_zero, request_ballot) {
-                return Ok(AcceptResponse {
-                    dependencies: Vec::new(),
-                    nack: true,
-                });
+            if let Some(ballot) = store.accept_tx_ballot(&t_zero, request_ballot) {
+                if ballot != request_ballot {
+                    return Ok(AcceptResponse {
+                        dependencies: Vec::new(),
+                        nack: true,
+                    });
+                }
             }
-            store.upsert(UpsertEvent {
+            store.upsert_tx(UpsertEvent {
                 id,
                 t_zero,
                 t,
@@ -127,7 +139,9 @@ where
         let t = T::try_from(request.timestamp.as_slice())?;
         let deps = from_dependency(request.dependencies)?;
         let (sx, rx) = tokio::sync::oneshot::channel();
-        self.wait_handler
+        self.node
+            .get_wait_handler()
+            .await?
             .send_msg(
                 t_zero,
                 t,
@@ -154,7 +168,9 @@ where
 
         let (sx, rx) = tokio::sync::oneshot::channel();
 
-        self.wait_handler
+        self.node
+            .get_wait_handler()
+            .await?
             .send_msg(t_zero, t, deps, transaction, WaitAction::ApplyAfter, sx, id)
             .await?;
         let _ = rx.await;
@@ -172,11 +188,13 @@ where
             // If another coordinator has started recovery with a higher ballot
             // Return NACK with the higher ballot number
             let request_ballot = Ballot::try_from(request.ballot.as_slice())?;
-            if !event_store.accept_tx_ballot(&t_zero, request_ballot) {
-                return Ok(AcceptResponse {
-                    dependencies: Vec::new(),
-                    nack: true,
-                });
+            if let Some(ballot) = event_store.accept_tx_ballot(&t_zero, request_ballot) {
+                if request_ballot != ballot {
+                    return Ok(RecoverResponse {
+                        nack: ballot.into(),
+                        ..Default::default()
+                    });
+                }
             }
 
             if matches!(state, State::Undefined) {
@@ -187,7 +205,10 @@ where
         }
         let recover_deps = event_store.get_recover_deps(&t_zero)?;
 
-        self.stats.total_recovers.fetch_add(1, Ordering::Relaxed);
+        self.node
+            .stats
+            .total_recovers
+            .fetch_add(1, Ordering::Relaxed);
 
         let local_state = event_store
             .get_event_state(&t_zero)
@@ -205,19 +226,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::node::Stats;
-    use crate::reorder_buffer::ReorderBuffer;
-    use crate::replica::ReplicaConfig;
-    use crate::tests;
-    use crate::wait_handler::WaitHandler;
-    use bytes::{BufMut, BytesMut};
-    use diesel_ulid::DieselUlid;
-    use monotime::MonoTime;
-    use std::sync::Arc;
-    use synevi_network::consensus_transport::{CommitRequest, State};
-    use synevi_network::network::NodeInfo;
-    use synevi_network::replica::Replica;
-    use tokio::sync::Mutex;
 
     // #[tokio::test]
     // async fn start_recovery() {

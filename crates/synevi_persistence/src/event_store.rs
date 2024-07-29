@@ -44,7 +44,7 @@ pub trait Store: Send + Sync + Sized + 'static {
     fn recover_event(&self, t_zero_recover: &T0) -> Result<RecoverEvent>;
     // Check and update the ballot for a transaction
     // Returns true if the ballot was accepted (current <= ballot)
-    fn accept_tx_ballot(&mut self, t_zero: &T0, ballot: Ballot) -> bool;
+    fn accept_tx_ballot(&mut self, t_zero: &T0, ballot: Ballot) -> Option<Ballot>;
     // Update or insert a transaction, returns the hash of the transaction if applied
     fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<Option<[u8; 32]>>;
 
@@ -166,20 +166,16 @@ impl Store for EventStore {
     }
 
     #[instrument(level = "trace")]
-    fn accept_tx_ballot(&mut self, t_zero: &T0, ballot: Ballot) -> bool {
+    fn accept_tx_ballot(&mut self, t_zero: &T0, ballot: Ballot) -> Option<Ballot> {
         let Some(event) = self.events.get_mut(t_zero) else {
-            return true;
+            return None;
         };
 
         if event.ballot < ballot {
             event.ballot = ballot;
-            true
-        // Only allow equal ballots if the event is default
-        } else if event.ballot == ballot && ballot == Ballot::default() {
-            true
-        } else {
-            false
         }
+
+        Some(event.ballot)
     }
 
     #[instrument(level = "trace")]

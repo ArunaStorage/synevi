@@ -8,12 +8,9 @@ use std::{
 use synevi_network::network::Network;
 use synevi_persistence::event_store::Store;
 use synevi_types::{Executor, T, T0};
-use tokio::{
-    sync::{oneshot, Mutex},
-    time::timeout,
-};
+use tokio::{sync::oneshot, time::timeout};
 
-use crate::node::Node;
+use crate::{node::Node, utils::into_dependency};
 
 pub struct ReorderMessage {
     pub id: u128,
@@ -23,7 +20,7 @@ pub struct ReorderMessage {
     pub latency: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ReorderBuffer<N, E, S>
 where
     N: Network,
@@ -36,7 +33,12 @@ where
     node: Arc<Node<N, E, S>>,
 }
 
-impl<N, E, S> ReorderBuffer<N, E, S> {
+impl<N, E, S> ReorderBuffer<N, E, S>
+where
+    N: Network,
+    E: Executor,
+    S: Store,
+{
     pub fn new(node: Arc<Node<N, E, S>>) -> Arc<Self> {
         let (sender, receiver) = async_channel::bounded(1000);
         Arc::new(Self {
@@ -101,13 +103,13 @@ impl<N, E, S> ReorderBuffer<N, E, S> {
                         if entry.key() <= &current_transaction.1 {
                             let (t0_buffer, (notify, event, id)) = entry.remove_entry();
 
-                            let (deps, t) = self
+                            let (t, deps) = self
+                                .node
                                 .event_store
                                 .lock()
                                 .await
-                                .pre_accept(t0_buffer, event, id)
-                                .await?;
-                            let _ = notify.send((t, deps));
+                                .pre_accept_tx(id, t0_buffer, event)?;
+                            let _ = notify.send((t, into_dependency(&deps)));
                         } else {
                             break;
                         }
@@ -123,13 +125,13 @@ impl<N, E, S> ReorderBuffer<N, E, S> {
                     if (current_transaction.0.elapsed().as_micros() as u64) > next_latency {
                         while let Some(entry) = buffer.first_entry() {
                             let (t0_buffer, (notify, event, id)) = entry.remove_entry();
-                            let (deps, t) = self
+                            let (t, deps) = self
+                                .node
                                 .event_store
                                 .lock()
                                 .await
-                                .pre_accept(t0_buffer, event, id)
-                                .await?;
-                            let _ = notify.send((t, deps));
+                                .pre_accept_tx(id, t0_buffer, event)?;
+                            let _ = notify.send((t, into_dependency(&deps)));
                         }
                     }
                     continue;
