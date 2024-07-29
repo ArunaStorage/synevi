@@ -20,6 +20,7 @@ pub struct Event {
     pub transaction: Vec<u8>,
     pub dependencies: HashSet<T0, RandomState>,
     pub ballot: Ballot,
+    #[allow(dead_code)]
     pub(crate) last_updated: u128,
     pub(crate) previous_hash: Option<[u8; 32]>,
 }
@@ -118,6 +119,10 @@ impl Event {
             return Some(old);
         }
         None
+    }
+
+    pub fn get_latest_hash(&self) -> Option<[u8; 32]> {
+        self.previous_hash
     }
 }
 

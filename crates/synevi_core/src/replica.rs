@@ -121,7 +121,7 @@ where
                 dependencies: Some(from_dependency(request.dependencies)?),
                 ballot: Some(request_ballot),
                 ..Default::default()
-            });
+            })?;
 
             store.get_tx_dependencies(&t, &t_zero)
         };
@@ -198,10 +198,10 @@ where
             }
 
             if matches!(state, State::Undefined) {
-                event_store.pre_accept_tx(id, t_zero, request.event);
+                event_store.pre_accept_tx(id, t_zero, request.event)?;
             };
         } else {
-            event_store.pre_accept_tx(id, t_zero, request.event);
+            event_store.pre_accept_tx(id, t_zero, request.event)?;
         }
         let recover_deps = event_store.get_recover_deps(&t_zero)?;
 

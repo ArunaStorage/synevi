@@ -1,3 +1,4 @@
+use crate::coordinator::Coordinator;
 use crate::node::Node;
 use ahash::RandomState;
 use anyhow::Result;
@@ -8,10 +9,10 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use synevi_network::{consensus_transport::State, network::Network};
+use synevi_network::network::Network;
 use synevi_persistence::event::UpsertEvent;
 use synevi_persistence::event_store::Store;
-use synevi_types::{Executor, Transaction, T, T0};
+use synevi_types::{Executor, State, T, T0};
 use tokio::{sync::oneshot, time::timeout};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -47,6 +48,7 @@ where
 struct WaitDependency {
     wait_message: Option<WaitMessage>,
     deps: HashSet<T0, RandomState>,
+    #[allow(dead_code)]
     started_at: Instant,
 }
 
@@ -143,11 +145,11 @@ where
                     }
                 },
                 _ => {
-                    //if let Some(t0_recover) = self.check_recovery(&waiter_state) {
-                    //    //println!("Recovering: {:?}", t0_recover);
-                    //    let wait_handler = self.clone();
-                    //    wait_handler.recover(t0_recover, &mut waiter_state).await;
-                    //}
+                    if let Some(t0_recover) = self.check_recovery(&waiter_state) {
+                        //println!("Recovering: {:?}", t0_recover);
+                        let wait_handler = self.clone();
+                        wait_handler.recover(t0_recover, &mut waiter_state).await;
+                    }
                 }
             }
         }
@@ -169,7 +171,7 @@ where
             WaitAction::CommitBefore => State::Commited,
             WaitAction::ApplyAfter => State::Applied,
         };
-        self.node.event_store.lock().await.upsert_tx(UpsertEvent {
+        let _ = self.node.event_store.lock().await.upsert_tx(UpsertEvent {
             id: *id,
             t_zero: *t_zero,
             t: *t,
@@ -180,20 +182,13 @@ where
         });
     }
 
-    async fn recover<Tx: Transaction>(
-        self: Arc<Self>,
-        t0_recover: T0,
-        waiter_state: &mut WaiterState,
-    ) {
-        let wait_handler = self.clone();
+    async fn recover(self: Arc<Self>, t0_recover: T0, waiter_state: &mut WaiterState) {
+        println!("Recovering: {:?}", t0_recover);
         if let Some(event) = waiter_state.events.get_mut(&t0_recover) {
             event.started_at = Instant::now();
         }
-        tokio::spawn(async move {
-            if let Err(e) = CoordinatorIterator::<Tx>::recover(t0_recover, wait_handler).await {
-                println!("Error during recovery: {:?}", e);
-            };
-        });
+        let node = self.node.clone();
+        tokio::spawn(async move { Coordinator::recover(node, t0_recover).await.unwrap() });
     }
 
     fn check_recovery(&self, waiter_state: &WaiterState) -> Option<T0> {
@@ -204,7 +199,7 @@ where
             },
         ) in &waiter_state.events
         {
-            if started_at.elapsed() > Duration::from_secs(1) {
+            if started_at.elapsed() > Duration::from_secs(rand::random::<u8>() as u64) {
                 let sorted_deps: BTreeSet<T0> = deps.iter().cloned().collect();
 
                 let mut min_dep = None;
@@ -384,15 +379,24 @@ mod tests {
     use diesel_ulid::DieselUlid;
     use monotime::MonoTime;
 
-    use crate::wait_handler::*;
+    use crate::{
+        tests::{DummyExecutor, NetworkMock},
+        wait_handler::*,
+    };
 
     #[tokio::test]
     async fn test_wait_handler() {
-        let (sdx, _) = tokio::sync::mpsc::channel(100);
         let (sender, receiver): (Sender<WaitMessage>, Receiver<WaitMessage>) =
             async_channel::unbounded();
 
-        let node = Arc::new(Node::default());
+        let node = Node::new_with_network_and_executor(
+            DieselUlid::generate(),
+            1,
+            NetworkMock::default(),
+            DummyExecutor,
+        )
+        .await
+        .unwrap();
         let wait_handler = WaitHandler {
             sender,
             receiver,

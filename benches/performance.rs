@@ -1,24 +1,26 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use diesel_ulid::DieselUlid;
 use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
-use synevi_core::node::Node;
+use synevi_core::{node::Node, tests::DummyExecutor};
+use synevi_network::network::GrpcNetwork;
+use synevi_persistence::event_store::EventStore;
 use tokio::runtime;
 
-async fn prepare() -> (Vec<Arc<Node>>, Vec<u8>) {
+async fn prepare() -> (
+    Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>>,
+    Vec<u8>,
+) {
     let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
-    let mut nodes: Vec<Node> = vec![];
-    let mut receivers = vec![];
+    let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>> = vec![];
 
     for (i, m) in node_names.iter().enumerate() {
         let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
-        let network = Arc::new(synevi_network::network::GrpcNetwork::new(socket_addr));
+        let network = synevi_network::network::GrpcNetwork::new(socket_addr);
         //let path = format!("../tests/database/{}_test_db", i);
-        let (sender, receiver) = tokio::sync::mpsc::channel(100);
-        let node = Node::new_with_parameters(*m, i as u16, network, None, sender)
+        let node = Node::new_with_network_and_executor(*m, i as u16, network, DummyExecutor)
             .await
             .unwrap();
         nodes.push(node);
-        receivers.push(receiver);
     }
     for (i, name) in node_names.iter().enumerate() {
         for (i2, node) in nodes.iter_mut().enumerate() {
@@ -30,10 +32,10 @@ async fn prepare() -> (Vec<Arc<Node>>, Vec<u8>) {
         }
     }
     let payload = vec![u8::MAX; 2_000_000];
-    (nodes.into_iter().map(Arc::new).collect(), payload.clone())
+    (nodes, payload.clone())
 }
 
-async fn parallel_execution(coordinator: Arc<Node>) {
+async fn parallel_execution(coordinator: Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>) {
     let mut joinset = tokio::task::JoinSet::new();
 
     for i in 0..1000 {
@@ -49,7 +51,9 @@ async fn parallel_execution(coordinator: Arc<Node>) {
     }
 }
 
-async fn contention_execution(coordinators: Vec<Arc<Node>>) {
+async fn contention_execution(
+    coordinators: Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>>,
+) {
     let mut joinset = tokio::task::JoinSet::new();
 
     for i in 0..200 {
@@ -67,7 +71,10 @@ async fn contention_execution(coordinators: Vec<Arc<Node>>) {
     }
 }
 
-async fn _bigger_payloads_execution(coordinator: Arc<Node>, payload: Vec<u8>) {
+async fn _bigger_payloads_execution(
+    coordinator: Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>,
+    payload: Vec<u8>,
+) {
     let mut joinset = tokio::task::JoinSet::new();
 
     for i in 0..10 {

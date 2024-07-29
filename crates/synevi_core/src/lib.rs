@@ -6,7 +6,6 @@ pub mod replica;
 pub mod utils;
 mod wait_handler;
 
-#[cfg(test)]
 pub mod tests {
     use anyhow::Result;
     use diesel_ulid::DieselUlid;

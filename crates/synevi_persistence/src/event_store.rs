@@ -41,7 +41,7 @@ pub trait Store: Send + Sync + Sized + 'static {
     // Get the recover dependencies for a transaction
     fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies>;
     // Tries to recover an unfinished event from the store
-    fn recover_event(&self, t_zero_recover: &T0) -> Result<RecoverEvent>;
+    fn recover_event(&self, t_zero_recover: &T0, node_serial: u16) -> Result<RecoverEvent>;
     // Check and update the ballot for a transaction
     // Returns true if the ballot was accepted (current <= ballot)
     fn accept_tx_ballot(&mut self, t_zero: &T0, ballot: Ballot) -> Option<Ballot>;
@@ -302,8 +302,8 @@ impl Store for EventStore {
         self.events.get(t_zero).map(|event| event.state)
     }
 
-    fn recover_event(&self, t_zero_recover: &T0) -> Result<RecoverEvent> {
-        let Some(state) = self.get_event_state(&t_zero_recover) else {
+    fn recover_event(&self, t_zero_recover: &T0, node_serial: u16) -> Result<RecoverEvent> {
+        let Some(state) = self.get_event_state(t_zero_recover) else {
             return Err(anyhow::anyhow!(
                 "No state found for t0 {:?}",
                 t_zero_recover
@@ -312,7 +312,23 @@ impl Store for EventStore {
         if matches!(state, synevi_types::State::Undefined) {
             return Err(anyhow::anyhow!("Undefined recovery"));
         }
-        todo!()
+
+        if let Some(event) = self.events.get(t_zero_recover) {
+            Ok(RecoverEvent {
+                id: event.id,
+                t_zero: event.t_zero,
+                t: event.t,
+                state: state.into(),
+                transaction: event.transaction.clone(),
+                dependencies: event.dependencies.clone(),
+                ballot: Ballot(event.ballot.next_with_node(node_serial).into_time()),
+            })
+        } else {
+            Err(anyhow::anyhow!(
+                "Event not found for t0 {:?}",
+                t_zero_recover
+            ))
+        }
     }
 
     fn get_event_store(&self) -> BTreeMap<T0, Event> {

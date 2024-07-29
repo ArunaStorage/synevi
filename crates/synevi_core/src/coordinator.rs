@@ -142,7 +142,7 @@ where
             .event_store
             .lock()
             .await
-            .upsert_tx((&self.transaction).into());
+            .upsert_tx((&self.transaction).into())?;
 
         Ok(())
     }
@@ -202,7 +202,7 @@ where
             .event_store
             .lock()
             .await
-            .upsert_tx((&self.transaction).into());
+            .upsert_tx((&self.transaction).into())?;
         Ok(())
     }
 
@@ -308,7 +308,11 @@ where
     ) -> Result<Tx::ExecutionResult, ConsensusError> {
         loop {
             let node = node.clone();
-            let recover_event = node.event_store.lock().await.recover_event(&t0_recover)?;
+            let recover_event = node
+                .event_store
+                .lock()
+                .await
+                .recover_event(&t0_recover, node.get_info().serial)?;
             let network_interface = node.network.get_interface().await;
 
             let recover_responses = network_interface
@@ -342,10 +346,11 @@ where
                         .collect::<Result<Vec<_>>>()?,
                 )
                 .await?;
-
             match recover_result {
                 RecoveryState::Recovered(result) => return Ok(result),
-                RecoveryState::RestartRecovery => continue,
+                RecoveryState::RestartRecovery => {
+                    continue;
+                }
                 RecoveryState::CompetingCoordinator => {
                     return Err(ConsensusError::CompetingCoordinator)
                 }
@@ -521,16 +526,16 @@ pub mod tests {
     async fn init_test() {
         let node = Node::<NetworkMock, DummyExecutor, EventStore>::new_with_network_and_executor(
             DieselUlid::generate(),
-            1,
+            0,
             NetworkMock::default(),
             DummyExecutor,
         )
         .await
         .unwrap();
 
-        let coordinator = Coordinator::new(node, b"foo".to_vec(), 1).await;
+        let coordinator = Coordinator::new(node, b"foo".to_vec(), 0).await;
 
-        assert_eq!(coordinator.transaction.state, State::PreAccepted);
+        assert_eq!(coordinator.transaction.state, State::Undefined);
         assert_eq!(*coordinator.transaction.t_zero, *coordinator.transaction.t);
         assert_eq!(coordinator.transaction.t_zero.0.get_node(), 0);
         assert_eq!(coordinator.transaction.t_zero.0.get_seq(), 1);

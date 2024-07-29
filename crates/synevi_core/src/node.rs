@@ -33,11 +33,10 @@ where
     semaphore: Arc<tokio::sync::Semaphore>,
 }
 
-impl<N, E, S> Node<N, E, S>
+impl<N, E> Node<N, E, EventStore>
 where
     N: Network,
     E: Executor,
-    S: Store,
 {
     #[instrument(level = "trace", skip(network, executor))]
     pub async fn new_with_network_and_executor(
@@ -61,7 +60,7 @@ where
         //     reorder_clone.run().await.unwrap();
         // });
 
-        let store = S::new(serial)?;
+        let store = EventStore::new(serial)?;
 
         let node = Arc::new(Node {
             info: node_name,
@@ -88,7 +87,13 @@ where
         // If no config / persistence -> default
         Ok(node)
     }
-
+}
+impl<N, E, S> Node<N, E, S>
+where
+    N: Network,
+    E: Executor,
+    S: Store,
+{
     #[instrument(level = "trace", skip(self))]
     pub async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
         self.network.add_member(id, serial, host).await
@@ -171,7 +176,7 @@ mod tests {
         let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor>>> = vec![];
 
         for (i, m) in node_names.iter().enumerate() {
-            let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13100 + i)).unwrap();
+            let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13200 + i)).unwrap();
             let network = synevi_network::network::GrpcNetwork::new(socket_addr);
             let node = Node::new_with_network_and_executor(*m, i as u16, network, DummyExecutor)
                 .await
@@ -181,7 +186,7 @@ mod tests {
         for (i, name) in node_names.iter().enumerate() {
             for (i2, node) in nodes.iter_mut().enumerate() {
                 if i != i2 {
-                    node.add_member(*name, i as u16, format!("http://localhost:{}", 13100 + i))
+                    node.add_member(*name, i as u16, format!("http://0.0.0.0:{}", 13200 + i))
                         .await
                         .unwrap();
                 }
@@ -226,7 +231,7 @@ mod tests {
         for (i, name) in node_names.iter().enumerate() {
             for (i2, node) in nodes.iter_mut().enumerate() {
                 if i != i2 {
-                    node.add_member(*name, i as u16, format!("http://localhost:{}", 13000 + i))
+                    node.add_member(*name, i as u16, format!("http://0.0.0.0:{}", 13100 + i))
                         .await
                         .unwrap();
                 }
