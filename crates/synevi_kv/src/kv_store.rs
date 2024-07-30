@@ -1,25 +1,28 @@
 use ahash::{HashSet, RandomState};
 use anyhow::Result;
 use diesel_ulid::DieselUlid;
+use serde::{Deserialize, Serialize};
+use synevi_types::Executor;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
 use synevi_core::node::Node;
 use synevi_network::network::Network;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::sync::{oneshot, Mutex, Notify};
-use tokio::time::timeout;
-
+use tokio::sync::mpsc::Receiver;
+use tokio::sync::{oneshot, Notify};
 use crate::error::KVError;
 
-pub struct KVStore {
-    pub store: HashMap<String, String, RandomState>,
-    pub transactions: HashSet<DieselUlid>,
-    pub node: Node,
+struct Storage {
+    map: HashMap<String, String, RandomState>,
+    transactions: HashSet<DieselUlid>,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct KVStore<N> where N: Network {
+    pub store: Mutex<Storage>,
+    pub node: Arc<Node<N, Self>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum Transaction {
     Read {
         key: String,
@@ -35,11 +38,55 @@ pub enum Transaction {
     },
 }
 
-impl KVStore {
+impl synevi_types::Transaction for Transaction {
+    type ExecutionResult = String;
+
+    fn as_bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(self).unwrap()
+    }
+
+    fn from_bytes(bytes: Vec<u8>) -> Result<Self>
+    where
+        Self: Sized {
+        serde_json::from_slice(&bytes).map_err(Into::into)
+    }
+}
+
+
+
+impl<N> Executor for KVStore<N> where N: Network {
+    type Tx = Transaction;
+    fn execute(&self, transaction: Self::Tx) -> Result<String, E> {
+        Ok(match transaction {
+            Transaction::Read { key } => self.store.lock().unwrap().map.get(&key).cloned().unwrap_or_default(),
+            Transaction::Write { key, value } => {
+                self.store.lock().unwrap().map.insert(key.clone(), value.clone());
+                value
+            },
+            Transaction::Cas { key, from, to } => {
+                let store = self.store.lock().unwrap();
+
+                let entry = store.map.entry(&key)
+
+                if let Some(entry) = store.store.get(&key) {
+                    if entry == &from {
+                        store.store.insert(key.clone(), to.clone());
+                        to
+                    } else {
+                        entry.clone()
+                    }
+                } else {
+                    "".to_string()
+            },
+        })
+    }
+}
+
+impl <N>KVStore<N> where N: Network {
     pub async fn init(
         id: DieselUlid,
         serial: u16,
-        network: Arc<dyn Network + Send + Sync>,
+        network: N,
         members: Vec<(DieselUlid, u16, String)>,
         path: Option<String>,
     ) -> Result<Arc<Mutex<Self>>, KVError> {
@@ -74,15 +121,10 @@ impl KVStore {
         eprintln!("{log}");
         self.transactions.insert(id);
         let payload = Transaction::Read { key: key.clone() };
-        self.node
+        let response = self.node
             .transaction(u128::from_be_bytes(id.as_byte_array()), payload.into())
             .await?;
-        let response = timeout(Duration::from_secs(5), rcv)
-            .await
-            .unwrap()?
-            .map(|(_k, v)| v);
-        eprintln!("GOT READ RESPONSE with key {key} and {response:?}");
-        response
+        Ok(response)
     }
 
     pub async fn write(&mut self, key: String, value: String) -> Result<(), KVError> {

@@ -23,7 +23,7 @@ use synevi_network::consensus_transport::{
 use synevi_network::network::BroadcastResponse;
 use synevi_network::replica::Replica;
 
-pub struct MaelstromConfig {
+pub struct MaelstromServer {
     pub members: Vec<String>,
     pub node_id: String,
     pub message_sender: Sender<Message>,

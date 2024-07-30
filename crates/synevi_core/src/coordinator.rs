@@ -72,13 +72,14 @@ where
                 transaction: Some(transaction),
                 t_zero: t0,
                 t: T(*t0),
-                ..Default::default()
+                dependencies: HashSet::default(),
+                ballot: Ballot::default(),
             },
         }
     }
 
     #[instrument(level = "trace", skip(self))]
-    pub async fn run(&mut self) -> Result<Tx::ExecutionResult> {
+    pub async fn run(&mut self) -> Result<E::TxOk, E::TxErr> {
         match self.pre_accept().await {
             Ok(result) => Ok(result),
             Err(_e) => todo!(), // Handle error / recover
@@ -86,7 +87,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn pre_accept(&mut self) -> Result<Tx::ExecutionResult, ConsensusError> {
+    async fn pre_accept(&mut self) -> Result<E::TxOk, ConsensusError> {
         self.node
             .stats
             .total_requests
@@ -148,7 +149,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn accept(&mut self) -> Result<Tx::ExecutionResult, ConsensusError> {
+    async fn accept(&mut self) -> Result<E::TxOk, ConsensusError> {
         // Safeguard: T0 <= T
         assert!(*self.transaction.t_zero <= *self.transaction.t);
 
@@ -207,7 +208,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn commit(&mut self) -> Result<Tx::ExecutionResult, ConsensusError> {
+    async fn commit(&mut self) -> Result<E::TxOk, ConsensusError> {
         let committed_request = CommitRequest {
             id: self.transaction.id.to_be_bytes().into(),
             event: self.transaction.get_transaction_bytes(),
@@ -255,7 +256,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn apply(&mut self) -> Result<Tx::ExecutionResult, ConsensusError> {
+    async fn apply(&mut self) -> Result<E::TxOk, ConsensusError> {
         let result = self.execute_consensus().await?;
 
         let applied_request = ApplyRequest {
@@ -274,7 +275,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn execute_consensus(&mut self) -> Result<Tx::ExecutionResult> {
+    async fn execute_consensus(&mut self) -> Result<E::TxOk, E::TxErr> {
         self.transaction.state = State::Applied;
         let (sx, _rx) = tokio::sync::oneshot::channel();
         self.node

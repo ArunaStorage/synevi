@@ -17,12 +17,17 @@ use synevi_network::replica::Replica;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
 
-lazy_static! {
-    pub(crate) static ref GLOBAL_COUNTER: Arc<AtomicU64> = Arc::new(AtomicU64::default());
-}
+
+
+pub struct MaelstromNetwork;
+
+
 
 #[async_trait]
-impl Network for MaelstromConfig {
+impl Network for MaelstromNetwork {
+
+    type Ni = MaelstromNetwork;
+
     async fn add_members(&self, members: Vec<(DieselUlid, u16, String)>) {
         for (id, serial, host) in members {
             self.add_member(id, serial, host).await.unwrap()
@@ -159,14 +164,8 @@ impl Network for MaelstromConfig {
         Ok(())
     }
 
-    async fn get_interface(&self) -> Arc<dyn NetworkInterface> {
-        let clone = MaelstromConfig {
-            members: self.members.clone(),
-            node_id: self.node_id.clone(),
-            message_handler: self.message_handler.clone(),
-            broadcast_responses: self.broadcast_responses.clone(),
-        };
-        Arc::new(clone)
+    async fn get_interface(&self) -> Arc<MaelstromNetwork> {
+        todo!()
     }
 
     async fn get_waiting_time(&self, _node_serial: u16) -> u64 {
@@ -175,12 +174,11 @@ impl Network for MaelstromConfig {
 }
 
 #[async_trait]
-impl NetworkInterface for MaelstromConfig {
+impl NetworkInterface for MaelstromNetwork {
     async fn broadcast(
         &self,
         request: BroadcastRequest,
     ) -> anyhow::Result<Vec<BroadcastResponse>, BroadCastError> {
-        let counter = GLOBAL_COUNTER.load(Ordering::Relaxed);
         let mut await_majority = true;
         let mut broadcast_all = false;
         let mut rcv = match &request {
@@ -419,7 +417,7 @@ impl NetworkInterface for MaelstromConfig {
     }
 }
 #[async_trait]
-impl Replica for MaelstromConfig {
+impl Replica for MaelstromNetwork {
     async fn pre_accept(
         &self,
         _request: PreAcceptRequest,

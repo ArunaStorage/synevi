@@ -1,17 +1,17 @@
+use std::error::Error;
+
 use anyhow::Result;
 
-pub trait Transaction: Default + std::fmt::Debug + Send {
-    type ExecutionResult: Send;
-
+pub trait Transaction: std::fmt::Debug + Send {
     fn as_bytes(&self) -> Vec<u8>;
     fn from_bytes(bytes: Vec<u8>) -> Result<Self>
     where
         Self: Sized;
 }
 
-impl Transaction for Vec<u8> {
-    type ExecutionResult = Vec<u8>;
+pub trait ExecutorError: Error {}
 
+impl Transaction for Vec<u8> {
     fn as_bytes(&self) -> Vec<u8> {
         self.clone()
     }
@@ -23,5 +23,8 @@ impl Transaction for Vec<u8> {
 
 pub trait Executor: Send + Sync + 'static {
     type Tx: Transaction;
-    fn execute(&self, transaction: Self::Tx) -> Result<<Self::Tx as Transaction>::ExecutionResult>;
+    type TxOk: Send;
+    type TxErr: Error + Send;
+    // Executor expects a type with interior mutability
+    fn execute(&self, transaction: Self::Tx) -> Result<Self::TxOk, Self::TxErr>;
 }
