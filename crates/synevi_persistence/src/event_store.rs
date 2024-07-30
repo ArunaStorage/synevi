@@ -167,9 +167,7 @@ impl Store for EventStore {
 
     #[instrument(level = "trace")]
     fn accept_tx_ballot(&mut self, t_zero: &T0, ballot: Ballot) -> Option<Ballot> {
-        let Some(event) = self.events.get_mut(t_zero) else {
-            return None;
-        };
+        let event = self.events.get_mut(t_zero)?;
 
         if event.ballot < ballot {
             event.ballot = ballot;
@@ -251,12 +249,14 @@ impl Store for EventStore {
 
     #[instrument(level = "trace")]
     fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies> {
-        let mut recover_deps = RecoverDependencies::default();
-        recover_deps.timestamp = self
-            .events
-            .get(t_zero)
-            .map(|event| event.t)
-            .ok_or_else(|| anyhow::anyhow!("Event not found for t_zero: {:?}", t_zero))?;
+        let mut recover_deps = RecoverDependencies {
+            timestamp: self
+                .events
+                .get(t_zero)
+                .map(|event| event.t)
+                .ok_or_else(|| anyhow::anyhow!("Event not found for t_zero: {:?}", t_zero))?,
+            ..Default::default()
+        };
         for (t_dep, t_zero_dep) in self.mappings.range(self.last_applied..) {
             let dep_event = self.events.get(t_zero_dep).ok_or_else(|| {
                 anyhow::anyhow!("Dependency not found for t_zero: {:?}", t_zero_dep)
@@ -322,7 +322,7 @@ impl Store for EventStore {
                 id: event.id,
                 t_zero: event.t_zero,
                 t: event.t,
-                state: state.into(),
+                state,
                 transaction: event.transaction.clone(),
                 dependencies: event.dependencies.clone(),
                 ballot: event.ballot,

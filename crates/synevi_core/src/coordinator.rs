@@ -436,7 +436,7 @@ where
             }
         }
 
-        if fast_path_counter >= (responses.len() / 2) + 1 {
+        if fast_path_counter > (responses.len() / 2) {
             // Enforce the fast path -> Slow path was minority
             self.transaction.t = T(*self.transaction.t_zero);
             self.transaction.dependencies = fast_path_deps;
@@ -495,6 +495,7 @@ pub mod tests {
     use synevi_types::{Executor, State, Transaction};
 
     #[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+    #[allow(dead_code)]
     struct TestTx;
     impl Transaction for TestTx {
         type ExecutionResult = ();

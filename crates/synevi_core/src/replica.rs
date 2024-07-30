@@ -120,7 +120,6 @@ where
                 transaction: Some(request.event),
                 dependencies: Some(from_dependency(request.dependencies)?),
                 ballot: Some(request_ballot),
-                ..Default::default()
             })?;
 
             store.get_tx_dependencies(&t, &t_zero)

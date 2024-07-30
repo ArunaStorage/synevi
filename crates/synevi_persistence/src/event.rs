@@ -78,9 +78,9 @@ impl Event {
         event.transaction = input.event.into();
         event.id = u128::from_be_bytes(<[u8; 16]>::try_from(state.split_to(16).iter().as_slice())?);
         event.t = T::try_from(state.split_to(16))?;
-        event.state = State::try_from(i32::from_be_bytes(<[u8; 4]>::try_from(
+        event.state = State::from(i32::from_be_bytes(<[u8; 4]>::try_from(
             state.split_to(4).iter().as_slice(),
-        )?))?;
+        )?));
         event.ballot = Ballot::try_from(state.split_to(16))?;
         while !state.is_empty() {
             let dep = state.split_to(16);

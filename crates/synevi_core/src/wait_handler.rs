@@ -73,6 +73,7 @@ where
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_msg(
         &self,
         t_zero: T0,
@@ -209,12 +210,9 @@ where
     }
 
     fn check_recovery(&self, waiter_state: &WaiterState) -> Option<T0> {
-        for (
-            _,
-            WaitDependency {
-                deps, started_at, ..
-            },
-        ) in &waiter_state.events
+        for WaitDependency {
+            deps, started_at, ..
+        } in waiter_state.events.values()
         {
             if started_at.elapsed() > Duration::from_secs(1) {
                 let sorted_deps: BTreeSet<T0> = deps.iter().cloned().collect();

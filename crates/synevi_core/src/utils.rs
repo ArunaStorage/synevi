@@ -37,7 +37,6 @@ where
             transaction: value.transaction.as_ref().map(|v| v.as_bytes()),
             dependencies: Some(value.dependencies.clone()),
             ballot: Some(value.ballot),
-            ..Default::default()
         }
     }
 }
