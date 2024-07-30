@@ -199,19 +199,20 @@ mod tests {
             .await
             .unwrap();
 
-        // let accepted = coordinator_iter.next().await.unwrap();
-        // let committed = coordinator_iter.next().await.unwrap();
-        // let applied = coordinator_iter.next().await.unwrap();
-
         let _result = coordinator
             .clone()
-            .transaction(1, Vec::from("First"))
+            .transaction(2, Vec::from("F"))
             .await
             .unwrap();
 
         let coord = coordinator.event_store.lock().await.get_event_store();
         for node in nodes {
-            assert_eq!(node.event_store.lock().await.get_event_store(), coord);
+            assert_eq!(
+                node.event_store.lock().await.get_event_store(),
+                coord,
+                "Node: {:?}",
+                node.get_info()
+            );
         }
     }
 

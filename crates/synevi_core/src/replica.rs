@@ -135,7 +135,6 @@ where
     async fn commit(&self, request: CommitRequest) -> Result<CommitResponse> {
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         let id = u128::from_be_bytes(request.id.as_slice().try_into()?);
-        //println!("Commit: {:?} @ {:?}", t_zero, self.node_info.serial);
         let t = T::try_from(request.timestamp.as_slice())?;
         let deps = from_dependency(request.dependencies)?;
         let (sx, rx) = tokio::sync::oneshot::channel();

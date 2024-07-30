@@ -18,7 +18,6 @@ mod tests {
         let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>> = vec![];
 
         for (i, m) in node_names.iter().enumerate() {
-            let _path = format!("../tests/database/{}_test_db", i);
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
             let network = synevi_network::network::GrpcNetwork::new(socket_addr);
             let node = Node::new_with_network_and_executor(*m, i as u16, network, DummyExecutor)
@@ -90,16 +89,19 @@ mod tests {
                 .into_values()
                 .map(|e| (e.t_zero, (e.t, e.get_latest_hash())))
                 .collect();
-            assert!(node
-                .event_store
-                .lock()
-                .await
-                .get_event_store()
-                .iter()
-                .all(|(_, e)| e.state == State::Applied));
+            assert!(
+                node.event_store
+                    .lock()
+                    .await
+                    .get_event_store()
+                    .iter()
+                    .all(|(_, e)| e.state == State::Applied),
+                "Not all applied @ {:?}",
+                node.get_info()
+            );
             assert_eq!(coordinator_store.len(), node_store.len());
             if coordinator_store != node_store {
-                println!("Node:         {:?}", node.get_info());
+                println!("Node: {:?}", node.get_info());
                 let mut node_store_iter = node_store.iter();
                 for (k, v) in coordinator_store.iter() {
                     if let Some(next) = node_store_iter.next() {
@@ -320,7 +322,7 @@ mod tests {
 
             for (i, m) in node_names.iter().enumerate() {
                 let _path = format!("../tests/database/{}_test_db", i);
-                let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
+                let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 12000 + i)).unwrap();
                 let network = synevi_network::network::GrpcNetwork::new(socket_addr);
                 let node =
                     Node::new_with_network_and_executor(*m, i as u16, network, DummyExecutor)

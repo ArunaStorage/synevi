@@ -41,7 +41,7 @@ pub trait Store: Send + Sync + Sized + 'static {
     // Get the recover dependencies for a transaction
     fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies>;
     // Tries to recover an unfinished event from the store
-    fn recover_event(&self, t_zero_recover: &T0, node_serial: u16) -> Result<RecoverEvent>;
+    fn recover_event(&mut self, t_zero_recover: &T0, node_serial: u16) -> Result<RecoverEvent>;
     // Check and update the ballot for a transaction
     // Returns true if the ballot was accepted (current <= ballot)
     fn accept_tx_ballot(&mut self, t_zero: &T0, ballot: Ballot) -> Option<Ballot>;
@@ -181,7 +181,7 @@ impl Store for EventStore {
     #[instrument(level = "trace")]
     fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<Option<[u8; 32]>> {
         let Some(event) = self.events.get_mut(&upsert_event.t_zero) else {
-            let event = Event::try_from(upsert_event.clone())?;
+            let event = Event::from(upsert_event.clone());
             self.events.insert(upsert_event.t_zero, event);
             self.mappings.insert(upsert_event.t, upsert_event.t_zero);
             return Ok(None);
@@ -211,7 +211,9 @@ impl Store for EventStore {
                 event.dependencies = deps;
             }
             if let Some(transaction) = upsert_event.transaction {
-                event.transaction = transaction;
+                if event.transaction.is_empty() && !transaction.is_empty() {
+                    event.transaction = transaction;
+                }
             }
             event.state = upsert_event.state;
             if let Some(ballot) = upsert_event.ballot {
@@ -302,7 +304,7 @@ impl Store for EventStore {
         self.events.get(t_zero).map(|event| event.state)
     }
 
-    fn recover_event(&self, t_zero_recover: &T0, node_serial: u16) -> Result<RecoverEvent> {
+    fn recover_event(&mut self, t_zero_recover: &T0, node_serial: u16) -> Result<RecoverEvent> {
         let Some(state) = self.get_event_state(t_zero_recover) else {
             return Err(anyhow::anyhow!(
                 "No state found for t0 {:?}",
@@ -313,7 +315,9 @@ impl Store for EventStore {
             return Err(anyhow::anyhow!("Undefined recovery"));
         }
 
-        if let Some(event) = self.events.get(t_zero_recover) {
+        if let Some(event) = self.events.get_mut(t_zero_recover) {
+            event.ballot = Ballot(event.ballot.next_with_node(node_serial).into_time());
+
             Ok(RecoverEvent {
                 id: event.id,
                 t_zero: event.t_zero,
@@ -321,7 +325,7 @@ impl Store for EventStore {
                 state: state.into(),
                 transaction: event.transaction.clone(),
                 dependencies: event.dependencies.clone(),
-                ballot: Ballot(event.ballot.next_with_node(node_serial).into_time()),
+                ballot: event.ballot,
             })
         } else {
             Err(anyhow::anyhow!(

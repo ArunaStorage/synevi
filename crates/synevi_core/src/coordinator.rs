@@ -264,7 +264,6 @@ where
             timestamp: (*self.transaction.t).into(),
             timestamp_zero: (*self.transaction.t_zero).into(),
             dependencies: into_dependency(&self.transaction.dependencies),
-            //result: vec![], // Theoretically not needed right?
         };
 
         self.network_interface
@@ -277,7 +276,7 @@ where
     #[instrument(level = "trace", skip(self))]
     async fn execute_consensus(&mut self) -> Result<Tx::ExecutionResult> {
         self.transaction.state = State::Applied;
-        let (sx, _) = tokio::sync::oneshot::channel();
+        let (sx, _rx) = tokio::sync::oneshot::channel();
         self.node
             .get_wait_handler()
             .await?
@@ -291,6 +290,8 @@ where
                 self.transaction.id,
             )
             .await?;
+
+        //let _ = _rx.await;
 
         let transaction = self
             .transaction
@@ -362,11 +363,14 @@ where
     async fn recover_consensus(
         &mut self,
         mut responses: Vec<RecoverResponse>,
-    ) -> Result<RecoveryState<Tx::ExecutionResult>> {
+    ) -> Result<RecoveryState<Tx::ExecutionResult>, ConsensusError> {
         // Keep track of values to replace
         let mut highest_ballot: Option<Ballot> = None;
         let mut superseding = false;
         let mut waiting: HashSet<T0> = HashSet::new();
+
+        let mut fast_path_counter = 0usize;
+        let mut fast_path_deps = HashSet::default();
 
         for response in responses.iter_mut() {
             let response_ballot = Ballot::try_from(response.nack.clone().as_slice())?;
@@ -396,12 +400,17 @@ where
             match replica_state {
                 State::PreAccepted if self.transaction.state <= State::PreAccepted => {
                     if replica_t > self.transaction.t {
+                        // Slow path
                         self.transaction.t = replica_t;
+                        self.transaction
+                            .dependencies
+                            .extend(from_dependency(response.dependencies.clone())?);
+                    } else {
+                        // Would be fast path
+                        fast_path_counter += 1;
+                        fast_path_deps.extend(from_dependency(response.dependencies.clone())?);
                     }
                     self.transaction.state = State::PreAccepted;
-                    self.transaction
-                        .dependencies
-                        .extend(from_dependency(response.dependencies.clone())?);
                 }
                 State::Accepted if self.transaction.state < State::Accepted => {
                     self.transaction.t = replica_t;
@@ -427,7 +436,18 @@ where
             }
         }
 
-        if highest_ballot.is_some() {
+        if fast_path_counter >= (responses.len() / 2) + 1 {
+            // Enforce the fast path -> Slow path was minority
+            self.transaction.t = T(*self.transaction.t_zero);
+            self.transaction.dependencies = fast_path_deps;
+        }
+
+        if let Some(ballot) = highest_ballot {
+            self.node
+                .event_store
+                .lock()
+                .await
+                .accept_tx_ballot(&self.transaction.t_zero, ballot);
             return Ok(RecoveryState::CompetingCoordinator);
         }
 
@@ -439,18 +459,20 @@ where
 
             State::PreAccepted => {
                 if superseding {
-                    RecoveryState::Recovered(self.pre_accept().await?)
+                    RecoveryState::Recovered(self.accept().await?)
                 } else if !waiting.is_empty() {
                     // We will wait anyway if RestartRecovery is returned
                     return Ok(RecoveryState::RestartRecovery);
                 } else {
                     self.transaction.t = T(*self.transaction.t_zero);
-                    RecoveryState::Recovered(self.pre_accept().await?)
+                    RecoveryState::Recovered(self.accept().await?)
                 }
             }
             _ => {
                 tracing::warn!("Recovery state not matched");
-                return Err(anyhow::anyhow!("Recovery state not matched"));
+                return Err(ConsensusError::AnyhowError(anyhow::anyhow!(
+                    "Recovery state not matched"
+                )));
             }
         })
     }

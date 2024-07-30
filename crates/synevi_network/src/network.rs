@@ -301,9 +301,11 @@ impl NetworkInterface for GrpcNetworkSet {
                 while let Some(r) = responses.join_next().await {
                     match r {
                         Ok(Err(e)) => {
+                            println!("Apply: Error in response: {:?}", e);
                             tracing::error!("Apply: Error in response: {:?}", e);
                         }
                         Err(_) => {
+                            println!("Apply: Join error");
                             tracing::error!("Apply: Join error");
                         }
                         _ => {}

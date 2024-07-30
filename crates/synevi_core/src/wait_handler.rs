@@ -107,13 +107,21 @@ where
                 Ok(Ok(msg)) => match msg.action {
                     WaitAction::CommitBefore => {
                         //println!("CommitBefore");
-                        self.upsert_event(&msg).await;
+                        if let Err(e) = self.upsert_event(&msg).await {
+                            tracing::error!("Error upserting event: {:?}", e);
+                            println!("Error upserting event: {:?}", e);
+                            continue;
+                        };
                         waiter_state.committed.insert(msg.t_zero, msg.t);
                         let mut to_apply =
                             waiter_state.remove_from_waiter_commit(&msg.t_zero, &msg.t);
                         while let Some(mut apply) = to_apply.pop_first() {
                             apply.1.action = WaitAction::ApplyAfter;
-                            self.upsert_event(&apply.1).await;
+                            if let Err(e) = self.upsert_event(&msg).await {
+                                tracing::error!("Error upserting event: {:?}", e);
+                                println!("Error upserting event: {:?}", e);
+                                continue;
+                            };
                             waiter_state.applied.insert(apply.1.t_zero);
                             if let Some(notify) = apply.1.notify.take() {
                                 let _ = notify.send(());
@@ -124,7 +132,11 @@ where
                     }
                     WaitAction::ApplyAfter => {
                         if let Some(mut msg) = waiter_state.insert_apply(msg) {
-                            self.upsert_event(&msg).await;
+                            if let Err(e) = self.upsert_event(&msg).await {
+                                tracing::error!("Error upserting event: {:?}", e);
+                                println!("Error upserting event: {:?}", e);
+                                continue;
+                            };
                             if let Some(notify) = msg.notify.take() {
                                 let _ = notify.send(());
                             }
@@ -133,7 +145,11 @@ where
                             waiter_state.remove_from_waiter_apply(&msg.t_zero, &mut to_apply);
                             while let Some(mut apply) = to_apply.pop_first() {
                                 apply.1.action = WaitAction::ApplyAfter;
-                                self.upsert_event(&apply.1).await;
+                                if let Err(e) = self.upsert_event(&apply.1).await {
+                                    tracing::error!("Error upserting event: {:?}", e);
+                                    println!("Error upserting event: {:?}", e);
+                                    continue;
+                                };
                                 waiter_state.applied.insert(apply.1.t_zero);
                                 if let Some(notify) = apply.1.notify.take() {
                                     let _ = notify.send(());
@@ -166,12 +182,12 @@ where
             transaction,
             ..
         }: &WaitMessage,
-    ) {
+    ) -> Result<()> {
         let state = match action {
             WaitAction::CommitBefore => State::Commited,
             WaitAction::ApplyAfter => State::Applied,
         };
-        let _ = self.node.event_store.lock().await.upsert_tx(UpsertEvent {
+        self.node.event_store.lock().await.upsert_tx(UpsertEvent {
             id: *id,
             t_zero: *t_zero,
             t: *t,
@@ -179,16 +195,17 @@ where
             transaction: Some(transaction.clone()),
             dependencies: Some(deps.clone()),
             ..Default::default()
-        });
+        })?;
+
+        Ok(())
     }
 
     async fn recover(self: Arc<Self>, t0_recover: T0, waiter_state: &mut WaiterState) {
-        println!("Recovering: {:?}", t0_recover);
         if let Some(event) = waiter_state.events.get_mut(&t0_recover) {
             event.started_at = Instant::now();
         }
         let node = self.node.clone();
-        tokio::spawn(async move { Coordinator::recover(node, t0_recover).await.unwrap() });
+        tokio::spawn(async move { Coordinator::recover(node, t0_recover).await });
     }
 
     fn check_recovery(&self, waiter_state: &WaiterState) -> Option<T0> {
@@ -199,7 +216,7 @@ where
             },
         ) in &waiter_state.events
         {
-            if started_at.elapsed() > Duration::from_secs(rand::random::<u8>() as u64) {
+            if started_at.elapsed() > Duration::from_secs(1) {
                 let sorted_deps: BTreeSet<T0> = deps.iter().cloned().collect();
 
                 let mut min_dep = None;
@@ -340,6 +357,7 @@ impl WaiterState {
     fn insert_apply(&mut self, mut wait_message: WaitMessage) -> Option<WaitMessage> {
         if self.applied.contains(&wait_message.t_zero) {
             if let Some(sender) = wait_message.notify.take() {
+                println!("Already applied");
                 let _ = sender.send(());
             }
             return None;

@@ -1,6 +1,5 @@
 use crate::rocks_db::SplitEvent;
 use ahash::RandomState;
-use anyhow::anyhow;
 use anyhow::Result;
 use bytes::{BufMut, Bytes, BytesMut};
 use monotime::MonoTime;
@@ -113,7 +112,7 @@ impl Event {
     }
 
     pub fn update_t(&mut self, t: T) -> Option<T> {
-        if self.t < t {
+        if self.t != t {
             let old = self.t;
             self.t = t;
             return Some(old);
@@ -137,17 +136,14 @@ impl PartialEq for Event {
     }
 }
 
-impl TryFrom<UpsertEvent> for Event {
-    type Error = anyhow::Error;
-    fn try_from(value: UpsertEvent) -> Result<Self> {
-        Ok(Event {
+impl From<UpsertEvent> for Event {
+    fn from(value: UpsertEvent) -> Self {
+        Event {
             id: value.id,
             t_zero: value.t_zero,
             t: value.t,
             state: value.state,
-            transaction: value
-                .transaction
-                .ok_or_else(|| anyhow!("Transaction not found"))?,
+            transaction: value.transaction.unwrap_or_default(),
             dependencies: value.dependencies.unwrap_or_default(),
             ballot: value.ballot.unwrap_or_default(),
             previous_hash: None,
@@ -155,6 +151,6 @@ impl TryFrom<UpsertEvent> for Event {
                 .duration_since(UNIX_EPOCH)
                 .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
                 .as_nanos(),
-        })
+        }
     }
 }
