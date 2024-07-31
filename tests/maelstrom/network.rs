@@ -163,7 +163,6 @@ impl NetworkInterface for MaelstromNetwork {
                                 },
                                 ..Default::default()
                             },
-                            ..Default::default()
                         })
                         .await
                     {
@@ -193,7 +192,6 @@ impl NetworkInterface for MaelstromNetwork {
                                 },
                                 ..Default::default()
                             },
-                            ..Default::default()
                         })
                         .await
                     {
@@ -223,7 +221,6 @@ impl NetworkInterface for MaelstromNetwork {
                                     deps: req.dependencies.clone(),
                                 },
                             },
-                            ..Default::default()
                         })
                         .await
                     {
@@ -244,7 +241,6 @@ impl NetworkInterface for MaelstromNetwork {
                             body: Body {
                                 msg_id: None,
                                 in_reply_to: None,
-
                                 msg_type: MessageType::Apply {
                                     id: req.id.clone(),
                                     event: req.event.clone(),
@@ -253,7 +249,6 @@ impl NetworkInterface for MaelstromNetwork {
                                     deps: req.dependencies.clone(),
                                 },
                             },
-                            ..Default::default()
                         })
                         .await
                     {
@@ -282,7 +277,6 @@ impl NetworkInterface for MaelstromNetwork {
                                     t0: req.timestamp_zero.clone(),
                                 },
                             },
-                            ..Default::default()
                         })
                         .await
                     {

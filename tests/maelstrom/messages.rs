@@ -16,7 +16,6 @@ impl Message {
             src: self.dest.clone(),
             dest: self.src.clone(),
             body,
-            ..Default::default()
         }
     }
 }
@@ -156,7 +155,6 @@ mod tests {
                     echo: "Hello world".to_string(),
                 },
             },
-            ..Default::default()
         };
         let serialized = serde_json::from_str(echo).unwrap();
         assert_eq!(msg, serialized);
@@ -176,7 +174,6 @@ mod tests {
                     key: "0".to_string().parse().unwrap(),
                 },
             },
-            ..Default::default()
         };
         let write_msg = Message {
             src: "c1".to_string(),
@@ -189,7 +186,6 @@ mod tests {
                     value: 0,
                 },
             },
-            ..Default::default()
         };
         let read_serialized = serde_json::from_str(read).unwrap();
         assert_eq!(read_msg, read_serialized);

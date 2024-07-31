@@ -14,7 +14,7 @@ pub struct MaelstromServer;
 
 impl MaelstromServer {
     pub async fn spawn() -> Result<JoinHandle<()>> {
-        let (mut rx, sx) = MessageHandler::new();
+        let (mut rx, sx) = MessageHandler::spawn_handler();
 
         let init_msg = rx.recv().await.unwrap();
 

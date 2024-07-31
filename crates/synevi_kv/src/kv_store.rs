@@ -141,7 +141,7 @@ where
         let log = format!("READ: {id} - {key}");
         eprintln!("{log}");
         let payload = Transaction::Read { key: key.clone() };
-        let response = self.transaction(id, payload.into()).await?;
+        let response = self.transaction(id, payload).await?;
         Ok(response)
     }
 
@@ -150,7 +150,7 @@ where
         let log = format!("WRITE: {id} - {key}: {value}");
         eprintln!("{log}");
         let payload = Transaction::Write { key, value };
-        let _response = self.transaction(id, payload.into()).await?;
+        let _response = self.transaction(id, payload).await?;
         Ok(())
     }
     pub async fn cas(&self, key: String, from: String, to: String) -> Result<(), KVError> {
@@ -158,7 +158,7 @@ where
         let log = format!("CAS: {id} - {key}: from: {from} to: {to}");
         eprintln!("{log}");
         let payload = Transaction::Cas { key, from, to };
-        let _response = self.transaction(id, payload.into()).await?;
+        let _response = self.transaction(id, payload).await?;
         Ok(())
     }
 }

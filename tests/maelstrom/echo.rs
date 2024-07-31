@@ -6,7 +6,7 @@ mod network;
 mod protocol;
 
 pub fn main() -> Result<()> {
-    let (mut rx, tx) = protocol::MessageHandler::new();
+    let (mut rx, tx) = protocol::MessageHandler::spawn_handler();
 
     while let Some(msg) = rx.blocking_recv() {
         eprintln!("Received message: {:?}", msg);

@@ -8,7 +8,7 @@ type StdOutSender = Sender<Message>;
 type StdInReceiver = Receiver<Message>;
 
 impl MessageHandler {
-    pub fn new() -> (StdInReceiver, StdOutSender) {
+    pub fn spawn_handler() -> (StdInReceiver, StdOutSender) {
         let (output_sender, mut output_receiver) = tokio::sync::mpsc::channel(10);
         let (input_sender, input_receiver) = tokio::sync::mpsc::channel(10);
 
