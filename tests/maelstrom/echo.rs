@@ -1,7 +1,6 @@
 use crate::messages::MessageType;
 use anyhow::Result;
 use messages::Body;
-mod maelstrom_config;
 mod messages;
 mod network;
 mod protocol;

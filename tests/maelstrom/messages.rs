@@ -1,11 +1,7 @@
-use crate::network::GLOBAL_COUNTER;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::Ordering;
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug, Default, Clone)]
 pub struct Message {
-    #[serde(skip_serializing_if = "u64_is_zero", default)]
-    pub id: u64,
     #[serde(skip_serializing_if = "String::is_empty", default)]
     pub src: String,
     #[serde(skip_serializing_if = "String::is_empty", default)]
@@ -13,13 +9,8 @@ pub struct Message {
     pub body: Body,
 }
 
-fn u64_is_zero(num: &u64) -> bool {
-    *num == 0
-}
-
 impl Message {
     pub fn reply(&self, mut body: Body) -> Message {
-        body.msg_id = Some(GLOBAL_COUNTER.fetch_add(1, Ordering::Relaxed));
         body.in_reply_to = self.body.msg_id;
         Message {
             src: self.dest.clone(),
@@ -212,7 +203,6 @@ mod tests {
         let mut pre_accept_ok = r#"{ "id": 14, "src": "n3", "dest": "n1", "body": { "type": "pre_accept_ok",  "t0": [0, 0, 23, 227, 85, 187, 13, 137, 207, 83, 0, 1, 0, 49, 0, 0], "t": [0, 0, 23, 227, 85, 187, 13, 137, 207, 83, 0, 1, 0, 49, 0, 0], "deps": [], "nack": false  } }"#.to_string();
 
         let pre_accept_msg = Message {
-            id: 13,
             src: "n1".to_string(),
             dest: "n3".to_string(),
             body: Body {
@@ -228,7 +218,6 @@ mod tests {
             },
         };
         let pre_accept_ok_msg = Message {
-            id: 14,
             src: "n3".to_string(),
             dest: "n1".to_string(),
             body: Body {

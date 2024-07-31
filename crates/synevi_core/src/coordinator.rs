@@ -17,16 +17,15 @@ use synevi_types::types::RecoveryState;
 use synevi_types::{Ballot, ConsensusError, Executor, State, Transaction, T, T0};
 use tracing::instrument;
 
-pub struct Coordinator<Tx, N, E, S>
+pub struct Coordinator<N, E, S>
 where
-    Tx: Transaction,
     N: Network,
     E: Executor,
     S: Store,
 {
     pub node: Arc<Node<N, E, S>>,
     pub network_interface: Arc<N::Ni>,
-    pub transaction: TransactionStateMachine<Tx>,
+    pub transaction: TransactionStateMachine<E::Tx>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -51,15 +50,14 @@ where
     }
 }
 
-impl<Tx, N, E, S> Coordinator<Tx, N, E, S>
+impl<N, E, S> Coordinator<N, E, S>
 where
-    Tx: Transaction,
     N: Network,
-    E: Executor<Tx = Tx>,
+    E: Executor,
     S: Store,
 {
     #[instrument(level = "trace", skip(node, transaction))]
-    pub async fn new(node: Arc<Node<N, E, S>>, transaction: Tx, id: u128) -> Self {
+    pub async fn new(node: Arc<Node<N, E, S>>, transaction: E::Tx, id: u128) -> Self {
         let t0 = node.event_store.lock().await.init_t_zero(node.info.serial);
         let network_interface = node.network.get_interface().await;
         Coordinator {
@@ -325,11 +323,11 @@ where
                 }))
                 .await?;
 
-            let mut recover_coordinator = Coordinator::<Tx, N, E, S> {
+            let mut recover_coordinator = Coordinator::<N, E, S> {
                 node,
                 network_interface,
                 transaction: TransactionStateMachine {
-                    transaction: Some(Tx::from_bytes(recover_event.transaction)?),
+                    transaction: Some(E::Tx::from_bytes(recover_event.transaction)?),
                     t_zero: recover_event.t_zero,
                     t: recover_event.t,
                     ballot: recover_event.ballot,
@@ -506,11 +504,10 @@ pub mod tests {
         }
     }
 
-    impl<Tx, N, E, S> Coordinator<Tx, N, E, S>
+    impl<N, E, S> Coordinator<N, E, S>
     where
-        Tx: Transaction,
         N: Network,
-        E: Executor<Tx = Tx>,
+        E: Executor,
         S: Store,
     {
         pub async fn failing_pre_accept(&mut self) -> Result<()> {

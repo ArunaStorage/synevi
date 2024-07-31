@@ -5,29 +5,22 @@ use diesel_ulid::DieselUlid;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use synevi_core::node::Node;
 use synevi_network::network::Network;
 use synevi_types::{ConsensusError, Executor};
 
+#[derive(Clone)]
+pub struct KVExecutor {
+    store: Arc<Mutex<HashMap<String, String, RandomState>>>,
+}
+
+#[derive(Clone)]
 pub struct KVStore<N>
 where
     N: Network,
 {
-    store: Mutex<HashMap<String, String, RandomState>>,
-    node: RwLock<Option<Arc<Node<N, ArcStore<N>>>>>,
-}
-
-impl<N> Default for KVStore<N>
-where
-    N: Network,
-{
-    fn default() -> Self {
-        KVStore {
-            store: Mutex::new(HashMap::default()),
-            node: RwLock::new(None),
-        }
-    }
+    node: Arc<Node<N, KVExecutor>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -59,28 +52,13 @@ impl synevi_types::Transaction for Transaction {
     }
 }
 
-struct ArcStore<N: Network>(Arc<KVStore<N>>);
-
-impl<N> Clone for ArcStore<N>
-where
-    N: Network,
-{
-    fn clone(&self) -> Self {
-        ArcStore(self.0.clone())
-    }
-}
-
-impl<N> Executor for ArcStore<N>
-where
-    N: Network,
-{
+impl Executor for KVExecutor {
     type Tx = Transaction;
     type TxOk = String;
     type TxErr = KVError;
     fn execute(&self, transaction: Self::Tx) -> Result<String, ConsensusError<Self::TxErr>> {
         Ok(match transaction {
             Transaction::Read { key } => self
-                .0
                 .store
                 .lock()
                 .unwrap()
@@ -88,15 +66,14 @@ where
                 .cloned()
                 .unwrap_or_default(),
             Transaction::Write { key, value } => {
-                self.0
-                    .store
+                self.store
                     .lock()
                     .unwrap()
                     .insert(key.clone(), value.clone());
                 value
             }
             Transaction::Cas { key, from, to } => {
-                let mut store = self.0.store.lock().unwrap();
+                let mut store = self.store.lock().unwrap();
 
                 let entry = store
                     .get_mut(&key)
@@ -113,28 +90,27 @@ where
     }
 }
 
-impl<N> ArcStore<N>
+impl<N> KVStore<N>
 where
     N: Network,
 {
-    pub fn new() -> Self {
-        ArcStore(Arc::new(KVStore::default()))
-    }
     pub async fn init(
         id: DieselUlid,
         serial: u16,
         network: N,
         members: Vec<(DieselUlid, u16, String)>,
     ) -> Result<Self, KVError> {
-        let arc_store = ArcStore::new();
+        let executor = KVExecutor {
+            store: Arc::new(Mutex::new(HashMap::default())),
+        };
 
         let node =
-            Node::new_with_network_and_executor(id, serial, network, arc_store.clone()).await?;
+            Node::new_with_network_and_executor(id, serial, network, executor.clone()).await?;
         for (ulid, id, host) in members {
             node.add_member(ulid, id, host).await?;
         }
-        arc_store.0.node.write().unwrap().replace(node);
-        Ok(arc_store)
+
+        Ok(KVStore { node })
     }
 
     async fn transaction(
@@ -142,13 +118,7 @@ where
         id: DieselUlid,
         transaction: Transaction,
     ) -> Result<String, KVError> {
-        let lock = self
-            .0
-            .node
-            .read()
-            .unwrap();
-        let node = lock.clone()
-            .ok_or_else(|| KVError::ProtocolError(anyhow!("Node not set")))?;
+        let node = self.node.clone();
         let response = node
             .transaction(u128::from_be_bytes(id.as_byte_array()), transaction)
             .await
@@ -175,7 +145,7 @@ where
         Ok(response)
     }
 
-    pub async fn write(&mut self, key: String, value: String) -> Result<(), KVError> {
+    pub async fn write(&self, key: String, value: String) -> Result<(), KVError> {
         let id = DieselUlid::generate();
         let log = format!("WRITE: {id} - {key}: {value}");
         eprintln!("{log}");
@@ -183,7 +153,7 @@ where
         let _response = self.transaction(id, payload.into()).await?;
         Ok(())
     }
-    pub async fn cas(&mut self, key: String, from: String, to: String) -> Result<(), KVError> {
+    pub async fn cas(&self, key: String, from: String, to: String) -> Result<(), KVError> {
         let id = DieselUlid::generate();
         let log = format!("CAS: {id} - {key}: from: {from} to: {to}");
         eprintln!("{log}");
