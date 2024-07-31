@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::network::{Network, NodeInfo};
 use synevi_persistence::event_store::{EventStore, Store};
-use synevi_types::{Executor, Transaction};
+use synevi_types::{ConsensusError, Executor};
 use tokio::sync::{Mutex, RwLock};
 use tracing::instrument;
 
@@ -104,8 +104,12 @@ where
         self: Arc<Self>,
         id: u128,
         transaction: E::Tx,
-    ) -> Result<<E::Tx as Transaction>::ExecutionResult> {
-        let _permit = self.semaphore.acquire().await?;
+    ) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|_| anyhow!("Semaphore error"))?;
         let mut coordinator = Coordinator::new(self.clone(), transaction, id).await;
         coordinator.run().await
     }

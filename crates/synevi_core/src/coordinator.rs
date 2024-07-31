@@ -1,4 +1,3 @@
-use crate::error::ConsensusError;
 use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
 use crate::wait_handler::WaitAction;
@@ -15,7 +14,7 @@ use synevi_network::network::{BroadcastRequest, Network, NetworkInterface};
 use synevi_network::utils::IntoInner;
 use synevi_persistence::event_store::Store;
 use synevi_types::types::RecoveryState;
-use synevi_types::{Ballot, Executor, State, Transaction, T, T0};
+use synevi_types::{Ballot, ConsensusError, Executor, State, Transaction, T, T0};
 use tracing::instrument;
 
 pub struct Coordinator<Tx, N, E, S>
@@ -79,7 +78,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    pub async fn run(&mut self) -> Result<E::TxOk, E::TxErr> {
+    pub async fn run(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
         match self.pre_accept().await {
             Ok(result) => Ok(result),
             Err(_e) => todo!(), // Handle error / recover
@@ -87,7 +86,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn pre_accept(&mut self) -> Result<E::TxOk, ConsensusError> {
+    async fn pre_accept(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
         self.node
             .stats
             .total_requests
@@ -149,7 +148,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn accept(&mut self) -> Result<E::TxOk, ConsensusError> {
+    async fn accept(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
         // Safeguard: T0 <= T
         assert!(*self.transaction.t_zero <= *self.transaction.t);
 
@@ -208,7 +207,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn commit(&mut self) -> Result<E::TxOk, ConsensusError> {
+    async fn commit(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
         let committed_request = CommitRequest {
             id: self.transaction.id.to_be_bytes().into(),
             event: self.transaction.get_transaction_bytes(),
@@ -256,7 +255,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn apply(&mut self) -> Result<E::TxOk, ConsensusError> {
+    async fn apply(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
         let result = self.execute_consensus().await?;
 
         let applied_request = ApplyRequest {
@@ -275,7 +274,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn execute_consensus(&mut self) -> Result<E::TxOk, E::TxErr> {
+    async fn execute_consensus(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
         self.transaction.state = State::Applied;
         let (sx, _rx) = tokio::sync::oneshot::channel();
         self.node
@@ -307,7 +306,7 @@ where
     pub async fn recover(
         node: Arc<Node<N, E, S>>,
         t0_recover: T0,
-    ) -> Result<Tx::ExecutionResult, ConsensusError> {
+    ) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
         loop {
             let node = node.clone();
             let recover_event = node
@@ -364,7 +363,7 @@ where
     async fn recover_consensus(
         &mut self,
         mut responses: Vec<RecoverResponse>,
-    ) -> Result<RecoveryState<Tx::ExecutionResult>, ConsensusError> {
+    ) -> Result<RecoveryState<E::TxOk>, ConsensusError<E::TxErr>> {
         // Keep track of values to replace
         let mut highest_ballot: Option<Ballot> = None;
         let mut superseding = false;
@@ -499,7 +498,6 @@ pub mod tests {
     #[allow(dead_code)]
     struct TestTx;
     impl Transaction for TestTx {
-        type ExecutionResult = ();
         fn as_bytes(&self) -> Vec<u8> {
             Vec::new()
         }

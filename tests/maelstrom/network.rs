@@ -17,15 +17,10 @@ use synevi_network::replica::Replica;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
 
-
-
 pub struct MaelstromNetwork;
-
-
 
 #[async_trait]
 impl Network for MaelstromNetwork {
-
     type Ni = MaelstromNetwork;
 
     async fn add_members(&self, members: Vec<(DieselUlid, u16, String)>) {

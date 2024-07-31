@@ -1,25 +1,33 @@
-use ahash::{HashSet, RandomState};
-use anyhow::Result;
+use crate::error::KVError;
+use ahash::RandomState;
+use anyhow::{anyhow, Result};
 use diesel_ulid::DieselUlid;
 use serde::{Deserialize, Serialize};
-use synevi_types::Executor;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use synevi_core::node::Node;
 use synevi_network::network::Network;
-use tokio::sync::mpsc::Receiver;
-use tokio::sync::{oneshot, Notify};
-use crate::error::KVError;
+use synevi_types::{ConsensusError, Executor};
 
-struct Storage {
-    map: HashMap<String, String, RandomState>,
-    transactions: HashSet<DieselUlid>,
+pub struct KVStore<N>
+where
+    N: Network,
+{
+    store: Mutex<HashMap<String, String, RandomState>>,
+    node: RwLock<Option<Arc<Node<N, ArcStore<N>>>>>,
 }
 
-pub struct KVStore<N> where N: Network {
-    pub store: Mutex<Storage>,
-    pub node: Arc<Node<N, Self>>,
+impl<N> Default for KVStore<N>
+where
+    N: Network,
+{
+    fn default() -> Self {
+        KVStore {
+            store: Mutex::new(HashMap::default()),
+            node: RwLock::new(None),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -39,79 +47,122 @@ pub enum Transaction {
 }
 
 impl synevi_types::Transaction for Transaction {
-    type ExecutionResult = String;
-
     fn as_bytes(&self) -> Vec<u8> {
         serde_json::to_vec(self).unwrap()
     }
 
     fn from_bytes(bytes: Vec<u8>) -> Result<Self>
     where
-        Self: Sized {
+        Self: Sized,
+    {
         serde_json::from_slice(&bytes).map_err(Into::into)
     }
 }
 
+struct ArcStore<N: Network>(Arc<KVStore<N>>);
 
+impl<N> Clone for ArcStore<N>
+where
+    N: Network,
+{
+    fn clone(&self) -> Self {
+        ArcStore(self.0.clone())
+    }
+}
 
-impl<N> Executor for KVStore<N> where N: Network {
+impl<N> Executor for ArcStore<N>
+where
+    N: Network,
+{
     type Tx = Transaction;
-    fn execute(&self, transaction: Self::Tx) -> Result<String, E> {
+    type TxOk = String;
+    type TxErr = KVError;
+    fn execute(&self, transaction: Self::Tx) -> Result<String, ConsensusError<Self::TxErr>> {
         Ok(match transaction {
-            Transaction::Read { key } => self.store.lock().unwrap().map.get(&key).cloned().unwrap_or_default(),
+            Transaction::Read { key } => self
+                .0
+                .store
+                .lock()
+                .unwrap()
+                .get(&key)
+                .cloned()
+                .unwrap_or_default(),
             Transaction::Write { key, value } => {
-                self.store.lock().unwrap().map.insert(key.clone(), value.clone());
+                self.0
+                    .store
+                    .lock()
+                    .unwrap()
+                    .insert(key.clone(), value.clone());
                 value
-            },
+            }
             Transaction::Cas { key, from, to } => {
-                let store = self.store.lock().unwrap();
+                let mut store = self.0.store.lock().unwrap();
 
-                let entry = store.map.entry(&key)
+                let entry = store
+                    .get_mut(&key)
+                    .ok_or_else(|| ConsensusError::ExecutorError(KVError::KeyNotFound))?;
 
-                if let Some(entry) = store.store.get(&key) {
-                    if entry == &from {
-                        store.store.insert(key.clone(), to.clone());
-                        to
-                    } else {
-                        entry.clone()
-                    }
+                if entry == &from {
+                    *entry = to.clone();
+                    to
                 } else {
-                    "".to_string()
-            },
+                    return Err(ConsensusError::ExecutorError(KVError::MismatchError));
+                }
+            }
         })
     }
 }
 
-impl <N>KVStore<N> where N: Network {
+impl<N> ArcStore<N>
+where
+    N: Network,
+{
+    pub fn new() -> Self {
+        ArcStore(Arc::new(KVStore::default()))
+    }
     pub async fn init(
         id: DieselUlid,
         serial: u16,
         network: N,
         members: Vec<(DieselUlid, u16, String)>,
-        path: Option<String>,
-    ) -> Result<Arc<Mutex<Self>>, KVError> {
-        let store = Arc::new(Mutex::new(HashMap::default()));
-        let transactions = Arc::new(Mutex::new(HashMap::default()));
+    ) -> Result<Self, KVError> {
+        let arc_store = ArcStore::new();
 
-        let (sdx, rcv) = tokio::sync::mpsc::channel(100);
-        let store_clone = store.clone();
-        let transaction_clone = transactions.clone();
-
-        let mut node = Node::new_with_parameters(id, serial, network, path, sdx).await?;
+        let node =
+            Node::new_with_network_and_executor(id, serial, network, arc_store.clone()).await?;
         for (ulid, id, host) in members {
             node.add_member(ulid, id, host).await?;
         }
-        let store = Arc::new(Mutex::new(KVStore {
-            store: HashMap::default(),
-            transactions: HashSet::default(),
-            node,
-        }));
+        arc_store.0.node.write().unwrap().replace(node);
+        Ok(arc_store)
+    }
 
-        let store_clone = store.clone();
-
-        tokio::spawn(async move { KVStore::execute(store_clone, rcv) });
-
-        Ok(store)
+    async fn transaction(
+        &self,
+        id: DieselUlid,
+        transaction: Transaction,
+    ) -> Result<String, KVError> {
+        let lock = self
+            .0
+            .node
+            .read()
+            .unwrap();
+        let node = lock.clone()
+            .ok_or_else(|| KVError::ProtocolError(anyhow!("Node not set")))?;
+        let response = node
+            .transaction(u128::from_be_bytes(id.as_byte_array()), transaction)
+            .await
+            .map_err(|e| match e {
+                ConsensusError::BroadCastError(e) => {
+                    KVError::ProtocolError(anyhow!("Broadcast error: {e}"))
+                }
+                ConsensusError::CompetingCoordinator => {
+                    KVError::ProtocolError(anyhow!("Competing coordinator"))
+                }
+                ConsensusError::AnyhowError(e) => KVError::ProtocolError(e),
+                ConsensusError::ExecutorError(e) => e,
+            })?;
+        Ok(response)
     }
 
     pub async fn read(&self, key: String) -> Result<String, KVError> {
@@ -119,11 +170,8 @@ impl <N>KVStore<N> where N: Network {
         let id = DieselUlid::generate();
         let log = format!("READ: {id} - {key}");
         eprintln!("{log}");
-        self.transactions.insert(id);
         let payload = Transaction::Read { key: key.clone() };
-        let response = self.node
-            .transaction(u128::from_be_bytes(id.as_byte_array()), payload.into())
-            .await?;
+        let response = self.transaction(id, payload.into()).await?;
         Ok(response)
     }
 
@@ -131,95 +179,16 @@ impl <N>KVStore<N> where N: Network {
         let id = DieselUlid::generate();
         let log = format!("WRITE: {id} - {key}: {value}");
         eprintln!("{log}");
-        let (sdx, rcv) = oneshot::channel();
-        self.transactions.lock().await.insert(id, sdx);
         let payload = Transaction::Write { key, value };
-        self.node
-            .transaction(u128::from_be_bytes(id.as_byte_array()), payload.into())
-            .await?;
-        rcv.await??;
+        let _response = self.transaction(id, payload.into()).await?;
         Ok(())
     }
     pub async fn cas(&mut self, key: String, from: String, to: String) -> Result<(), KVError> {
         let id = DieselUlid::generate();
         let log = format!("CAS: {id} - {key}: from: {from} to: {to}");
-        let (sdx, rcv) = oneshot::channel();
-        self.transactions.lock().await.insert(id, sdx);
         eprintln!("{log}");
         let payload = Transaction::Cas { key, from, to };
-        self.node
-            .transaction(u128::from_be_bytes(id.as_byte_array()), payload.into())
-            .await?;
-        rcv.await??;
+        let _response = self.transaction(id, payload.into()).await?;
         Ok(())
-    }
-
-    async fn execute(
-        store: Arc<Mutex<KVStore>>,
-        mut rcv: Receiver<(u128, Vec<u8>, Arc<Notify>)>,
-    ) -> Result<()> {
-        loop {
-            while let Some((id, transaction, notify)) = rcv.recv().await {
-                let transaction: Transaction = transaction.try_into()?;
-                let id = DieselUlid::from(id.to_be_bytes());
-                match transaction {
-                    Transaction::Read { key } => {
-                        eprintln!("READ EXEC");
-                        if let Some(sdx) = transactions.lock().await.remove(&id) {
-                            eprintln!("READ LOCK ACQUIRED");
-                            let lock = store.lock().await;
-                            eprintln!("STORE LOCK ACQUIRED");
-                            if let Some(value) = lock.get(&key).cloned() {
-                                if let Err(err) = sdx.send(Ok((key.clone(), value.clone()))) {
-                                    eprintln!("Receiver dropped: {err:?}");
-                                } else {
-                                    eprintln!("Sent message with id {id:?}");
-                                };
-                            } else if let Err(err) = sdx.send(Err(KVError::KeyNotFound)) {
-                                eprintln!("Receiver dropped: {err:?}");
-                            } else {
-                                eprintln!("Sent message with id {id:?}");
-                            };
-                        }
-                    }
-                    Transaction::Write { key, value } => {
-                        eprintln!("WRITE EXEC");
-                        store.lock().await.insert(key.clone(), value.clone());
-                        if let Some(sdx) = transactions.lock().await.remove(&id) {
-                            if let Err(err) = sdx.send(Ok((key, value))) {
-                                eprintln!("Receiver dropped: {err:?}");
-                            };
-                        }
-                    }
-                    Transaction::Cas { key, from, to } => {
-                        eprintln!("CAS EXEC");
-
-                        match transactions.lock().await.remove(&id) {
-                            None => {
-                                if let Some(entry) = store.lock().await.get_mut(&key) {
-                                    if entry == &from {
-                                        *entry = to;
-                                    }
-                                };
-                            }
-                            Some(sdx) => {
-                                if let Some(entry) = store.lock().await.get_mut(&key) {
-                                    if entry == &from {
-                                        *entry = to.clone();
-                                        if let Err(err) = sdx.send(Ok((entry.clone(), to))) {
-                                            eprintln!("Receiver dropped: {err:?}");
-                                        }
-                                    } else if let Err(err) = sdx.send(Err(KVError::MismatchError)) {
-                                        eprintln!("Receiver dropped: {err:?}");
-                                    }
-                                } else if let Err(err) = sdx.send(Err(KVError::KeyNotFound)) {
-                                    eprintln!("Receiver dropped: {err:?}");
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 }

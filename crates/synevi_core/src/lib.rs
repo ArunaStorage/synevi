@@ -1,5 +1,4 @@
 mod coordinator;
-pub(crate) mod error;
 pub mod node;
 pub mod reorder_buffer;
 pub mod replica;
@@ -15,6 +14,7 @@ pub mod tests {
     use synevi_network::network::NetworkInterface;
     use synevi_network::network::{BroadcastRequest, Network};
     use synevi_network::replica::Replica;
+    use synevi_types::ConsensusError;
     use synevi_types::Executor;
     use tokio::sync::Mutex;
 
@@ -65,9 +65,12 @@ pub mod tests {
     }
 
     pub struct DummyExecutor;
+
     impl Executor for DummyExecutor {
         type Tx = Vec<u8>;
-        fn execute(&self, data: Vec<u8>) -> Result<Vec<u8>> {
+        type TxOk = Vec<u8>;
+        type TxErr = anyhow::Error;
+        fn execute(&self, data: Vec<u8>) -> Result<Vec<u8>, ConsensusError<Self::TxErr>> {
             Ok(data)
         }
     }
