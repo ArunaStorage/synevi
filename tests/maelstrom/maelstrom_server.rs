@@ -7,18 +7,16 @@ use diesel_ulid::DieselUlid;
 use std::sync::Arc;
 use synevi_kv::error::KVError;
 use synevi_kv::kv_store::KVStore;
-use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 
 pub struct MaelstromServer;
 
 impl MaelstromServer {
-    pub async fn spawn() -> Result<JoinHandle<()>> {
-        let (mut rx, sx) = MessageHandler::spawn_handler();
+    pub async fn spawn() -> Result<(JoinHandle<()>,  Arc<tokio::sync::Mutex<tokio::task::JoinSet<std::result::Result<(), anyhow::Error>>>>)> {
+        let (rx, sx) = MessageHandler::spawn_handler();
 
         eprintln!("Spawning maelstrom server");
         let init_msg = rx.recv().await.unwrap();
-
         let mut node_info: (DieselUlid, u16, String) = (DieselUlid::generate(), 0, "".to_string());
         let mut members: Vec<(DieselUlid, u16, String)> = Vec::new();
         if let MessageType::Init {
@@ -41,9 +39,13 @@ impl MaelstromServer {
             ));
         }
 
-
+        sx.send(init_msg.reply(Body {
+            msg_type: MessageType::InitOk,
+            ..Default::default()
+        })).await.unwrap();
 
         let (network, mut kv_receiver) = MaelstromNetwork::new(node_info.2, sx.clone(), rx);
+        let set: Arc<tokio::sync::Mutex<tokio::task::JoinSet<std::result::Result<(), anyhow::Error>>>> = network.get_join_set();
         eprintln!("Network created");
 
         let kv_store = KVStore::init(node_info.0, node_info.1, network, members).await?;
@@ -51,21 +53,24 @@ impl MaelstromServer {
         let store = kv_store.clone();
 
         let joinhandle = tokio::spawn(async move {
+            let sx = sx;
             while let Some(msg) = kv_receiver.recv().await {
                 kv_dispatch(&store, msg, &sx).await.unwrap();
             }
         });
 
-        Ok(joinhandle)
+        Ok((joinhandle, set))
     }
 }
 
 pub(crate) async fn kv_dispatch(
     kv_store: &KVStore<Arc<MaelstromNetwork>>,
     msg: Message,
-    responder: &Sender<Message>,
+    responder: &async_channel::Sender<Message>,
 ) -> Result<()> {
+    eprintln!("KV_DISPATCH REACHED for {:?}", &msg);
     let reply = match msg.body.msg_type {
+        
         MessageType::Read { ref key } => match kv_store.read(key.to_string()).await {
             Ok(value) => msg.reply(Body {
                 msg_type: MessageType::ReadOk {

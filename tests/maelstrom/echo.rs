@@ -5,10 +5,11 @@ mod messages;
 mod network;
 mod protocol;
 
-pub fn main() -> Result<()> {
-    let (mut rx, tx) = protocol::MessageHandler::spawn_handler();
+#[tokio::main]
+pub async fn main() -> Result<()> {
+    let (rx, tx) = protocol::MessageHandler::spawn_handler();
 
-    while let Some(msg) = rx.blocking_recv() {
+    while let Ok(msg) = rx.recv_blocking() {
         eprintln!("Received message: {:?}", msg);
         match msg.body.msg_type {
             MessageType::Echo { ref echo, .. } => {
@@ -18,14 +19,14 @@ pub fn main() -> Result<()> {
                     },
                     ..Default::default()
                 });
-                tx.blocking_send(reply)?;
+                tx.send_blocking(reply)?;
             }
             MessageType::Init { .. } => {
                 let reply = msg.reply(Body {
                     msg_type: messages::MessageType::InitOk,
                     ..Default::default()
                 });
-                tx.blocking_send(reply)?;
+                tx.send_blocking(reply)?;
             }
             _ => {
                 eprintln!("Unknown message type: {:?}", msg.body.msg_type);

@@ -27,6 +27,7 @@ tonic = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 rand = { workspace = true }
+async-channel = { workspace = true }
 
 [[test]]
 name = "consensus_e2e"

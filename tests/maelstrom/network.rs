@@ -2,6 +2,7 @@ use crate::messages::{Body, Message, MessageType};
 use async_trait::async_trait;
 use diesel_ulid::DieselUlid;
 use monotime::MonoTime;
+use tokio::task::JoinSet;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use synevi_network::consensus_transport::{
@@ -19,10 +20,11 @@ pub struct MaelstromNetwork {
     pub node_id: String,
     pub members: RwLock<Vec<String>>,
     pub self_arc: RwLock<Option<Arc<MaelstromNetwork>>>,
-    pub message_sender: Sender<Message>,
-    pub message_receiver: Mutex<Option<Receiver<Message>>>,
+    pub message_sender: async_channel::Sender<Message>,
+    pub message_receiver: async_channel::Receiver<Message>,
     pub kv_sender: KVSend,
     pub broadcast_responses: Mutex<HashMap<T0, Sender<BroadcastResponse>>>,
+    pub join_set: Arc<Mutex<JoinSet<anyhow::Result<()>>>>,
 }
 
 type KVSend = Sender<Message>;
@@ -31,8 +33,8 @@ type KVReceive = Receiver<Message>;
 impl MaelstromNetwork {
     pub fn new(
         node_id: String,
-        message_sender: Sender<Message>,
-        message_receiver: Receiver<Message>,
+        message_sender: async_channel::Sender<Message>,
+        message_receiver: async_channel::Receiver<Message>,
     ) -> (Arc<Self>, KVReceive) {
         let (kv_send, kv_rcv) = tokio::sync::mpsc::channel(100);
 
@@ -41,13 +43,18 @@ impl MaelstromNetwork {
             members: RwLock::new(Vec::new()),
             self_arc: RwLock::new(None),
             message_sender,
-            message_receiver: Mutex::new(Some(message_receiver)),
+            message_receiver,
             broadcast_responses: Mutex::new(HashMap::new()),
             kv_sender: kv_send.clone(),
+            join_set: Arc::new(Mutex::new(JoinSet::new())),
         });
 
         network.self_arc.write().unwrap().replace(network.clone());
         (network, kv_rcv)
+    }
+
+    pub fn get_join_set(&self) -> Arc<Mutex<JoinSet<anyhow::Result<()>>>> {
+        self.join_set.clone()
     }
 }
 
@@ -67,14 +74,23 @@ impl Network for MaelstromNetwork {
     }
 
     async fn spawn_server<R: Replica + 'static>(&self, server: R) -> anyhow::Result<()> {
-        eprintln!("Spawning maelstrom server");
-        let (response_send, mut response_rcv) = tokio::sync::mpsc::channel(100);
+        eprintln!("Spawning network handler");
+        let (response_send, mut response_rcv) = tokio::sync::mpsc::channel::<Message>(100);
         // Receive messages from STDIN
         // 3 channels: KV, Replica, Response
-        let mut message_receiver = self.message_receiver.lock().await.take().unwrap();
+        let message_receiver = self.message_receiver.clone();
+
         let kv_sender = self.kv_sender.clone();
-        let stdin_receiver = tokio::spawn(async move {
-            while let Some(msg) = message_receiver.recv().await {
+        self.join_set.lock().await.spawn(async move {
+            loop {
+                let msg = match message_receiver.recv().await {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        eprintln!("{e:?}");
+                        continue
+                    },
+                };
+
                 match msg.body.msg_type {
                     MessageType::Read { .. }
                     | MessageType::Write { .. }
@@ -111,18 +127,15 @@ impl Network for MaelstromNetwork {
         });
 
         let self_clone = self.self_arc.read().unwrap().clone().unwrap();
-        let response_handler = tokio::spawn(async move {
+        self.join_set.lock().await.spawn(async move {
             while let Some(msg) = response_rcv.recv().await {
                 if let Err(err) = self_clone.broadcast_collect(msg.clone()).await {
                     eprintln!("{err:?}");
                     continue;
                 }
             }
+            Ok(())
         });
-
-        let (stdin, response) = tokio::join!(stdin_receiver, response_handler,);
-        stdin?;
-        response?;
         Ok(())
     }
 
@@ -521,7 +534,7 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
 impl MaelstromNetwork {
     pub(crate) async fn broadcast_collect(&self, msg: Message) -> anyhow::Result<()> {
         if msg.dest != self.node_id {
-            eprintln!("Wrong msg");
+            eprintln!("Wrong msg_dest: {}, {}, msg: {:?}", msg.dest, self.node_id, msg);
             return Ok(());
         }
 
