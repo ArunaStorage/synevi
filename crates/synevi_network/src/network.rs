@@ -47,23 +47,23 @@ where
     type Ni = N::Ni;
 
     async fn add_members(&self, members: Vec<(DieselUlid, u16, String)>) {
-        self.add_members(members).await;
+        self.as_ref().add_members(members).await;
     }
 
     async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
-        self.add_member(id, serial, host).await
+        self.as_ref().add_member(id, serial, host).await
     }
 
     async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<()> {
-        self.spawn_server(server).await
+        self.as_ref().spawn_server(server).await
     }
 
     async fn get_interface(&self) -> Arc<Self::Ni> {
-        self.get_interface().await
+        self.as_ref().get_interface().await
     }
 
     async fn get_waiting_time(&self, node_serial: u16) -> u64 {
-        self.get_waiting_time(node_serial).await
+        self.as_ref().get_waiting_time(node_serial).await
     }
 }
 
@@ -76,7 +76,7 @@ where
         &self,
         request: BroadcastRequest,
     ) -> Result<Vec<BroadcastResponse>, BroadCastError> {
-        self.broadcast(request).await
+        self.as_ref().broadcast(request).await
     }
 }
 

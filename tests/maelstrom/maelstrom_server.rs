@@ -16,6 +16,7 @@ impl MaelstromServer {
     pub async fn spawn() -> Result<JoinHandle<()>> {
         let (mut rx, sx) = MessageHandler::spawn_handler();
 
+        eprintln!("Spawning maelstrom server");
         let init_msg = rx.recv().await.unwrap();
 
         let mut node_info: (DieselUlid, u16, String) = (DieselUlid::generate(), 0, "".to_string());
@@ -40,9 +41,13 @@ impl MaelstromServer {
             ));
         }
 
+
+
         let (network, mut kv_receiver) = MaelstromNetwork::new(node_info.2, sx.clone(), rx);
+        eprintln!("Network created");
 
         let kv_store = KVStore::init(node_info.0, node_info.1, network, members).await?;
+        eprintln!("KV store created");
         let store = kv_store.clone();
 
         let joinhandle = tokio::spawn(async move {

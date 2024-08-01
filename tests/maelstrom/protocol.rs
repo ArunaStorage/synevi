@@ -16,6 +16,7 @@ impl MessageHandler {
             let mut stream_deserializer =
                 Deserializer::from_reader(std::io::stdin().lock()).into_iter::<Message>();
             while let Some(Ok(message)) = stream_deserializer.next() {
+                eprintln!("Received message: {:?}", serde_json::to_string(&message).unwrap());
                 input_sender.blocking_send(message).unwrap();
             }
         });
@@ -23,6 +24,7 @@ impl MessageHandler {
         tokio::task::spawn_blocking(move || {
             let mut io_lock = std::io::stdout().lock();
             while let Some(message) = output_receiver.blocking_recv() {
+                eprintln!("Send message: {:?}", message);
                 serde_json::to_writer(&mut io_lock, &message).unwrap();
             }
         });

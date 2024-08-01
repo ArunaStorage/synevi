@@ -7,6 +7,7 @@ mod protocol;
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
+    eprintln!("Starting Maelstrom server");
     MaelstromServer::spawn().await?;
     Ok(())
 }

@@ -67,6 +67,7 @@ impl Network for MaelstromNetwork {
     }
 
     async fn spawn_server<R: Replica + 'static>(&self, server: R) -> anyhow::Result<()> {
+        eprintln!("Spawning maelstrom server");
         let (response_send, mut response_rcv) = tokio::sync::mpsc::channel(100);
         // Receive messages from STDIN
         // 3 channels: KV, Replica, Response
