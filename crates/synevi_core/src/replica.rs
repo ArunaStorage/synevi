@@ -156,7 +156,7 @@ where
     #[instrument(level = "trace", skip(self))]
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse> {
         eprintln!(
-            "Event was: {}",
+            "Applying event was: {}",
             String::from_utf8_lossy(request.event.as_slice())
         );
         let transaction = <E as Executor>::Tx::from_bytes(request.event)?;

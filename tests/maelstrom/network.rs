@@ -138,12 +138,9 @@ impl Network for MaelstromNetwork {
         });
 
         self.join_set.lock().await.spawn(async move {
-            let server = server;
+            let server = Arc::new(server);
             while let Some(msg) = replica_rcv.recv().await {
-                if let Err(err) = replica_dispatch(&server, msg, message_sender.clone()).await {
-                    eprintln!("{err:?}");
-                    continue;
-                }
+                tokio::spawn(replica_dispatch(server.clone(), msg, message_sender.clone()));
             }
             Ok(())
         });
@@ -321,27 +318,7 @@ impl NetworkInterface for MaelstromNetwork {
         // TODO: Electorates for PA ?
         if await_majority {
             while let Some(message) = rcv.recv().await {
-                match (&request, message) {
-                    (
-                        &BroadcastRequest::PreAccept(..),
-                        response @ BroadcastResponse::PreAccept(_),
-                    ) => {
-                        result.push(response);
-                    }
-                    (&BroadcastRequest::Accept(_), response @ BroadcastResponse::Accept(_)) => {
-                        result.push(response);
-                    }
-                    (&BroadcastRequest::Commit(_), response @ BroadcastResponse::Commit(_)) => {
-                        result.push(response);
-                    }
-                    (&BroadcastRequest::Apply(_), response @ BroadcastResponse::Apply(_)) => {
-                        result.push(response);
-                    }
-                    (&BroadcastRequest::Recover(_), response @ BroadcastResponse::Recover(_)) => {
-                        result.push(response);
-                    }
-                    _ => continue,
-                }
+                result.push(message);
                 counter += 1;
                 if counter >= majority {
                     break;
@@ -351,27 +328,7 @@ impl NetworkInterface for MaelstromNetwork {
             // TODO: Differentiate between push and forget and wait for all response
             // -> Apply vs Recover
             while let Some(message) = rcv.recv().await {
-                match (&request, message) {
-                    (
-                        &BroadcastRequest::PreAccept(..),
-                        response @ BroadcastResponse::PreAccept(_),
-                    ) => {
-                        result.push(response);
-                    }
-                    (&BroadcastRequest::Accept(_), response @ BroadcastResponse::Accept(_)) => {
-                        result.push(response);
-                    }
-                    (&BroadcastRequest::Commit(_), response @ BroadcastResponse::Commit(_)) => {
-                        result.push(response);
-                    }
-                    (&BroadcastRequest::Apply(_), response @ BroadcastResponse::Apply(_)) => {
-                        result.push(response);
-                    }
-                    (&BroadcastRequest::Recover(_), response @ BroadcastResponse::Recover(_)) => {
-                        result.push(response);
-                    }
-                    _ => continue,
-                };
+                result.push(message);
                 counter += 1;
                 if counter >= self.members.read().unwrap().len() {
                     break;
@@ -388,7 +345,7 @@ impl NetworkInterface for MaelstromNetwork {
 }
 
 pub(crate) async fn replica_dispatch<R: Replica + 'static>(
-    replica: &R,
+    replica: Arc<R>,
     msg: Message,
     responder: async_channel::Sender<Message>,
 ) -> anyhow::Result<()> {
@@ -487,6 +444,7 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
             ref t,
             ref deps,
         } => {
+            eprintln!("Replica dispatch apply {:?}", t0);
             replica
                 .apply(ApplyRequest {
                     id: id.clone(),
