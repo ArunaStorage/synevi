@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::ConsensusError;
 
-pub trait Transaction: std::fmt::Debug + Send {
+pub trait Transaction: std::fmt::Debug + Clone + Send {
     fn as_bytes(&self) -> Vec<u8>;
     fn from_bytes(bytes: Vec<u8>) -> Result<Self>
     where
