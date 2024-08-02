@@ -106,8 +106,8 @@ impl Network for MaelstromNetwork {
                     | MessageType::Accept { .. }
                     | MessageType::Apply { .. }
                     | MessageType::Recover { .. } => {
-                        if let Err(err) = replica_send.send(msg).await {
-                            eprintln!("Send failed {err}");
+                        if let Err(err) = replica_send.try_send(msg) {
+                            eprintln!("Replica send failed {err}");
                         };
                     }
                     MessageType::PreAcceptOk { .. }
@@ -144,7 +144,7 @@ impl Network for MaelstromNetwork {
                     eprintln!("{err:?}");
                     continue;
                 }
-            };
+            }
             Ok(())
         });
 

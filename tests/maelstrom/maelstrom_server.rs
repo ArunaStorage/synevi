@@ -75,7 +75,6 @@ pub(crate) async fn kv_dispatch(
     msg: Message,
     responder: &async_channel::Sender<Message>,
 ) -> Result<()> {
-    eprintln!("KV_DISPATCH REACHED for {:?}", &msg);
     let reply = match msg.body.msg_type {
         MessageType::Read { ref key } => match kv_store.read(key.to_string()).await {
             Ok(value) => msg.reply(Body {
@@ -84,21 +83,41 @@ pub(crate) async fn kv_dispatch(
                 },
                 ..Default::default()
             }),
-            Err(err) => msg.reply(Body {
+            Err(KVError::KeyNotFound) => msg.reply(Body {
                 msg_type: MessageType::Error {
                     code: 20,
-                    text: format!("{err}"),
+                    text: format!("Key not found"),
                 },
                 ..Default::default()
             }),
+            Err(err) => {
+                eprintln!("Error: {err}");
+                msg.reply(Body {
+                    msg_type: MessageType::Error {
+                        code: 14,
+                        text: format!("{err}"),
+                    },
+                    ..Default::default()
+                })
+            }
         },
         MessageType::Write { ref key, ref value } => {
-            kv_store.write(key.to_string(), value.to_string()).await?;
-            eprintln!("WRITE OK REACHED");
-            msg.reply(Body {
-                msg_type: WriteOk,
-                ..Default::default()
-            })
+            match kv_store.write(key.to_string(), value.to_string()).await {
+                Ok(_) => msg.reply(Body {
+                    msg_type: WriteOk,
+                    ..Default::default()
+                }),
+                Err(err) => {
+                    eprintln!("Error: {err}");
+                    msg.reply(Body {
+                        msg_type: MessageType::Error {
+                            code: 14,
+                            text: format!("{err}"),
+                        },
+                        ..Default::default()
+                    })
+                }
+            }
         }
         MessageType::Cas {
             ref key,
@@ -132,7 +151,10 @@ pub(crate) async fn kv_dispatch(
                     _ => {
                         eprintln!("Error: {err}");
                         msg.reply(Body {
-                            msg_type: MessageType::CasOk,
+                            msg_type: MessageType::Error {
+                                code: 14,
+                                text: format!("{err}"),
+                            },
                             ..Default::default()
                         })
                     }
