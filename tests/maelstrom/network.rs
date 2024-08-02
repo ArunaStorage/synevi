@@ -76,6 +76,7 @@ impl Network for MaelstromNetwork {
     async fn spawn_server<R: Replica + 'static>(&self, server: R) -> anyhow::Result<()> {
         eprintln!("Spawning network handler");
         let (response_send, mut response_rcv) = tokio::sync::mpsc::channel::<Message>(100);
+        let (replica_send, mut replica_rcv) = tokio::sync::mpsc::channel::<Message>(100);
         // Receive messages from STDIN
         // 3 channels: KV, Replica, Response
         let message_receiver = self.message_receiver.clone();
@@ -105,10 +106,8 @@ impl Network for MaelstromNetwork {
                     | MessageType::Accept { .. }
                     | MessageType::Apply { .. }
                     | MessageType::Recover { .. } => {
-                        if let Err(e) =
-                            replica_dispatch(&server, msg.clone(), message_sender.clone()).await
-                        {
-                            eprintln!("{e:?}");
+                        if let Err(err) = replica_send.send(msg).await {
+                            eprintln!("Send failed {err}");
                         };
                     }
                     MessageType::PreAcceptOk { .. }
@@ -137,6 +136,18 @@ impl Network for MaelstromNetwork {
             }
             Ok(())
         });
+
+        self.join_set.lock().await.spawn(async move {
+            let server = server;
+            while let Some(msg) = replica_rcv.recv().await {
+                if let Err(err) = replica_dispatch(&server, msg, message_sender.clone()).await {
+                    eprintln!("{err:?}");
+                    continue;
+                }
+            };
+            Ok(())
+        });
+
         Ok(())
     }
 

@@ -11,8 +11,7 @@ type StdInReceiver = async_channel::Receiver<Message>;
 impl MessageHandler {
     pub fn spawn_handler() -> (StdInReceiver, StdOutSender) {
         let (output_sender, output_receiver) = async_channel::bounded::<Message>(10);
-        // TODO: Find out why this can fill up 
-        let (input_sender, input_receiver) = async_channel::bounded(1000);
+        let (input_sender, input_receiver) = async_channel::bounded(10);
 
         tokio::task::spawn_blocking(move || {
             let mut stream_deserializer =
