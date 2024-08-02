@@ -155,10 +155,6 @@ where
 
     #[instrument(level = "trace", skip(self))]
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse> {
-        eprintln!(
-            "Applying event was: {}",
-            String::from_utf8_lossy(request.event.as_slice())
-        );
         let transaction = <E as Executor>::Tx::from_bytes(request.event)?;
 
         let id = u128::from_be_bytes(request.id.as_slice().try_into()?);

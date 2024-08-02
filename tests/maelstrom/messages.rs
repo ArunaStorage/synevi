@@ -195,8 +195,8 @@ mod tests {
 
     #[test]
     fn test_consensus_deserialization() {
-        let mut pre_accept = r#"{ "id": 13, "src": "n1", "dest": "n3", "body" : { "type": "pre_accept", "id": [1, 144, 198, 75, 86, 76, 47, 9, 101, 85, 107, 197, 203, 4, 251, 45], "event": [0, 48], "t0": [0, 0, 23, 227, 85, 187, 13, 137, 207, 83, 0, 1, 0, 49, 0, 0]  } }"#.to_string();
-        let mut pre_accept_ok = r#"{ "id": 14, "src": "n3", "dest": "n1", "body": { "type": "pre_accept_ok",  "t0": [0, 0, 23, 227, 85, 187, 13, 137, 207, 83, 0, 1, 0, 49, 0, 0], "t": [0, 0, 23, 227, 85, 187, 13, 137, 207, 83, 0, 1, 0, 49, 0, 0], "deps": [], "nack": false  } }"#.to_string();
+        let mut pre_accept = r#"{ "src": "n1", "dest": "n3", "body" : { "type": "pre_accept", "id": [1, 144, 198, 75, 86, 76, 47, 9, 101, 85, 107, 197, 203, 4, 251, 45], "event": [0, 48], "t0": [0, 0, 23, 227, 85, 187, 13, 137, 207, 83, 0, 1, 0, 49, 0, 0]  } }"#.to_string();
+        let mut pre_accept_ok = r#"{ "src": "n3", "dest": "n1", "body": { "type": "pre_accept_ok",  "t0": [0, 0, 23, 227, 85, 187, 13, 137, 207, 83, 0, 1, 0, 49, 0, 0], "t": [0, 0, 23, 227, 85, 187, 13, 137, 207, 83, 0, 1, 0, 49, 0, 0], "deps": [], "nack": false  } }"#.to_string();
 
         let pre_accept_msg = Message {
             src: "n1".to_string(),
