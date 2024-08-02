@@ -60,8 +60,8 @@ where
         //     reorder_clone.run().await.unwrap();
         // });
 
-        let store = EventStore::new(serial)?;        
-    
+        let store = EventStore::new(serial)?;
+
         let node = Arc::new(Node {
             info: node_name,
             event_store: Mutex::new(store),

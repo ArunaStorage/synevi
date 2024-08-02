@@ -58,13 +58,12 @@ impl Executor for KVExecutor {
     type TxErr = KVError;
     fn execute(&self, transaction: Self::Tx) -> Result<String, ConsensusError<Self::TxErr>> {
         Ok(match transaction {
-            Transaction::Read { key } => self
-                .store
-                .lock()
-                .unwrap()
-                .get(&key)
-                .cloned()
-                .unwrap_or_default(),
+            Transaction::Read { key } => {
+                let Some(key) = self.store.lock().unwrap().get(&key).cloned() else {
+                    return Err(ConsensusError::ExecutorError(KVError::KeyNotFound));
+                };
+                key
+            }
             Transaction::Write { key, value } => {
                 self.store
                     .lock()

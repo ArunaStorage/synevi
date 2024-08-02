@@ -2,7 +2,6 @@ use crate::messages::{Body, Message, MessageType};
 use async_trait::async_trait;
 use diesel_ulid::DieselUlid;
 use monotime::MonoTime;
-use tokio::task::JoinSet;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use synevi_network::consensus_transport::{
@@ -15,6 +14,7 @@ use synevi_network::replica::Replica;
 use synevi_types::T0;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
+use tokio::task::JoinSet;
 
 pub struct MaelstromNetwork {
     pub node_id: String,
@@ -79,6 +79,7 @@ impl Network for MaelstromNetwork {
         // Receive messages from STDIN
         // 3 channels: KV, Replica, Response
         let message_receiver = self.message_receiver.clone();
+        let message_sender = self.message_sender.clone();
 
         let kv_sender = self.kv_sender.clone();
         self.join_set.lock().await.spawn(async move {
@@ -87,8 +88,8 @@ impl Network for MaelstromNetwork {
                     Ok(msg) => msg,
                     Err(e) => {
                         eprintln!("{e:?}");
-                        continue
-                    },
+                        continue;
+                    }
                 };
 
                 match msg.body.msg_type {
@@ -105,7 +106,7 @@ impl Network for MaelstromNetwork {
                     | MessageType::Apply { .. }
                     | MessageType::Recover { .. } => {
                         if let Err(e) =
-                            replica_dispatch(&server, msg.clone(), response_send.clone()).await
+                            replica_dispatch(&server, msg.clone(), message_sender.clone()).await
                         {
                             eprintln!("{e:?}");
                         };
@@ -180,7 +181,7 @@ impl NetworkInterface for MaelstromNetwork {
                         })
                         .await
                     {
-                        eprintln!("{err:?}");
+                        eprintln!("Message sender error: {err:?}");
                         continue;
                     };
                 }
@@ -209,7 +210,7 @@ impl NetworkInterface for MaelstromNetwork {
                         })
                         .await
                     {
-                        eprintln!("{err:?}");
+                        eprintln!("Message sender error: {err:?}");
                         continue;
                     };
                 }
@@ -238,7 +239,7 @@ impl NetworkInterface for MaelstromNetwork {
                         })
                         .await
                     {
-                        eprintln!("{err:?}");
+                        eprintln!("Message sender error: {err:?}");
                         continue;
                     };
                 }
@@ -266,7 +267,7 @@ impl NetworkInterface for MaelstromNetwork {
                         })
                         .await
                     {
-                        eprintln!("{err:?}");
+                        eprintln!("Message sender error: {err:?}");
                         continue;
                     };
                 }
@@ -294,7 +295,7 @@ impl NetworkInterface for MaelstromNetwork {
                         })
                         .await
                     {
-                        eprintln!("{err:?}");
+                        eprintln!("Message sender error: {err:?}");
                         continue;
                     };
                 }
@@ -378,7 +379,7 @@ impl NetworkInterface for MaelstromNetwork {
 pub(crate) async fn replica_dispatch<R: Replica + 'static>(
     replica: &R,
     msg: Message,
-    responder: Sender<Message>,
+    responder: async_channel::Sender<Message>,
 ) -> anyhow::Result<()> {
     match msg.body.msg_type {
         MessageType::PreAccept {
@@ -534,7 +535,10 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
 impl MaelstromNetwork {
     pub(crate) async fn broadcast_collect(&self, msg: Message) -> anyhow::Result<()> {
         if msg.dest != self.node_id {
-            eprintln!("Wrong msg_dest: {}, {}, msg: {:?}", msg.dest, self.node_id, msg);
+            eprintln!(
+                "Wrong msg_dest: {}, {}, msg: {:?}",
+                msg.dest, self.node_id, msg
+            );
             return Ok(());
         }
 

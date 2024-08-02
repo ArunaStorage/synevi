@@ -49,7 +49,7 @@ where
         _node_serial: u16,
     ) -> Result<PreAcceptResponse> {
         let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
-        
+
         // TODO(perf): Remove the lock here
         // Creates contention on the event store
         if let Some(ballot) = self

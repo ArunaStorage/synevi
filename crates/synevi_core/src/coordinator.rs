@@ -77,10 +77,7 @@ where
 
     #[instrument(level = "trace", skip(self))]
     pub async fn run(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
-        match self.pre_accept().await {
-            Ok(result) => Ok(result),
-            Err(_e) => todo!(), // Handle error / recover
-        }
+        self.pre_accept().await
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -254,7 +251,7 @@ where
 
     #[instrument(level = "trace", skip(self))]
     async fn apply(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
-        let result = self.execute_consensus().await?;
+        let result = self.execute_consensus().await;
 
         let applied_request = ApplyRequest {
             id: self.transaction.id.to_be_bytes().into(),
@@ -268,7 +265,7 @@ where
             .broadcast(BroadcastRequest::Apply(applied_request))
             .await?; // This should not be awaited
 
-        Ok(result)
+        result
     }
 
     #[instrument(level = "trace", skip(self))]
