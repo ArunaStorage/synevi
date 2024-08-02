@@ -26,7 +26,6 @@ TBD
 
 If you have any ideas, suggestions, or issues, please don't hesitate to open an issue and/or PR. Contributions to this project are always welcome ! We appreciate your help in making this project better. Please have a look at our [Contributor Guidelines](./CONTRIBUTING.md) for more information.
 
-
 ## License
 
 Licensed under either of
