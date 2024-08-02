@@ -11,14 +11,15 @@ type StdInReceiver = async_channel::Receiver<Message>;
 impl MessageHandler {
     pub fn spawn_handler() -> (StdInReceiver, StdOutSender) {
         let (output_sender, output_receiver) = async_channel::bounded::<Message>(10);
-        let (input_sender, input_receiver) = async_channel::bounded(10);
+        // TODO: Find out why this can fill up 
+        let (input_sender, input_receiver) = async_channel::bounded(1000);
 
         tokio::task::spawn_blocking(move || {
             let mut stream_deserializer =
                 Deserializer::from_reader(std::io::stdin().lock()).into_iter::<Message>();
             while let Some(Ok(message)) = stream_deserializer.next() {
                 eprintln!("Received message: {:?}", &message);
-                if let Err(e) = input_sender.try_send(message) {
+                if let Err(e) = input_sender.send_blocking(message) {
                     eprintln!("Error sending message: {:?}", e);
                     panic!();
                 };
