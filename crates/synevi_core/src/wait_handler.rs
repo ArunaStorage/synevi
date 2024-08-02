@@ -214,7 +214,7 @@ where
             deps, started_at, ..
         } in waiter_state.events.values()
         {
-            if started_at.elapsed() > Duration::from_secs(10) {
+            if started_at.elapsed() > Duration::from_secs(1) {
                 let sorted_deps: BTreeSet<T0> = deps.iter().cloned().collect();
 
                 let mut min_dep = None;

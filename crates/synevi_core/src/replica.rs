@@ -14,6 +14,7 @@ use synevi_persistence::event::UpsertEvent;
 use synevi_persistence::event_store::Store;
 use synevi_types::{Ballot, Executor, State, T, T0};
 use tracing::instrument;
+use synevi_types::Transaction;
 
 pub struct ReplicaConfig<N, E, S>
 where
@@ -154,7 +155,7 @@ where
 
     #[instrument(level = "trace", skip(self))]
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse> {
-        let transaction: Vec<u8> = request.event;
+        let transaction = <E as Executor>::Tx::from_bytes(request.event)?;
 
         let id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
@@ -167,9 +168,12 @@ where
         self.node
             .get_wait_handler()
             .await?
-            .send_msg(t_zero, t, deps, transaction, WaitAction::ApplyAfter, sx, id)
+            .send_msg(t_zero, t, deps, transaction.as_bytes(), WaitAction::ApplyAfter, sx, id)
             .await?;
         let _ = rx.await;
+
+        let _ = self.node.executor.execute(transaction);
+
 
         Ok(ApplyResponse {})
     }
