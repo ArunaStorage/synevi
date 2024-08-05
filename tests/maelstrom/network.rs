@@ -6,12 +6,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
-    PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse,
+    PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse, 
 };
 use synevi_network::error::BroadCastError;
 use synevi_network::network::{BroadcastRequest, BroadcastResponse, Network, NetworkInterface};
 use synevi_network::replica::Replica;
-use synevi_types::T0;
+use synevi_types::{State, T0};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -23,7 +23,7 @@ pub struct MaelstromNetwork {
     pub message_sender: async_channel::Sender<Message>,
     pub message_receiver: async_channel::Receiver<Message>,
     pub kv_sender: KVSend,
-    pub broadcast_responses: Mutex<HashMap<T0, Sender<BroadcastResponse>>>,
+    pub broadcast_responses: Mutex<HashMap<(State, T0), Sender<BroadcastResponse>>>,
     pub join_set: Arc<Mutex<JoinSet<anyhow::Result<()>>>>,
 }
 
@@ -167,10 +167,10 @@ impl NetworkInterface for MaelstromNetwork {
         //let broadcast_all = false;
         let (sx, mut rcv) = tokio::sync::mpsc::channel(50);
         let members = self.members.read().unwrap().clone();
-        match &request {
+        let t0 = match &request {
             BroadcastRequest::PreAccept(req, _serial) => {
                 let t0 = T0(MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap());
-                self.broadcast_responses.lock().await.insert(t0, sx);
+                self.broadcast_responses.lock().await.insert((State::PreAccepted, t0), sx);
                 for replica in members {
                     if let Err(err) = self
                         .message_sender
@@ -192,11 +192,12 @@ impl NetworkInterface for MaelstromNetwork {
                         eprintln!("Message sender error: {err:?}");
                         continue;
                     };
-                }
+                };
+                (State::PreAccepted, t0)
             }
             BroadcastRequest::Accept(req) => {
                 let t0 = T0(MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap());
-                self.broadcast_responses.lock().await.insert(t0, sx);
+                self.broadcast_responses.lock().await.insert((State::Accepted, t0), sx);
                 for replica in members {
                     if let Err(err) = self
                         .message_sender
@@ -221,11 +222,12 @@ impl NetworkInterface for MaelstromNetwork {
                         eprintln!("Message sender error: {err:?}");
                         continue;
                     };
-                }
+                };
+                (State::Accepted, t0)
             }
             BroadcastRequest::Commit(req) => {
                 let t0 = T0(MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap());
-                self.broadcast_responses.lock().await.insert(t0, sx);
+                self.broadcast_responses.lock().await.insert((State::Commited, t0), sx);
                 for replica in members {
                     if let Err(err) = self
                         .message_sender
@@ -250,11 +252,12 @@ impl NetworkInterface for MaelstromNetwork {
                         eprintln!("Message sender error: {err:?}");
                         continue;
                     };
-                }
+                };
+                (State::Commited, t0)
             }
             BroadcastRequest::Apply(req) => {
                 let t0 = T0(MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap());
-                self.broadcast_responses.lock().await.insert(t0, sx);
+                self.broadcast_responses.lock().await.insert((State::Applied, t0), sx);
                 for replica in members {
                     if let Err(err) = self
                         .message_sender
@@ -278,11 +281,12 @@ impl NetworkInterface for MaelstromNetwork {
                         eprintln!("Message sender error: {err:?}");
                         continue;
                     };
-                }
+                };
+                (State::Applied, t0)
             }
             BroadcastRequest::Recover(req) => {
                 let t0 = T0(MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap());
-                self.broadcast_responses.lock().await.insert(t0, sx);
+                self.broadcast_responses.lock().await.insert((State::Undefined, t0), sx);
                 for replica in members {
                     if let Err(err) = self
                         .message_sender
@@ -306,7 +310,8 @@ impl NetworkInterface for MaelstromNetwork {
                         eprintln!("Message sender error: {err:?}");
                         continue;
                     };
-                }
+                };
+                (State::Undefined, t0)
             }
         };
 
@@ -340,6 +345,9 @@ impl NetworkInterface for MaelstromNetwork {
             eprintln!("Majority not reached: {:?}", result);
             return Err(BroadCastError::MajorityNotReached);
         }
+
+        self.broadcast_responses.lock().await.remove(&t0);
+
         Ok(result)
     }
 }
@@ -520,7 +528,7 @@ impl MaelstromNetwork {
             } => {
                 let key = T0(MonoTime::try_from(t0.as_slice())?);
                 let lock = self.broadcast_responses.lock().await;
-                if let Some(entry) = lock.get(&key) {
+                if let Some(entry) = lock.get(&(State::PreAccepted, key)) {
                     entry
                         .send(BroadcastResponse::PreAccept(PreAcceptResponse {
                             timestamp: t.clone(),
@@ -537,7 +545,7 @@ impl MaelstromNetwork {
             } => {
                 let key = T0(MonoTime::try_from(t0.as_slice())?);
                 let lock = self.broadcast_responses.lock().await;
-                if let Some(entry) = lock.get(&key) {
+                if let Some(entry) = lock.get(&(State::Accepted, key)) {
                     entry
                         .send(BroadcastResponse::Accept(AcceptResponse {
                             dependencies: deps.clone(),
@@ -549,7 +557,7 @@ impl MaelstromNetwork {
             MessageType::CommitOk { t0 } => {
                 let key = T0(MonoTime::try_from(t0.as_slice())?);
                 let lock = self.broadcast_responses.lock().await;
-                if let Some(entry) = lock.get(&key) {
+                if let Some(entry) = lock.get(&(State::Commited, key)) {
                     entry
                         .send(BroadcastResponse::Commit(CommitResponse {}))
                         .await?;
@@ -558,7 +566,7 @@ impl MaelstromNetwork {
             MessageType::ApplyOk { t0 } => {
                 let key = T0(MonoTime::try_from(t0.as_slice())?);
                 let lock = self.broadcast_responses.lock().await;
-                if let Some(entry) = lock.get(&key) {
+                if let Some(entry) = lock.get(&(State::Applied, key)) {
                     entry
                         .send(BroadcastResponse::Apply(ApplyResponse {}))
                         .await?;
@@ -575,7 +583,7 @@ impl MaelstromNetwork {
             } => {
                 let key = T0(MonoTime::try_from(t0.as_slice())?);
                 let lock = self.broadcast_responses.lock().await;
-                if let Some(entry) = lock.get(&key) {
+                if let Some(entry) = lock.get(&(State::Undefined, key)) {
                     entry
                         .send(BroadcastResponse::Recover(RecoverResponse {
                             local_state: *local_state,

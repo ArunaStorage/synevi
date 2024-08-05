@@ -42,13 +42,6 @@ impl MaelstromServer {
             ));
         }
 
-        sx.send(init_msg.reply(Body {
-            msg_type: MessageType::InitOk,
-            ..Default::default()
-        }))
-        .await
-        .unwrap();
-
         let (network, mut kv_receiver) = MaelstromNetwork::new(node_info.2, sx.clone(), rx);
         let set: Arc<
             tokio::sync::Mutex<tokio::task::JoinSet<std::result::Result<(), anyhow::Error>>>,
@@ -58,6 +51,13 @@ impl MaelstromServer {
         let kv_store = KVStore::init(node_info.0, node_info.1, network, members).await?;
         eprintln!("KV store created");
         let store = kv_store.clone();
+
+        sx.send(init_msg.reply(Body {
+            msg_type: MessageType::InitOk,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
 
         let joinhandle = tokio::spawn(async move {
             let sx = sx;

@@ -1,5 +1,4 @@
 use anyhow::Result;
-
 use crate::ConsensusError;
 
 pub trait Transaction: std::fmt::Debug + Clone + Send {

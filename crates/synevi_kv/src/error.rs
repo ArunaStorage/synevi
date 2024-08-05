@@ -6,7 +6,7 @@ pub enum KVError {
     KeyNotFound,
     #[error("From value mismatch")]
     MismatchError,
-    #[error("Protocol error")]
+    #[error("Protocol error {0}")]
     ProtocolError(#[from] anyhow::Error),
     #[error("Receive error")]
     RcvError(#[from] tokio::sync::oneshot::error::RecvError),
