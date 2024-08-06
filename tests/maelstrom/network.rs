@@ -4,6 +4,7 @@ use diesel_ulid::DieselUlid;
 use monotime::MonoTime;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
     PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse, 
@@ -322,7 +323,7 @@ impl NetworkInterface for MaelstromNetwork {
         // Poll majority
         // TODO: Electorates for PA ?
         if await_majority {
-            while let Some(message) = rcv.recv().await {
+            while let Ok(Some(message)) = tokio::time::timeout(Duration::from_millis(50), rcv.recv()).await {
                 result.push(message);
                 counter += 1;
                 if counter >= majority {
@@ -332,7 +333,7 @@ impl NetworkInterface for MaelstromNetwork {
         } else {
             // TODO: Differentiate between push and forget and wait for all response
             // -> Apply vs Recover
-            while let Some(message) = rcv.recv().await {
+            while let Ok(Some(message)) = tokio::time::timeout(Duration::from_millis(50), rcv.recv()).await {
                 result.push(message);
                 counter += 1;
                 if counter >= self.members.read().unwrap().len() {

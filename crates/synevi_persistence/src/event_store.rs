@@ -53,6 +53,25 @@ pub trait Store: Send + Sync + Sized + 'static {
     fn get_event_store(&self) -> BTreeMap<T0, Event>;
 }
 
+impl EventStore {
+    pub fn new_with_persistence(node_serial: u16, path: String) -> Result<Self> {
+        let db = Database::new(path)?;
+        Ok(EventStore {
+            events: BTreeMap::default(),
+            mappings: BTreeMap::default(),
+            last_applied: T::default(),
+            latest_t0: T0::default(),
+            database: Some(db),
+            node_serial,
+            latest_hash: [0; 32],
+        })
+    }
+
+    pub fn new_from_persistence(_path: String) -> Result<Self> {
+        todo!()
+    }
+}
+
 impl Store for EventStore {
     fn new(node_serial: u16) -> Result<Self> {
         Ok(EventStore {
