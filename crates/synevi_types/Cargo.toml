@@ -1,0 +1,29 @@
+[package]
+name = "synevi_types"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+bytes = { workspace = true }
+rocksdb = "0.22.0"
+tokio = { workspace = true }
+monotime = { path = "../monotime" }
+chrono = "0.4.38"
+diesel-ulid = { workspace = true }
+futures = "0.3.30"
+rusty_ulid = "2.0.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+rand = "0.8.5"
+async-trait = { workspace = true }
+thiserror = "1.0.61"
+async-channel = "2.3.1"
+ahash = { workspace = true }
+sha3 = "0.10.8"
+synevi_network = { path = "../synevi_network" }

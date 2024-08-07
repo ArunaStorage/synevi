@@ -1,0 +1,22 @@
+[package]
+name = "synevi_network"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+prost = "0.13.0"
+tokio = {workspace = true}
+tonic = {workspace = true}
+anyhow = {workspace = true}
+tonic-build = "0.12.0"
+diesel-ulid = {workspace = true}
+async-trait = {workspace = true}
+tracing = { workspace = true }
+thiserror = "1.0.61"
+bytes = { workspace = true}
+
+[build-dependencies]
+tonic-build = "0.12.0"

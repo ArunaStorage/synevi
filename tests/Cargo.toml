@@ -6,25 +6,38 @@ edition.workspace = true
 repository.workspace = true
 license.workspace = true
 
-[dev-dependencies]
-consensus = { path = "../crates/consensus" }
-consensus_transport = { path = "../crates/consensus_transport" }
+[dependencies]
+synevi_core = { path = "../crates/synevi_core" }
+synevi_network = { path = "../crates/synevi_network" }
+synevi_kv = { path = "../crates/synevi_kv" }
+synevi_persistence = { path = "../crates/synevi_persistence" }
+synevi_types = { path = "../crates/synevi_types" }
 monotime = { path = "../crates/monotime" }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
+ahash = { workspace = true }
 bytes = "1.6.0"
 chrono = "0.4.38"
 diesel-ulid = { workspace = true }
 futures = "0.3.30"
-rusty_ulid = "2.0.0"
+lazy_static = "1.5.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tonic = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-rand = {workspace = true} 
-
-
+rand = { workspace = true }
+async-channel = { workspace = true }
 
 [[test]]
 name = "consensus_e2e"
 path = "consensus_e2e.rs"
+
+
+[[bin]]
+name = "maelstrom_echo"
+path = "maelstrom/echo.rs"
+
+[[bin]]
+name = "maelstrom_lin_kv"
+path = "maelstrom/lin_kv.rs"

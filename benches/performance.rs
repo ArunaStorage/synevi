@@ -1,20 +1,23 @@
-use bytes::Bytes;
-use consensus::node::Node;
 use criterion::{criterion_group, criterion_main, Criterion};
 use diesel_ulid::DieselUlid;
 use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
+use synevi_core::{node::Node, tests::DummyExecutor};
+use synevi_network::network::GrpcNetwork;
+use synevi_persistence::event_store::EventStore;
 use tokio::runtime;
 
-async fn prepare() -> Arc<Node> {
+async fn prepare() -> (
+    Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>>,
+    Vec<u8>,
+) {
     let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
-    let mut nodes: Vec<Node> = vec![];
+    let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>> = vec![];
 
     for (i, m) in node_names.iter().enumerate() {
         let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
-        let network = Arc::new(consensus_transport::network::NetworkConfig::new(
-            socket_addr,
-        ));
-        let node = Node::new_with_parameters(*m, i as u16, network, None)
+        let network = synevi_network::network::GrpcNetwork::new(socket_addr);
+        //let path = format!("../tests/database/{}_test_db", i);
+        let node = Node::new_with_network_and_executor(*m, i as u16, network, DummyExecutor)
             .await
             .unwrap();
         nodes.push(node);
@@ -28,19 +31,56 @@ async fn prepare() -> Arc<Node> {
             }
         }
     }
-    let coordinator = nodes.pop().unwrap();
-    Arc::new(coordinator)
+    let payload = vec![u8::MAX; 2_000_000];
+    (nodes, payload.clone())
 }
-async fn parallel_execution(coordinator: Arc<Node>) {
+
+async fn parallel_execution(coordinator: Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>) {
     let mut joinset = tokio::task::JoinSet::new();
 
-    for _ in 0..100 {
+    for i in 0..1000 {
         let coordinator = coordinator.clone();
         joinset.spawn(async move {
             coordinator
-                .transaction(Bytes::from("This is a transaction"))
+                .transaction(i, Vec::from("This is a transaction"))
                 .await
         });
+    }
+    while let Some(res) = joinset.join_next().await {
+        res.unwrap().unwrap();
+    }
+}
+
+async fn contention_execution(
+    coordinators: Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>>,
+) {
+    let mut joinset = tokio::task::JoinSet::new();
+
+    for i in 0..200 {
+        for coordinator in coordinators.iter() {
+            let coordinator = coordinator.clone();
+            joinset.spawn(async move {
+                coordinator
+                    .transaction(i, Vec::from("This is a transaction"))
+                    .await
+            });
+        }
+    }
+    while let Some(res) = joinset.join_next().await {
+        res.unwrap().unwrap();
+    }
+}
+
+async fn _bigger_payloads_execution(
+    coordinator: Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>,
+    payload: Vec<u8>,
+) {
+    let mut joinset = tokio::task::JoinSet::new();
+
+    for i in 0..10 {
+        let coordinator = coordinator.clone();
+        let payload = payload.clone();
+        joinset.spawn(async move { coordinator.transaction(i, payload).await });
     }
     while let Some(res) = joinset.join_next().await {
         res.unwrap().unwrap();
@@ -53,11 +93,21 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         .build()
         .unwrap();
 
-    let coordinator = runtime.block_on(async { prepare().await });
+    let (nodes, _payload) = runtime.block_on(async { prepare().await });
     c.bench_function("parallel", |b| {
         b.to_async(&runtime)
-            .iter(|| parallel_execution(coordinator.clone()))
+            .iter(|| parallel_execution(nodes.first().unwrap().clone()))
     });
+
+    c.bench_function("contention", |b| {
+        b.to_async(&runtime)
+            .iter(|| contention_execution(nodes.clone()))
+    });
+
+    //c.bench_function("bigger_payloads", |b| {
+    //    b.to_async(&runtime)
+    //        .iter(|| bigger_payloads_execution(nodes.first().unwrap().clone(), payload.clone()))
+    //});
 }
 
 criterion_group! {

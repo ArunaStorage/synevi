@@ -1,0 +1,54 @@
+use crate::consensus_transport::{
+    AcceptResponse, ApplyResponse, CommitResponse, PreAcceptResponse, RecoverResponse,
+};
+use anyhow::anyhow;
+
+pub trait IntoInner<T> {
+    fn into_inner(self) -> anyhow::Result<T>;
+}
+impl IntoInner<PreAcceptResponse> for crate::network::BroadcastResponse {
+    fn into_inner(self) -> anyhow::Result<PreAcceptResponse> {
+        if let crate::network::BroadcastResponse::PreAccept(response) = self {
+            Ok(response)
+        } else {
+            Err(anyhow!("Invalid conversion expected: PreAccept, got: {:#?}", self))
+        }
+    }
+}
+
+impl IntoInner<AcceptResponse> for crate::network::BroadcastResponse {
+    fn into_inner(self) -> anyhow::Result<AcceptResponse> {
+        if let crate::network::BroadcastResponse::Accept(response) = self {
+            Ok(response)
+        } else {
+            Err(anyhow!("Invalid conversion expected: Accept, got: {:#?}", self))
+        }
+    }
+}
+impl IntoInner<CommitResponse> for crate::network::BroadcastResponse {
+    fn into_inner(self) -> anyhow::Result<CommitResponse> {
+        if let crate::network::BroadcastResponse::Commit(response) = self {
+            Ok(response)
+        } else {
+            Err(anyhow!("Invalid conversion expected: Commit, got: {:#?}", self))
+        }
+    }
+}
+impl IntoInner<ApplyResponse> for crate::network::BroadcastResponse {
+    fn into_inner(self) -> anyhow::Result<ApplyResponse> {
+        if let crate::network::BroadcastResponse::Apply(response) = self {
+            Ok(response)
+        } else {
+            Err(anyhow!("Invalid conversion expected: Apply, got: {:#?}", self))
+        }
+    }
+}
+impl IntoInner<RecoverResponse> for crate::network::BroadcastResponse {
+    fn into_inner(self) -> anyhow::Result<RecoverResponse> {
+        if let crate::network::BroadcastResponse::Recover(response) = self {
+            Ok(response)
+        } else {
+            Err(anyhow!("Invalid conversion expected: Recover, got: {:#?}", self))
+        }
+    }
+}
