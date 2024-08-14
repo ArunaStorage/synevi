@@ -66,11 +66,13 @@ pub mod tests {
 
     pub struct DummyExecutor;
 
+    #[async_trait::async_trait]
     impl Executor for DummyExecutor {
         type Tx = Vec<u8>;
         type TxOk = Vec<u8>;
         type TxErr = anyhow::Error;
-        fn execute(&self, data: Vec<u8>) -> Result<Vec<u8>, ConsensusError<Self::TxErr>> {
+
+        async fn execute(&self, data: Vec<u8>) -> Result<Vec<u8>, ConsensusError<Self::TxErr>> {
             Ok(data)
         }
     }

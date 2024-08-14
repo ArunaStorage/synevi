@@ -295,7 +295,7 @@ where
             .map(|tx| tx.clone())
             .ok_or_else(|| anyhow::anyhow!("Transaction not found in coordinator"))?;
 
-        self.node.executor.execute(transaction)
+        self.node.executor.execute(transaction).await
     }
 
     #[instrument(level = "trace", skip(node))]

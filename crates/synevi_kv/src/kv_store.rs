@@ -52,11 +52,12 @@ impl synevi_types::Transaction for Transaction {
     }
 }
 
+#[async_trait::async_trait]
 impl Executor for KVExecutor {
     type Tx = Transaction;
     type TxOk = String;
     type TxErr = KVError;
-    fn execute(&self, transaction: Self::Tx) -> Result<String, ConsensusError<Self::TxErr>> {
+    async fn execute(&self, transaction: Self::Tx) -> Result<String, ConsensusError<Self::TxErr>> {
         Ok(match transaction {
             Transaction::Read { key } => {
                 let Some(key) = self.store.lock().unwrap().get(&key).cloned() else {
