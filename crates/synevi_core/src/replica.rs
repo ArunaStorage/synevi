@@ -43,7 +43,7 @@ where
     E: Executor + Send + Sync,
     S: Store + Send + Sync,
 {
-    #[instrument(level = "trace", skip(self))]
+    #[instrument(level = "trace", skip(self, request))]
     async fn pre_accept(
         &self,
         request: PreAcceptRequest,
@@ -94,7 +94,7 @@ where
         })
     }
 
-    #[instrument(level = "trace", skip(self))]
+    #[instrument(level = "trace", skip(self, request))]
     async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse> {
 
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
@@ -135,7 +135,7 @@ where
         })
     }
 
-    #[instrument(level = "trace", skip(self))]
+    #[instrument(level = "trace", skip(self, request))]
     async fn commit(&self, request: CommitRequest) -> Result<CommitResponse> {
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Commit");
@@ -161,7 +161,7 @@ where
         Ok(CommitResponse {})
     }
 
-    #[instrument(level = "trace", skip(self))]
+    #[instrument(level = "trace", skip(self, request))]
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse> {
 
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
@@ -191,7 +191,7 @@ where
             .await?;
         let _ = rx.await;
 
-        let _ = self.node.executor.execute(transaction);
+        let _ = self.node.executor.execute(transaction).await;
 
         Ok(ApplyResponse {})
     }
