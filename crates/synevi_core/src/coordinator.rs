@@ -15,7 +15,7 @@ use synevi_network::utils::IntoInner;
 use synevi_persistence::event_store::Store;
 use synevi_types::types::RecoveryState;
 use synevi_types::{Ballot, ConsensusError, Executor, State, Transaction, T, T0};
-use tracing::instrument;
+use tracing::{instrument, trace};
 
 pub struct Coordinator<N, E, S>
 where
@@ -58,6 +58,7 @@ where
 {
     #[instrument(level = "trace", skip(node, transaction))]
     pub async fn new(node: Arc<Node<N, E, S>>, transaction: E::Tx, id: u128) -> Self {
+        trace!(?id, "Coordinator: New");
         let t0 = node.event_store.lock().await.init_t_zero(node.info.serial);
         let network_interface = node.network.get_interface().await;
         Coordinator {
@@ -82,6 +83,8 @@ where
 
     #[instrument(level = "trace", skip(self))]
     async fn pre_accept(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
+        trace!(id = ?self.transaction.id, "Coordinator: Preaccept");
+
         self.node
             .stats
             .total_requests
@@ -144,6 +147,8 @@ where
 
     #[instrument(level = "trace", skip(self))]
     async fn accept(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
+        trace!(id = ?self.transaction.id, "Coordinator: Accept");
+
         // Safeguard: T0 <= T
         assert!(*self.transaction.t_zero <= *self.transaction.t);
 
@@ -203,6 +208,8 @@ where
 
     #[instrument(level = "trace", skip(self))]
     async fn commit(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
+        trace!(id = ?self.transaction.id, "Coordinator: Commit");
+
         let committed_request = CommitRequest {
             id: self.transaction.id.to_be_bytes().into(),
             event: self.transaction.get_transaction_bytes(),
@@ -251,6 +258,8 @@ where
 
     #[instrument(level = "trace", skip(self))]
     async fn apply(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
+        trace!(id = ?self.transaction.id, "Coordinator: Apply");
+
         let result = self.execute_consensus().await;
 
         let applied_request = ApplyRequest {

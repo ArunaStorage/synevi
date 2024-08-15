@@ -14,7 +14,7 @@ use synevi_persistence::event::UpsertEvent;
 use synevi_persistence::event_store::Store;
 use synevi_types::Transaction;
 use synevi_types::{Ballot, Executor, State, T, T0};
-use tracing::instrument;
+use tracing::{instrument, trace};
 
 pub struct ReplicaConfig<N, E, S>
 where
@@ -49,6 +49,9 @@ where
         request: PreAcceptRequest,
         _node_serial: u16,
     ) -> Result<PreAcceptResponse> {
+        let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
+        trace!(?request_id, "Replica: PreAccept");
+
         let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
 
         // TODO(perf): Remove the lock here
@@ -73,7 +76,7 @@ where
         // let (sx, rx) = oneshot::channel();
 
         let (t, deps) = self.node.event_store.lock().await.pre_accept_tx(
-            u128::from_be_bytes(request.id.as_slice().try_into()?),
+            request_id,
             t0,
             request.event,
         )?;
@@ -93,11 +96,14 @@ where
 
     #[instrument(level = "trace", skip(self))]
     async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse> {
+
+        let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
+        trace!(?request_id, "Replica: Accept");
+
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         //println!("Accept: {:?} @ {:?}", t_zero, self.node_info.serial);
 
         let t = T::try_from(request.timestamp.as_slice())?;
-        let id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         let request_ballot = Ballot::try_from(request.ballot.as_slice())?;
 
         let dependencies = {
@@ -112,7 +118,7 @@ where
                 }
             }
             store.upsert_tx(UpsertEvent {
-                id,
+                id: request_id,
                 t_zero,
                 t,
                 state: State::Accepted,
@@ -131,8 +137,10 @@ where
 
     #[instrument(level = "trace", skip(self))]
     async fn commit(&self, request: CommitRequest) -> Result<CommitResponse> {
+        let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
+        trace!(?request_id, "Replica: Commit");
+
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
-        let id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         let t = T::try_from(request.timestamp.as_slice())?;
         let deps = from_dependency(request.dependencies)?;
         let (sx, rx) = tokio::sync::oneshot::channel();
@@ -146,7 +154,7 @@ where
                 request.event,
                 WaitAction::CommitBefore,
                 sx,
-                id,
+                request_id,
             )
             .await?;
         let _ = rx.await;
@@ -155,9 +163,12 @@ where
 
     #[instrument(level = "trace", skip(self))]
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse> {
+
+        let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
+        trace!(?request_id, "Replica: Apply");
+
         let transaction = <E as Executor>::Tx::from_bytes(request.event)?;
 
-        let id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         let t = T::try_from(request.timestamp.as_slice())?;
 
@@ -175,7 +186,7 @@ where
                 transaction.as_bytes(),
                 WaitAction::ApplyAfter,
                 sx,
-                id,
+                request_id,
             )
             .await?;
         let _ = rx.await;
@@ -187,7 +198,8 @@ where
 
     #[instrument(level = "trace", skip(self))]
     async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse> {
-        let id = u128::from_be_bytes(request.id.as_slice().try_into()?);
+        let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
+        trace!(?request_id, "Replica: Recover");
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         let mut event_store = self.node.event_store.lock().await;
 
@@ -205,10 +217,10 @@ where
             }
 
             if matches!(state, State::Undefined) {
-                event_store.pre_accept_tx(id, t_zero, request.event)?;
+                event_store.pre_accept_tx(request_id, t_zero, request.event)?;
             };
         } else {
-            event_store.pre_accept_tx(id, t_zero, request.event)?;
+            event_store.pre_accept_tx(request_id, t_zero, request.event)?;
         }
         let recover_deps = event_store.get_recover_deps(&t_zero)?;
 
