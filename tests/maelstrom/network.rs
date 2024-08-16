@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
-    PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse, 
+    PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse,
 };
 use synevi_network::error::BroadCastError;
 use synevi_network::network::{BroadcastRequest, BroadcastResponse, Network, NetworkInterface};
@@ -141,7 +141,11 @@ impl Network for MaelstromNetwork {
         self.join_set.lock().await.spawn(async move {
             let server = Arc::new(server);
             while let Some(msg) = replica_rcv.recv().await {
-                tokio::spawn(replica_dispatch(server.clone(), msg, message_sender.clone()));
+                tokio::spawn(replica_dispatch(
+                    server.clone(),
+                    msg,
+                    message_sender.clone(),
+                ));
             }
             Ok(())
         });
@@ -171,7 +175,10 @@ impl NetworkInterface for MaelstromNetwork {
         let t0 = match &request {
             BroadcastRequest::PreAccept(req, _serial) => {
                 let t0 = T0(MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap());
-                self.broadcast_responses.lock().await.insert((State::PreAccepted, t0), sx);
+                self.broadcast_responses
+                    .lock()
+                    .await
+                    .insert((State::PreAccepted, t0), sx);
                 for replica in members {
                     if let Err(err) = self
                         .message_sender
@@ -193,12 +200,15 @@ impl NetworkInterface for MaelstromNetwork {
                         eprintln!("Message sender error: {err:?}");
                         continue;
                     };
-                };
+                }
                 (State::PreAccepted, t0)
             }
             BroadcastRequest::Accept(req) => {
                 let t0 = T0(MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap());
-                self.broadcast_responses.lock().await.insert((State::Accepted, t0), sx);
+                self.broadcast_responses
+                    .lock()
+                    .await
+                    .insert((State::Accepted, t0), sx);
                 for replica in members {
                     if let Err(err) = self
                         .message_sender
@@ -223,12 +233,15 @@ impl NetworkInterface for MaelstromNetwork {
                         eprintln!("Message sender error: {err:?}");
                         continue;
                     };
-                };
+                }
                 (State::Accepted, t0)
             }
             BroadcastRequest::Commit(req) => {
                 let t0 = T0(MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap());
-                self.broadcast_responses.lock().await.insert((State::Commited, t0), sx);
+                self.broadcast_responses
+                    .lock()
+                    .await
+                    .insert((State::Commited, t0), sx);
                 for replica in members {
                     if let Err(err) = self
                         .message_sender
@@ -253,12 +266,15 @@ impl NetworkInterface for MaelstromNetwork {
                         eprintln!("Message sender error: {err:?}");
                         continue;
                     };
-                };
+                }
                 (State::Commited, t0)
             }
             BroadcastRequest::Apply(req) => {
                 let t0 = T0(MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap());
-                self.broadcast_responses.lock().await.insert((State::Applied, t0), sx);
+                self.broadcast_responses
+                    .lock()
+                    .await
+                    .insert((State::Applied, t0), sx);
                 for replica in members {
                     if let Err(err) = self
                         .message_sender
@@ -282,12 +298,15 @@ impl NetworkInterface for MaelstromNetwork {
                         eprintln!("Message sender error: {err:?}");
                         continue;
                     };
-                };
+                }
                 (State::Applied, t0)
             }
             BroadcastRequest::Recover(req) => {
                 let t0 = T0(MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap());
-                self.broadcast_responses.lock().await.insert((State::Undefined, t0), sx);
+                self.broadcast_responses
+                    .lock()
+                    .await
+                    .insert((State::Undefined, t0), sx);
                 for replica in members {
                     if let Err(err) = self
                         .message_sender
@@ -311,7 +330,7 @@ impl NetworkInterface for MaelstromNetwork {
                         eprintln!("Message sender error: {err:?}");
                         continue;
                     };
-                };
+                }
                 (State::Undefined, t0)
             }
         };
@@ -323,7 +342,9 @@ impl NetworkInterface for MaelstromNetwork {
         // Poll majority
         // TODO: Electorates for PA ?
         if await_majority {
-            while let Ok(Some(message)) = tokio::time::timeout(Duration::from_millis(50), rcv.recv()).await {
+            while let Ok(Some(message)) =
+                tokio::time::timeout(Duration::from_millis(50), rcv.recv()).await
+            {
                 result.push(message);
                 counter += 1;
                 if counter >= majority {
@@ -333,7 +354,9 @@ impl NetworkInterface for MaelstromNetwork {
         } else {
             // TODO: Differentiate between push and forget and wait for all response
             // -> Apply vs Recover
-            while let Ok(Some(message)) = tokio::time::timeout(Duration::from_millis(50), rcv.recv()).await {
+            while let Ok(Some(message)) =
+                tokio::time::timeout(Duration::from_millis(50), rcv.recv()).await
+            {
                 result.push(message);
                 counter += 1;
                 if counter >= self.members.read().unwrap().len() {

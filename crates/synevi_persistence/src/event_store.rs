@@ -1,9 +1,8 @@
+use crate::database::Storage;
 use crate::event::Event;
 use crate::event::UpsertEvent;
-use crate::rocks_db::Database;
 use ahash::RandomState;
 use anyhow::Result;
-use bytes::Bytes;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
 use synevi_types::types::RecoverDependencies;
@@ -15,7 +14,7 @@ use tracing::instrument;
 #[derive(Debug)]
 pub struct EventStore {
     pub events: BTreeMap<T0, Event>, // Key: t0, value: Event
-    pub database: Option<Database>,
+    pub database: Option<Storage>,
     pub(crate) mappings: BTreeMap<T, T0>, // Key: t, value t0
     pub last_applied: T,                  // t of last applied entry
     pub(crate) latest_t0: T0,             // last created or recognized t0
@@ -55,7 +54,7 @@ pub trait Store: Send + Sync + Sized + 'static {
 
 impl EventStore {
     pub fn new_with_persistence(node_serial: u16, path: String) -> Result<Self> {
-        let db = Database::new(path)?;
+        let db = Storage::new(path)?;
         Ok(EventStore {
             events: BTreeMap::default(),
             mappings: BTreeMap::default(),
@@ -216,18 +215,12 @@ impl Store for EventStore {
             };
 
             if let Some(db) = &self.database {
-                let t: Vec<u8> = (*event.t).into();
-                db.update_object(t.into(), event.as_bytes())?
+                db.upsert_object(event.clone())?;
             }
             Ok(hash)
         } else {
             if let Some(db) = &self.database {
-                let t: Vec<u8> = (*event.t).into();
-                db.init_object(
-                    t.into(),
-                    Bytes::from(event.transaction.clone()),
-                    event.as_bytes(),
-                )?;
+                db.upsert_object(event.clone())?;
             }
             Ok(None)
         }
@@ -335,10 +328,9 @@ impl EventStore {
                 let mut mappings = BTreeMap::default();
                 let mut last_applied = T::default();
                 let mut latest_t0 = T0::default();
-                let db = Database::new(path)?;
+                let db = Storage::new(path)?;
                 let result = db.read_all()?;
-                for entry in result {
-                    let event = Event::from_bytes(entry)?;
+                for event in result {
                     if event.state == State::Applied && event.t > last_applied {
                         last_applied = event.t;
                     }
@@ -368,53 +360,5 @@ impl EventStore {
                 latest_hash: [0; 32],
             }),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::event_store::Event;
-    use crate::rocks_db::SplitEvent;
-    use bytes::Bytes;
-    use monotime::MonoTime;
-    use std::collections::HashSet;
-    use std::time::{SystemTime, UNIX_EPOCH};
-    use synevi_types::{Ballot, State, T, T0};
-
-    #[test]
-    fn event_conversion() {
-        let mut dependencies = HashSet::default();
-        for i in 0..3 {
-            dependencies.insert(T0(MonoTime::new(0, i)));
-        }
-        let t_zero = T0(MonoTime::new(1, 1));
-        let t = T(t_zero.next().into_time());
-
-        let event = Event {
-            id: 0,
-            t_zero,
-            t,
-            state: State::Commited,
-            transaction: Vec::from(b"this is a test transaction"),
-            dependencies,
-            ballot: Ballot(MonoTime::new(1, 1)),
-            last_updated: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
-                .as_nanos(),
-            previous_hash: None,
-        };
-        let key = Bytes::from(t_zero.0);
-        let payload = Bytes::from(event.transaction.clone());
-        let state = event.as_bytes();
-        let event_to_bytes = SplitEvent {
-            key,
-            event: payload,
-            state,
-        };
-
-        let back_to_struct = Event::from_bytes(event_to_bytes).unwrap();
-
-        assert_eq!(event, back_to_struct)
     }
 }

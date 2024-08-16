@@ -2,9 +2,12 @@ use ahash::RandomState;
 use anyhow::Result;
 use bytes::Bytes;
 use monotime::MonoTime;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, ops::Deref};
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Serialize, Deserialize,
+)]
 pub struct T0(pub MonoTime);
 
 impl TryFrom<Bytes> for T0 {
@@ -40,7 +43,9 @@ impl From<T0> for Vec<u8> {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Serialize, Deserialize,
+)]
 pub struct T(pub MonoTime);
 
 impl Deref for T {
@@ -76,7 +81,9 @@ impl From<T> for Vec<u8> {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Serialize, Deserialize,
+)]
 pub struct Ballot(pub MonoTime);
 impl Deref for Ballot {
     type Target = MonoTime;
@@ -111,7 +118,9 @@ impl From<Ballot> for Vec<u8> {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Serialize, Deserialize,
+)]
 pub enum State {
     #[default]
     Undefined = 0,

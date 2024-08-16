@@ -75,11 +75,12 @@ where
 
         // let (sx, rx) = oneshot::channel();
 
-        let (t, deps) = self.node.event_store.lock().await.pre_accept_tx(
-            request_id,
-            t0,
-            request.event,
-        )?;
+        let (t, deps) =
+            self.node
+                .event_store
+                .lock()
+                .await
+                .pre_accept_tx(request_id, t0, request.event)?;
 
         // self.reorder_buffer
         //      .send_msg(t0, sx, request.event, waiting_time)
@@ -96,7 +97,6 @@ where
 
     #[instrument(level = "trace", skip(self, request))]
     async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse> {
-
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Accept");
 
@@ -163,7 +163,6 @@ where
 
     #[instrument(level = "trace", skip(self, request))]
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse> {
-
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Apply");
 

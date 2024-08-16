@@ -11,7 +11,10 @@ impl IntoInner<PreAcceptResponse> for crate::network::BroadcastResponse {
         if let crate::network::BroadcastResponse::PreAccept(response) = self {
             Ok(response)
         } else {
-            Err(anyhow!("Invalid conversion expected: PreAccept, got: {:#?}", self))
+            Err(anyhow!(
+                "Invalid conversion expected: PreAccept, got: {:#?}",
+                self
+            ))
         }
     }
 }
@@ -21,7 +24,10 @@ impl IntoInner<AcceptResponse> for crate::network::BroadcastResponse {
         if let crate::network::BroadcastResponse::Accept(response) = self {
             Ok(response)
         } else {
-            Err(anyhow!("Invalid conversion expected: Accept, got: {:#?}", self))
+            Err(anyhow!(
+                "Invalid conversion expected: Accept, got: {:#?}",
+                self
+            ))
         }
     }
 }
@@ -30,7 +36,10 @@ impl IntoInner<CommitResponse> for crate::network::BroadcastResponse {
         if let crate::network::BroadcastResponse::Commit(response) = self {
             Ok(response)
         } else {
-            Err(anyhow!("Invalid conversion expected: Commit, got: {:#?}", self))
+            Err(anyhow!(
+                "Invalid conversion expected: Commit, got: {:#?}",
+                self
+            ))
         }
     }
 }
@@ -39,7 +48,10 @@ impl IntoInner<ApplyResponse> for crate::network::BroadcastResponse {
         if let crate::network::BroadcastResponse::Apply(response) = self {
             Ok(response)
         } else {
-            Err(anyhow!("Invalid conversion expected: Apply, got: {:#?}", self))
+            Err(anyhow!(
+                "Invalid conversion expected: Apply, got: {:#?}",
+                self
+            ))
         }
     }
 }
@@ -48,7 +60,10 @@ impl IntoInner<RecoverResponse> for crate::network::BroadcastResponse {
         if let crate::network::BroadcastResponse::Recover(response) = self {
             Ok(response)
         } else {
-            Err(anyhow!("Invalid conversion expected: Recover, got: {:#?}", self))
+            Err(anyhow!(
+                "Invalid conversion expected: Recover, got: {:#?}",
+                self
+            ))
         }
     }
 }

@@ -1,8 +1,5 @@
-use crate::rocks_db::SplitEvent;
 use ahash::RandomState;
-use anyhow::Result;
-use bytes::{BufMut, Bytes, BytesMut};
-use monotime::MonoTime;
+use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 use std::{
     collections::HashSet,
@@ -10,7 +7,7 @@ use std::{
 };
 use synevi_types::{Ballot, State, T, T0};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Event {
     pub id: u128,
     pub t_zero: T0,
@@ -55,41 +52,6 @@ impl Event {
 
         hasher.finalize().into()
     }
-
-    pub fn as_bytes(&self) -> Bytes {
-        let mut new: BytesMut = BytesMut::new();
-
-        new.put(self.id.to_be_bytes().as_slice());
-        new.put(<[u8; 16]>::from(*self.t).as_slice());
-        let state: i32 = self.state.into();
-        new.put(state.to_be_bytes().as_slice()); // -> [u8: 4]
-        new.put(<[u8; 16]>::from(*self.ballot).as_slice());
-
-        for dep in &self.dependencies {
-            new.put::<Bytes>((*dep).into());
-        }
-
-        new.freeze()
-    }
-    pub fn from_bytes(input: SplitEvent) -> Result<Self> {
-        let mut state = input.state;
-        let mut event = Event::default();
-        event.t_zero = T0(MonoTime::try_from(input.key.iter().as_slice())?);
-        event.transaction = input.event.into();
-        event.id = u128::from_be_bytes(<[u8; 16]>::try_from(state.split_to(16).iter().as_slice())?);
-        event.t = T::try_from(state.split_to(16))?;
-        event.state = State::from(i32::from_be_bytes(<[u8; 4]>::try_from(
-            state.split_to(4).iter().as_slice(),
-        )?));
-        event.ballot = Ballot::try_from(state.split_to(16))?;
-        while !state.is_empty() {
-            let dep = state.split_to(16);
-            let t0_dep = T0::try_from(dep)?;
-            event.dependencies.insert(t0_dep);
-        }
-        Ok(event)
-    }
-
     pub fn is_update(&self, upsert_event: &UpsertEvent) -> bool {
         !(self.t_zero == upsert_event.t_zero
             && self.t == upsert_event.t

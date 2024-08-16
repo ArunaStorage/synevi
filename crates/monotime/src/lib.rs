@@ -3,9 +3,13 @@ use anyhow::Result;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use serde::Deserialize;
+use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 pub struct MonoTime(u128); // nanos << 48 | seq << 32 | node << 16 | 0*16
 
 pub enum TimeResult {
@@ -45,6 +49,10 @@ impl MonoTime {
         let time_stamp = nanos << 48 | (seq as u128) << 32 | (node as u128) << 16;
         assert!(time_stamp.trailing_zeros() >= 16);
         MonoTime(time_stamp)
+    }
+
+    pub fn get_inner(&self) -> u128 {
+        self.0
     }
 
     pub fn get_nanos(&self) -> u128 {
