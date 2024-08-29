@@ -7,15 +7,14 @@ mod wait_handler;
 
 pub mod tests {
     use diesel_ulid::DieselUlid;
-    use synevi_types::error::BroadCastError;
-    use synevi_types::error::NetworkError;
     use std::sync::Arc;
     use synevi_network::network::BroadcastResponse;
     use synevi_network::network::NetworkInterface;
     use synevi_network::network::{BroadcastRequest, Network};
     use synevi_network::replica::Replica;
-    use synevi_types::ConsensusError;
+    use synevi_types::types::SyneviResult;
     use synevi_types::Executor;
+    use synevi_types::SyneviError;
     use tokio::sync::Mutex;
 
     #[derive(Debug, Default)]
@@ -34,7 +33,7 @@ pub mod tests {
         async fn broadcast(
             &self,
             request: BroadcastRequest,
-        ) -> Result<Vec<BroadcastResponse>, BroadCastError> {
+        ) -> Result<Vec<BroadcastResponse>, SyneviError> {
             self.got_requests.lock().await.push(request);
             Ok(vec![])
         }
@@ -45,11 +44,16 @@ pub mod tests {
         type Ni = Self;
         async fn add_members(&self, _members: Vec<(DieselUlid, u16, String)>) {}
 
-        async fn add_member(&self, _id: DieselUlid, _serial: u16, _host: String) -> Result<(), NetworkError> {
+        async fn add_member(
+            &self,
+            _id: DieselUlid,
+            _serial: u16,
+            _host: String,
+        ) -> Result<(), SyneviError> {
             Ok(())
         }
 
-        async fn spawn_server<R: Replica>(&self, _server: R) -> Result<(), NetworkError> {
+        async fn spawn_server<R: Replica>(&self, _server: R) -> Result<(), SyneviError> {
             Ok(())
         }
 
@@ -70,8 +74,8 @@ pub mod tests {
     impl Executor for DummyExecutor {
         type Tx = Vec<u8>;
 
-        async fn execute(&self, data: Vec<u8>) -> Result<Vec<u8>, ConsensusError<()>> {
-            Ok(data)
+        async fn execute(&self, data: Vec<u8>) -> SyneviResult<Self> {
+            Ok(Ok(data))
         }
     }
 }

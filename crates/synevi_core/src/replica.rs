@@ -1,7 +1,6 @@
 use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
 use crate::wait_handler::WaitAction;
-use anyhow::Result;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use synevi_network::consensus_transport::{
@@ -12,8 +11,8 @@ use synevi_network::network::Network;
 use synevi_network::replica::Replica;
 use synevi_persistence::event::UpsertEvent;
 use synevi_persistence::event_store::Store;
-use synevi_types::Transaction;
 use synevi_types::{Ballot, Executor, State, T, T0};
+use synevi_types::{SyneviError, Transaction};
 use tracing::{instrument, trace};
 
 pub struct ReplicaConfig<N, E, S>
@@ -48,7 +47,7 @@ where
         &self,
         request: PreAcceptRequest,
         _node_serial: u16,
-    ) -> Result<PreAcceptResponse> {
+    ) -> Result<PreAcceptResponse, SyneviError> {
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: PreAccept");
 
@@ -96,7 +95,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self, request))]
-    async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse> {
+    async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse, SyneviError> {
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Accept");
 
@@ -136,7 +135,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self, request))]
-    async fn commit(&self, request: CommitRequest) -> Result<CommitResponse> {
+    async fn commit(&self, request: CommitRequest) -> Result<CommitResponse, SyneviError> {
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Commit");
 
@@ -162,7 +161,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self, request))]
-    async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse> {
+    async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse, SyneviError> {
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Apply");
 
@@ -196,7 +195,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse> {
+    async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse, SyneviError> {
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Recover");
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
@@ -230,7 +229,7 @@ where
 
         let local_state = event_store
             .get_event_state(&t_zero)
-            .ok_or_else(|| anyhow::anyhow!("Event not found"))?;
+            .ok_or_else(|| SyneviError::EventNotFound(t_zero.get_inner()))?;
         Ok(RecoverResponse {
             local_state: local_state.into(),
             wait: into_dependency(&recover_deps.wait),
@@ -243,68 +242,4 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-
-    // #[tokio::test]
-    // async fn start_recovery() {
-    //     let (sdx, _) = tokio::sync::mpsc::channel(100);
-    //     let event_store = Arc::new(Mutex::new(EventStore::init(None, 1, sdx).unwrap()));
-
-    //     let conflicting_t0 = MonoTime::new(0, 0);
-    //     event_store
-    //         .lock()
-    //         .await
-    //         .upsert(Event {
-    //             t_zero: T0(conflicting_t0),
-    //             t: T(conflicting_t0),
-    //             state: State::PreAccepted,
-    //             ..Default::default()
-    //         })
-    //         .await;
-
-    //     let network = Arc::new(tests::NetworkMock::default());
-    //     let node_info = Arc::new(NodeInfo {
-    //         id: Default::default(),
-    //         serial: 0,
-    //     });
-
-    //     let stats = Arc::new(Stats::default());
-
-    //     let wait_handler = WaitHandler::new(
-    //         event_store.clone(),
-    //         network.clone(),
-    //         stats.clone(),
-    //         node_info.clone(),
-    //     );
-
-    //     let wh_clone = wait_handler.clone();
-    //     tokio::spawn(async move {
-    //         wh_clone.run().await.unwrap();
-    //     });
-
-    //     let replica = ReplicaConfig {
-    //         _node_info: node_info.clone(),
-    //         event_store: event_store.clone(),
-    //         stats: stats.clone(),
-    //         _reorder_buffer: ReorderBuffer::new(event_store.clone()),
-    //         wait_handler,
-    //     };
-
-    //     let t0 = conflicting_t0.next().into_time();
-
-    //     let mut buf = BytesMut::with_capacity(16);
-    //     buf.put_u128(conflicting_t0.into());
-    //     let request = CommitRequest {
-    //         id: DieselUlid::generate().as_byte_array().to_vec(),
-    //         event: Vec::new(),
-    //         timestamp_zero: t0.into(),
-    //         timestamp: t0.into(),
-    //         dependencies: buf.freeze().to_vec(),
-    //     };
-    //     replica.commit(request).await.unwrap();
-    //     assert!(matches!(
-    //         network.get_requests().await.first().unwrap(),
-    //         synevi_network::network::BroadcastRequest::Recover(_)
-    //     ));
-    // }
-}
+mod tests {}

@@ -10,4 +10,4 @@ pub use types::State;
 pub use types::T;
 pub use types::T0;
 
-pub use error::ConsensusError;
+pub use error::SyneviError;

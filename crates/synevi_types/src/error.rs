@@ -2,83 +2,52 @@ use thiserror::Error;
 use tokio::task::JoinError;
 
 #[derive(Error, Debug)]
-pub enum BroadCastError {
+pub enum SyneviError {
     #[error("IntoInnerError")]
     IntoInnerError,
     #[error("JoinError")]
     JoinError(#[from] JoinError),
+    #[error("Send to channel error {0}")]
+    SendError(String),
     #[error("TonicStatusError")]
     TonicStatusError(#[from] tonic::Status),
+    #[error("Tonic transport error {0}")]
+    TonicTransportError(#[from] tonic::transport::Error),
     #[error("Majority not reached")]
     MajorityNotReached,
     #[error("TonicMetadataError")]
     TonicMetadataError(#[from] tonic::metadata::errors::InvalidMetadataKey),
-}
+    #[error("Acquire semaphore error {0}")]
+    AcquireSemaphoreError(#[from] tokio::sync::AcquireError),
+    #[error("Missing wait handler")]
+    MissingWaitHandler,
+    #[error("Arc dropped for weak")]
+    ArcDropped,
 
-#[derive(Error, Debug)]
-pub enum NetworkError {
-    #[error("BroadCastError")]
-    BroadCastError(#[from] BroadCastError),
     #[error("Invalid uri")]
     InvalidUri(#[from] http::uri::InvalidUri),
-    #[error("Tonic transport error {0}")]
-    TonicTransportError(#[from] tonic::transport::Error),
-    #[error("Latency error {0}")]
-    LatencyError(#[from] LatencyError),
-}
-
-#[derive(Error, Debug)]
-pub enum LatencyError {
     #[error("Invalid conversion int: {0}")]
     InvalidConversionInt(#[from] std::num::TryFromIntError),
     #[error("Invalid conversion slice: {0}")]
     InvalidConversionSlice(#[from] std::array::TryFromSliceError),
-}
+    #[error("Invalid conversion serde_json: {0}")]
+    InvalidConversionSerdeJson(#[from] serde_json::Error),
+    #[error("Invalid serialization for monotime {0}")]
+    InvalidMonotime(#[from] monotime::error::MonotimeError),
 
-#[derive(Error, Debug)]
-pub enum ConsensusError<E> {
-    #[error("Majority not reached")]
-    BroadCastError(#[from] BroadCastError),
-    #[error("Competing coordinator")]
-    CompetingCoordinator,
-    #[error("Internal error: {0}")]
-    InternalError(&'static str),
-    #[error("Invalid serialization")]
-    InvalidSerialization(#[from] DeserializeError),
-    #[error(transparent)]
-    ExecutorError(E),
-    #[error("Coordinator error {0}")]
-    CoordinatorError(#[from] CoordinatorError),
-    #[error("Persistence error {0}")]
-    PersistenceError(#[from] PersistenceError),
-}
-
-#[derive(Error, Debug)]
-pub enum PersistenceError{
     #[error("Database error {0}")]
     DatabaseError(#[from] heed::Error),
     #[error("Database {0} not found")]
     DatabaseNotFound(&'static str),
     #[error("Event {0} not found")]
     EventNotFound(u128),
+    #[error("Transaction not found")]
+    TransactionNotFound,
     #[error("Dependency {0} not found")]
     DependencyNotFound(u128),
+
+    #[error("Competing coordinator")]
+    CompetingCoordinator,
     #[error("Undefined recovery")]
     UndefinedRecovery,
 }
-
-#[derive(Error, Debug)]
-pub enum CoordinatorError {
-    #[error("Monotime deserialize error {0}")]
-    MonotimeDeserializeError(#[from] DeserializeError),
-    #[error("Persistence error {0}")]
-    PersistenceError(#[from] PersistenceError),
-    #[error("Missing wait handler")]
-    MissingWaitHandler,
-    #[error("Transaction not found")]
-    TransactionNotFound,
-}
-
-#[derive(Error, Debug)]
-#[error("Invalid serialization")]
-pub struct DeserializeError(#[from] monotime::error::MonotimeError);

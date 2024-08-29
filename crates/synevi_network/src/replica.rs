@@ -4,9 +4,9 @@ use crate::{
 };
 use bytes::{BufMut, BytesMut};
 use consensus_transport_server::ConsensusTransport;
-use synevi_types::error::BroadCastError;
 use std::time;
 use std::{str::FromStr, sync::Arc};
+use synevi_types::error::SyneviError;
 use tonic::{Request, Response, Status};
 
 #[async_trait::async_trait]
@@ -15,15 +15,15 @@ pub trait Replica: Send + Sync {
         &self,
         request: PreAcceptRequest,
         node_serial: u16,
-    ) -> Result<PreAcceptResponse, BroadCastError>;
+    ) -> Result<PreAcceptResponse, SyneviError>;
 
-    async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse, BroadCastError>;
+    async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse, SyneviError>;
 
-    async fn commit(&self, request: CommitRequest) -> Result<CommitResponse, BroadCastError>;
+    async fn commit(&self, request: CommitRequest) -> Result<CommitResponse, SyneviError>;
 
-    async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse, BroadCastError>;
+    async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse, SyneviError>;
 
-    async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse, BroadCastError>;
+    async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse, SyneviError>;
 }
 
 pub struct ReplicaBox<R>

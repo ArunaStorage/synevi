@@ -1,11 +1,10 @@
 use crate::coordinator::TransactionStateMachine;
 use ahash::RandomState;
-use anyhow::Result;
 use bytes::BufMut;
 use monotime::MonoTime;
 use std::collections::HashSet;
 use synevi_persistence::event::UpsertEvent;
-use synevi_types::{Transaction, T0};
+use synevi_types::{SyneviError, Transaction, T0};
 
 pub fn into_dependency(map: &HashSet<T0, RandomState>) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(map.len() * 16);
@@ -15,7 +14,7 @@ pub fn into_dependency(map: &HashSet<T0, RandomState>) -> Vec<u8> {
     bytes
 }
 
-pub fn from_dependency(deps: Vec<u8>) -> Result<HashSet<T0, RandomState>> {
+pub fn from_dependency(deps: Vec<u8>) -> Result<HashSet<T0, RandomState>, SyneviError> {
     let mut map = HashSet::default();
     for i in (0..deps.len()).step_by(16) {
         let t0 = T0(MonoTime::try_from(&deps[i..i + 16])?);

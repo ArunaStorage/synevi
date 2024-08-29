@@ -1,7 +1,6 @@
 use crate::coordinator::Coordinator;
 use crate::node::Node;
 use ahash::RandomState;
-use anyhow::Result;
 use async_channel::{Receiver, Sender};
 use std::collections::BTreeMap;
 use std::{
@@ -12,7 +11,7 @@ use std::{
 use synevi_network::network::Network;
 use synevi_persistence::event::UpsertEvent;
 use synevi_persistence::event_store::Store;
-use synevi_types::{Executor, State, T, T0};
+use synevi_types::{Executor, State, SyneviError, T, T0};
 use tokio::{sync::oneshot, time::timeout};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -83,7 +82,7 @@ where
         action: WaitAction,
         notify: oneshot::Sender<()>,
         id: u128,
-    ) -> Result<()> {
+    ) -> Result<(), SyneviError> {
         Ok(self
             .sender
             .send(WaitMessage {
@@ -95,10 +94,11 @@ where
                 action,
                 notify: Some(notify),
             })
-            .await?)
+            .await
+            .map_err(|e| SyneviError::SendError(e.to_string()))?)
     }
 
-    pub async fn run(self: Arc<Self>) -> Result<()> {
+    pub async fn run(self: Arc<Self>) -> Result<(), SyneviError> {
         // HashMap<T0_dep waiting_for, Vec<T0_transaction waiting>>
 
         let mut waiter_state = WaiterState::new();
@@ -183,7 +183,7 @@ where
             transaction,
             ..
         }: &WaitMessage,
-    ) -> Result<()> {
+    ) -> Result<(), SyneviError> {
         let state = match action {
             WaitAction::CommitBefore => State::Commited,
             WaitAction::ApplyAfter => State::Applied,

@@ -48,7 +48,7 @@ mod tests {
             });
         }
         while let Some(res) = joinset.join_next().await {
-            res.unwrap().unwrap();
+            res.unwrap().unwrap().unwrap();
         }
 
         let (total, accepts, recovers) = coordinator.get_stats();
@@ -204,7 +204,7 @@ mod tests {
                 });
             }
             while let Some(res) = joinset.join_next().await {
-                res.unwrap().unwrap();
+                res.unwrap().unwrap().unwrap();
             }
 
             println!("Time: {:?}", start.elapsed());
@@ -346,6 +346,7 @@ mod tests {
                     .clone()
                     .transaction(i, Vec::from("This is a transaction"))
                     .await
+                    .unwrap()
                     .unwrap();
             }
 

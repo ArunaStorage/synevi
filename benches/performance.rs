@@ -47,7 +47,7 @@ async fn parallel_execution(coordinator: Arc<Node<GrpcNetwork, DummyExecutor, Ev
         });
     }
     while let Some(res) = joinset.join_next().await {
-        res.unwrap().unwrap();
+        res.unwrap().unwrap().unwrap();
     }
 }
 
@@ -67,7 +67,7 @@ async fn contention_execution(
         }
     }
     while let Some(res) = joinset.join_next().await {
-        res.unwrap().unwrap();
+        res.unwrap().unwrap().unwrap();
     }
 }
 
@@ -83,7 +83,7 @@ async fn _bigger_payloads_execution(
         joinset.spawn(async move { coordinator.transaction(i, payload).await });
     }
     while let Some(res) = joinset.join_next().await {
-        res.unwrap().unwrap();
+        res.unwrap().unwrap().unwrap();
     }
 }
 

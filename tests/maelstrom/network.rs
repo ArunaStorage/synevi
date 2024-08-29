@@ -9,10 +9,9 @@ use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
     PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse,
 };
-use synevi_network::error::BroadCastError;
 use synevi_network::network::{BroadcastRequest, BroadcastResponse, Network, NetworkInterface};
 use synevi_network::replica::Replica;
-use synevi_types::{State, T0};
+use synevi_types::{State, SyneviError, T0};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -32,6 +31,7 @@ type KVSend = Sender<Message>;
 type KVReceive = Receiver<Message>;
 
 impl MaelstromNetwork {
+    #[allow(dead_code)]
     pub fn new(
         node_id: String,
         message_sender: async_channel::Sender<Message>,
@@ -54,6 +54,7 @@ impl MaelstromNetwork {
         (network, kv_rcv)
     }
 
+    #[allow(dead_code)]
     pub fn get_join_set(&self) -> Arc<Mutex<JoinSet<anyhow::Result<()>>>> {
         self.join_set.clone()
     }
@@ -69,12 +70,17 @@ impl Network for MaelstromNetwork {
         }
     }
 
-    async fn add_member(&self, _id: DieselUlid, _serial: u16, host: String) -> anyhow::Result<()> {
+    async fn add_member(
+        &self,
+        _id: DieselUlid,
+        _serial: u16,
+        host: String,
+    ) -> Result<(), SyneviError> {
         self.members.write().unwrap().push(host);
         Ok(())
     }
 
-    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> anyhow::Result<()> {
+    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<(), SyneviError> {
         eprintln!("Spawning network handler");
         let (response_send, mut response_rcv) = tokio::sync::mpsc::channel::<Message>(100);
         let (replica_send, mut replica_rcv) = tokio::sync::mpsc::channel::<Message>(100);
@@ -167,7 +173,7 @@ impl NetworkInterface for MaelstromNetwork {
     async fn broadcast(
         &self,
         request: BroadcastRequest,
-    ) -> anyhow::Result<Vec<BroadcastResponse>, BroadCastError> {
+    ) -> anyhow::Result<Vec<BroadcastResponse>, SyneviError> {
         let await_majority = true;
         //let broadcast_all = false;
         let (sx, mut rcv) = tokio::sync::mpsc::channel(50);
@@ -367,7 +373,7 @@ impl NetworkInterface for MaelstromNetwork {
 
         if result.len() < majority {
             eprintln!("Majority not reached: {:?}", result);
-            return Err(BroadCastError::MajorityNotReached);
+            return Err(SyneviError::MajorityNotReached);
         }
 
         self.broadcast_responses.lock().await.remove(&t0);

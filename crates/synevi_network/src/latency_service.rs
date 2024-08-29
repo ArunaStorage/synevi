@@ -1,21 +1,22 @@
 use bytes::{BufMut, BytesMut};
-use synevi_types::error::{LatencyError, NetworkError};
 use std::{
     sync::Arc,
     time::{self, Duration, Instant},
 };
+use synevi_types::error::SyneviError;
 use tokio::sync::RwLock;
 use tonic::{Request, Response};
 
 use crate::{
     configure_transport::{
         time_service_client::TimeServiceClient, GetTimeRequest, GetTimeResponse,
-    }, network::MemberWithLatency
+    },
+    network::MemberWithLatency,
 };
 
 const LATENCY_INTERVAL: u64 = 10;
 
-pub async fn get_latency(members: Arc<RwLock<Vec<MemberWithLatency>>>) -> Result<(), NetworkError> {
+pub async fn get_latency(members: Arc<RwLock<Vec<MemberWithLatency>>>) -> Result<(), SyneviError> {
     loop {
         for member in members.read().await.iter() {
             let mut client = TimeServiceClient::new(member.member.channel.clone());
@@ -53,7 +54,7 @@ pub async fn get_latency(members: Arc<RwLock<Vec<MemberWithLatency>>>) -> Result
 fn calculate_times(
     instant_before: Instant,
     response: Response<GetTimeResponse>,
-) -> Result<(u64, i64), LatencyError> {
+) -> Result<(u64, i64), SyneviError> {
     let elapsed = instant_before.elapsed().as_nanos();
     let time_now = time::SystemTime::now()
         .duration_since(time::UNIX_EPOCH)

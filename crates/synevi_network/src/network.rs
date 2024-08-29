@@ -11,9 +11,9 @@ use crate::{
     replica::{Replica, ReplicaBox},
 };
 use diesel_ulid::DieselUlid;
-use synevi_types::error::{BroadCastError, NetworkError};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::{net::SocketAddr, sync::Arc};
+use synevi_types::error::SyneviError;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
 use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
@@ -24,15 +24,20 @@ pub trait NetworkInterface: Send + Sync {
     async fn broadcast(
         &self,
         request: BroadcastRequest,
-    ) -> Result<Vec<BroadcastResponse>, BroadCastError>;
+    ) -> Result<Vec<BroadcastResponse>, SyneviError>;
 }
 
 #[async_trait::async_trait]
 pub trait Network: Send + Sync + 'static {
     type Ni: NetworkInterface;
     async fn add_members(&self, members: Vec<(DieselUlid, u16, String)>);
-    async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<(), NetworkError>;
-    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<(), NetworkError>;
+    async fn add_member(
+        &self,
+        id: DieselUlid,
+        serial: u16,
+        host: String,
+    ) -> Result<(), SyneviError>;
+    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<(), SyneviError>;
     async fn get_interface(&self) -> Arc<Self::Ni>;
     async fn get_waiting_time(&self, node_serial: u16) -> u64;
 }
@@ -49,11 +54,16 @@ where
         self.as_ref().add_members(members).await;
     }
 
-    async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<(), NetworkError> {
+    async fn add_member(
+        &self,
+        id: DieselUlid,
+        serial: u16,
+        host: String,
+    ) -> Result<(), SyneviError> {
         self.as_ref().add_member(id, serial, host).await
     }
 
-    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<(), NetworkError> {
+    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<(), SyneviError> {
         self.as_ref().spawn_server(server).await
     }
 
@@ -74,7 +84,7 @@ where
     async fn broadcast(
         &self,
         request: BroadcastRequest,
-    ) -> Result<Vec<BroadcastResponse>, BroadCastError> {
+    ) -> Result<Vec<BroadcastResponse>, SyneviError> {
         self.as_ref().broadcast(request).await
     }
 }
@@ -123,7 +133,7 @@ pub enum BroadcastResponse {
 pub struct GrpcNetwork {
     pub socket_addr: SocketAddr,
     pub members: Arc<RwLock<Vec<MemberWithLatency>>>,
-    join_set: Mutex<JoinSet<Result<(), NetworkError>>>,
+    join_set: Mutex<JoinSet<Result<(), SyneviError>>>,
 }
 
 #[derive(Debug)]
@@ -163,7 +173,12 @@ impl Network for GrpcNetwork {
         }
     }
 
-    async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<(), NetworkError> {
+    async fn add_member(
+        &self,
+        id: DieselUlid,
+        serial: u16,
+        host: String,
+    ) -> Result<(), SyneviError> {
         let channel = Channel::from_shared(host.clone())?.connect().await?;
         self.members.write().await.push(MemberWithLatency {
             member: Arc::new(Member {
@@ -177,7 +192,7 @@ impl Network for GrpcNetwork {
         Ok(())
     }
 
-    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<(), NetworkError> {
+    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<(), SyneviError> {
         let new_replica_box = ReplicaBox::new(server);
         let addr = self.socket_addr;
         self.join_set.lock().await.spawn(async move {
@@ -220,9 +235,9 @@ impl NetworkInterface for GrpcNetworkSet {
     async fn broadcast(
         &self,
         request: BroadcastRequest,
-    ) -> Result<Vec<BroadcastResponse>, BroadCastError> {
+    ) -> Result<Vec<BroadcastResponse>, SyneviError> {
         //dbg!("[broadcast]: Start");
-        let mut responses: JoinSet<Result<BroadcastResponse, BroadCastError>> = JoinSet::new();
+        let mut responses: JoinSet<Result<BroadcastResponse, SyneviError>> = JoinSet::new();
         let mut result = Vec::new();
 
         // Send PreAccept request to every known member
@@ -358,7 +373,7 @@ impl NetworkInterface for GrpcNetworkSet {
 
         if result.len() < majority {
             println!("Majority not reached: {:?}", result);
-            return Err(BroadCastError::MajorityNotReached);
+            return Err(SyneviError::MajorityNotReached);
         }
         Ok(result)
     }

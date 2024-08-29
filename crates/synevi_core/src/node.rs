@@ -1,13 +1,13 @@
 use crate::coordinator::Coordinator;
 use crate::replica::ReplicaConfig;
 use crate::wait_handler::WaitHandler;
-use anyhow::{anyhow, Result};
 use diesel_ulid::DieselUlid;
 use std::fmt::Debug;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::network::{Network, NodeInfo};
 use synevi_persistence::event_store::{EventStore, Store};
-use synevi_types::{ConsensusError, Executor};
+use synevi_types::types::SyneviResult;
+use synevi_types::{Executor, SyneviError};
 use tokio::sync::{Mutex, RwLock};
 use tracing::instrument;
 
@@ -44,7 +44,7 @@ where
         serial: u16,
         network: N,
         executor: E,
-    ) -> Result<Arc<Self>> {
+    ) -> Result<Arc<Self>, SyneviError> {
         let node_name = NodeInfo { id, serial };
 
         let stats = Stats {
@@ -96,30 +96,27 @@ where
     S: Store,
 {
     #[instrument(level = "trace", skip(self))]
-    pub async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
+    pub async fn add_member(
+        &self,
+        id: DieselUlid,
+        serial: u16,
+        host: String,
+    ) -> Result<(), SyneviError> {
         self.network.add_member(id, serial, host).await
     }
 
     #[instrument(level = "trace", skip(self, transaction))]
-    pub async fn transaction(
-        self: Arc<Self>,
-        id: u128,
-        transaction: E::Tx,
-    ) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
-        let _permit = self
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|_| anyhow!("Semaphore error"))?;
+    pub async fn transaction(self: Arc<Self>, id: u128, transaction: E::Tx) -> SyneviResult<E> {
+        let _permit = self.semaphore.acquire().await?;
         let mut coordinator = Coordinator::new(self.clone(), transaction, id).await;
         coordinator.run().await
     }
 
-    pub async fn get_wait_handler(&self) -> Result<Arc<WaitHandler<N, E, S>>> {
+    pub async fn get_wait_handler(&self) -> Result<Arc<WaitHandler<N, E, S>>, SyneviError> {
         let lock = self.wait_handler.read().await;
         let handler = lock
             .as_ref()
-            .ok_or_else(|| anyhow!("Missing wait_handler"))?
+            .ok_or_else(|| SyneviError::MissingWaitHandler)?
             .clone();
         Ok(handler)
     }
@@ -147,7 +144,6 @@ where
 mod tests {
     use crate::coordinator::Coordinator;
     use crate::{node::Node, tests::DummyExecutor};
-    use anyhow::Result;
     use diesel_ulid::DieselUlid;
     use std::collections::BTreeMap;
     use std::net::SocketAddr;
@@ -156,7 +152,7 @@ mod tests {
     use synevi_network::network::GrpcNetwork;
     use synevi_network::network::Network;
     use synevi_persistence::event_store::Store;
-    use synevi_types::{Executor, State, T, T0};
+    use synevi_types::{Executor, State, SyneviError, T, T0};
 
     impl<N, E> Node<N, E>
     where
@@ -167,7 +163,7 @@ mod tests {
             self: Arc<Self>,
             id: u128,
             transaction: Vec<u8>,
-        ) -> Result<()> {
+        ) -> Result<(), SyneviError> {
             let _permit = self.semaphore.acquire().await?;
             let mut coordinator = Coordinator::new(self.clone(), transaction, id).await;
             coordinator.failing_pre_accept().await?;
@@ -258,6 +254,7 @@ mod tests {
             .clone()
             .transaction(0, Vec::from("last transaction"))
             .await
+            .unwrap()
             .unwrap();
 
         let coordinator_store: BTreeMap<T0, T> = coordinator

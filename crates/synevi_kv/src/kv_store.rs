@@ -7,7 +7,8 @@ use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use synevi_core::node::Node;
 use synevi_network::network::Network;
-use synevi_types::{ConsensusError, Executor};
+use synevi_types::types::SyneviResult;
+use synevi_types::{error::SyneviError, Executor};
 
 #[derive(Clone)]
 pub struct KVExecutor {
@@ -39,7 +40,6 @@ pub enum Transaction {
 }
 
 impl synevi_types::Transaction for Transaction {
-
     type TxErr = KVError;
     type TxOk = String;
 
@@ -47,44 +47,44 @@ impl synevi_types::Transaction for Transaction {
         serde_json::to_vec(self).unwrap()
     }
 
-    fn from_bytes(bytes: Vec<u8>) -> Result<Self>
+    fn from_bytes(bytes: Vec<u8>) -> Result<Self, SyneviError>
     where
         Self: Sized,
     {
-        serde_json::from_slice(&bytes).map_err(Into::into)
+        Ok(serde_json::from_slice(&bytes)?)
     }
 }
 
 #[async_trait::async_trait]
 impl Executor for KVExecutor {
     type Tx = Transaction;
-    async fn execute(&self, transaction: Self::Tx) -> Result<String, ConsensusError<Self::TxErr>> {
+    async fn execute(&self, transaction: Self::Tx) -> SyneviResult<Self> {
         Ok(match transaction {
             Transaction::Read { key } => {
                 let Some(key) = self.store.lock().unwrap().get(&key).cloned() else {
-                    return Err(ConsensusError::ExecutorError(KVError::KeyNotFound));
+                    return Ok(Err(KVError::KeyNotFound));
                 };
-                key
+                Ok(key)
             }
             Transaction::Write { key, value } => {
                 self.store
                     .lock()
                     .unwrap()
                     .insert(key.clone(), value.clone());
-                value
+                Ok(value)
             }
             Transaction::Cas { key, from, to } => {
                 let mut store = self.store.lock().unwrap();
 
-                let entry = store
-                    .get_mut(&key)
-                    .ok_or_else(|| ConsensusError::ExecutorError(KVError::KeyNotFound))?;
+                let Some(entry) = store.get_mut(&key) else {
+                    return Ok(Err(KVError::KeyNotFound));
+                };
 
                 if entry == &from {
                     *entry = to.clone();
-                    to
+                    Ok(to)
                 } else {
-                    return Err(ConsensusError::ExecutorError(KVError::MismatchError));
+                    return Ok(Err(KVError::MismatchError));
                 }
             }
         })
@@ -120,20 +120,8 @@ where
         transaction: Transaction,
     ) -> Result<String, KVError> {
         let node = self.node.clone();
-        let response = node
-            .transaction(u128::from_be_bytes(id.as_byte_array()), transaction)
-            .await
-            .map_err(|e| match e {
-                ConsensusError::BroadCastError(e) => {
-                    KVError::ProtocolError(anyhow!("Broadcast error: {e}"))
-                }
-                ConsensusError::CompetingCoordinator => {
-                    KVError::ProtocolError(anyhow!("Competing coordinator"))
-                }
-                ConsensusError::AnyhowError(e) => KVError::ProtocolError(e),
-                ConsensusError::ExecutorError(e) => e,
-            })?;
-        Ok(response)
+        node.transaction(u128::from_be_bytes(id.as_byte_array()), transaction)
+            .await?
     }
 
     pub async fn read(&self, key: String) -> Result<String, KVError> {

@@ -1,4 +1,3 @@
-use anyhow::Result;
 use async_channel::{Receiver, Sender};
 use std::{
     collections::BTreeMap,
@@ -7,7 +6,7 @@ use std::{
 };
 use synevi_network::network::Network;
 use synevi_persistence::event_store::Store;
-use synevi_types::{Executor, T, T0};
+use synevi_types::{Executor, SyneviError, T, T0};
 use tokio::{sync::oneshot, time::timeout};
 
 use crate::{node::Node, utils::into_dependency};
@@ -56,7 +55,7 @@ where
         event: Vec<u8>,
         latency: u64,
         id: u128,
-    ) -> Result<()> {
+    ) -> Result<(), SyneviError> {
         Ok(self
             .sender
             .send(ReorderMessage {
@@ -66,10 +65,11 @@ where
                 latency,
                 id,
             })
-            .await?)
+            .await
+            .map_err(|e| SyneviError::SendError(e.to_string()))?)
     }
 
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run(&self) -> Result<(), SyneviError> {
         let mut buffer = BTreeMap::new();
         let mut current_transaction = (Instant::now(), T0::default());
         let mut next_latency = 500;

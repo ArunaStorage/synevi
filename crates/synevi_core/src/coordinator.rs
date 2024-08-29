@@ -2,7 +2,6 @@ use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
 use crate::wait_handler::WaitAction;
 use ahash::RandomState;
-use synevi_types::error::{BroadCastError, CoordinatorError};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -13,9 +12,19 @@ use synevi_network::consensus_transport::{
 use synevi_network::network::{BroadcastRequest, Network, NetworkInterface};
 use synevi_network::utils::IntoInner;
 use synevi_persistence::event_store::Store;
-use synevi_types::types::RecoveryState;
-use synevi_types::{Ballot, ConsensusError, Executor, State, Transaction, T, T0};
+use synevi_types::types::{RecoveryState, SyneviResult};
+use synevi_types::{Ballot, Executor, State, SyneviError, Transaction, T, T0};
 use tracing::{instrument, trace};
+
+type RecoverySyneviResult<E> = Result<
+    RecoveryState<
+        Result<
+            <<E as Executor>::Tx as Transaction>::TxOk,
+            <<E as Executor>::Tx as Transaction>::TxErr,
+        >,
+    >,
+    SyneviError,
+>;
 
 pub struct Coordinator<N, E, S>
 where
@@ -77,12 +86,12 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    pub async fn run(&mut self) -> Result<<E::Tx as Transaction>::TxOk, ConsensusError<<E::Tx as Transaction>::TxErr>> {
+    pub async fn run(&mut self) -> SyneviResult<E> {
         self.pre_accept().await
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn pre_accept(&mut self) -> Result<<E::Tx as Transaction>::TxOk, ConsensusError<<E::Tx as Transaction>::TxErr>> {
+    async fn pre_accept(&mut self) -> SyneviResult<E> {
         trace!(id = ?self.transaction.id, "Coordinator: Preaccept");
 
         self.node
@@ -108,13 +117,13 @@ where
         let pa_responses = pre_accepted_responses
             .into_iter()
             .map(|res| res.into_inner())
-            .collect::<Result<Vec<_>, BroadCastError>>()?;
+            .collect::<Result<Vec<_>, SyneviError>>()?;
 
         if pa_responses
             .iter()
             .any(|PreAcceptResponse { nack, .. }| *nack)
         {
-            return Err(ConsensusError::CompetingCoordinator);
+            return Err(SyneviError::CompetingCoordinator);
         }
 
         self.pre_accept_consensus(&pa_responses).await?;
@@ -123,7 +132,10 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn pre_accept_consensus(&mut self, responses: &[PreAcceptResponse]) -> Result<(), CoordinatorError> {
+    async fn pre_accept_consensus(
+        &mut self,
+        responses: &[PreAcceptResponse],
+    ) -> Result<(), SyneviError> {
         // Collect deps by t_zero and only keep the max t
         for response in responses {
             let t_response = T::try_from(response.timestamp.as_slice())?;
@@ -146,7 +158,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn accept(&mut self) -> Result<<E::Tx as Transaction>::TxOk, ConsensusError<<E::Tx as Transaction>::TxErr>> {
+    async fn accept(&mut self) -> SyneviResult<E> {
         trace!(id = ?self.transaction.id, "Coordinator: Accept");
 
         // Safeguard: T0 <= T
@@ -173,10 +185,10 @@ where
             let pa_responses = accepted_responses
                 .into_iter()
                 .map(|res| res.into_inner())
-                .collect::<Result<Vec<_>, BroadCastError>>()?;
+                .collect::<Result<Vec<_>, SyneviError>>()?;
 
             if pa_responses.iter().any(|AcceptResponse { nack, .. }| *nack) {
-                return Err(ConsensusError::CompetingCoordinator);
+                return Err(SyneviError::CompetingCoordinator);
             }
 
             self.accept_consensus(&pa_responses).await?;
@@ -185,7 +197,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn accept_consensus(&mut self, responses: &[AcceptResponse]) -> Result<(), CoordinatorError> {
+    async fn accept_consensus(&mut self, responses: &[AcceptResponse]) -> Result<(), SyneviError> {
         // A little bit redundant, but I think the alternative to create a common behavior between responses may be even worse
         // Handle returned dependencies
         for response in responses {
@@ -207,7 +219,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn commit(&mut self) -> Result<<E::Tx as Transaction>::TxOk, ConsensusError<<E::Tx as Transaction>::TxErr>> {
+    async fn commit(&mut self) -> SyneviResult<E> {
         trace!(id = ?self.transaction.id, "Coordinator: Commit");
 
         let committed_request = CommitRequest {
@@ -231,7 +243,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn commit_consensus(&mut self) -> Result<(), CoordinatorError> {
+    async fn commit_consensus(&mut self) -> Result<(), SyneviError> {
         self.transaction.state = State::Commited;
 
         let (sx, rx) = tokio::sync::oneshot::channel();
@@ -240,7 +252,7 @@ where
             .read()
             .await
             .as_ref()
-            .ok_or_else(|| CoordinatorError::MissingWaitHandler)?
+            .ok_or_else(|| SyneviError::MissingWaitHandler)?
             .send_msg(
                 self.transaction.t_zero,
                 self.transaction.t,
@@ -257,7 +269,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn apply(&mut self) -> Result<<E::Tx as Transaction>::TxOk, ConsensusError<<E::Tx as Transaction>::TxErr>> {
+    async fn apply(&mut self) -> SyneviResult<E> {
         trace!(id = ?self.transaction.id, "Coordinator: Apply");
 
         let result = self.execute_consensus().await;
@@ -278,7 +290,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn execute_consensus(&mut self) -> Result<<E::Tx as Transaction>::TxOk, ConsensusError<<E::Tx as Transaction>::TxErr>> {
+    async fn execute_consensus(&mut self) -> SyneviResult<E> {
         self.transaction.state = State::Applied;
         let (sx, _rx) = tokio::sync::oneshot::channel();
         self.node
@@ -302,16 +314,13 @@ where
             .transaction
             .as_ref()
             .map(|tx| tx.clone())
-            .ok_or_else(|| CoordinatorError::TransactionNotFound)?;
+            .ok_or_else(|| SyneviError::TransactionNotFound)?;
 
         self.node.executor.execute(transaction).await
     }
 
     #[instrument(level = "trace", skip(node))]
-    pub async fn recover(
-        node: Arc<Node<N, E, S>>,
-        t0_recover: T0,
-    ) -> Result<<E::Tx as Transaction>::TxOk, ConsensusError<<E::Tx as Transaction>::TxErr>> {
+    pub async fn recover(node: Arc<Node<N, E, S>>, t0_recover: T0) -> SyneviResult<E> {
         loop {
             let node = node.clone();
             let recover_event = node
@@ -349,7 +358,7 @@ where
                     recover_responses
                         .into_iter()
                         .map(|res| res.into_inner())
-                        .collect::<Result<Vec<_>, BroadCastError>>()?,
+                        .collect::<Result<Vec<_>, SyneviError>>()?,
                 )
                 .await?;
             match recover_result {
@@ -358,7 +367,7 @@ where
                     continue;
                 }
                 RecoveryState::CompetingCoordinator => {
-                    return Err(ConsensusError::CompetingCoordinator)
+                    return Err(SyneviError::CompetingCoordinator)
                 }
             }
         }
@@ -368,7 +377,7 @@ where
     async fn recover_consensus(
         &mut self,
         mut responses: Vec<RecoverResponse>,
-    ) -> Result<<E::Tx as Transaction>::TxOk, ConsensusError<<E::Tx as Transaction>::TxErr>> {
+    ) -> RecoverySyneviResult<E> {
         // Keep track of values to replace
         let mut highest_ballot: Option<Ballot> = None;
         let mut superseding = false;
@@ -475,9 +484,7 @@ where
             }
             _ => {
                 tracing::warn!("Recovery state not matched");
-                return Err(ConsensusError::AnyhowError(anyhow::anyhow!(
-                    "Recovery state not matched"
-                )));
+                return Err(SyneviError::UndefinedRecovery);
             }
         })
     }
@@ -489,7 +496,6 @@ pub mod tests {
     use crate::node::Node;
     use crate::tests::DummyExecutor;
     use crate::tests::NetworkMock;
-    use anyhow::Result;
     use diesel_ulid::DieselUlid;
     use std::sync::atomic::Ordering;
     use synevi_network::consensus_transport::PreAcceptRequest;
@@ -497,16 +503,20 @@ pub mod tests {
     use synevi_network::network::{BroadcastRequest, NetworkInterface};
     use synevi_network::utils::IntoInner;
     use synevi_persistence::event_store::{EventStore, Store};
+    use synevi_types::SyneviError;
     use synevi_types::{Executor, State, Transaction};
 
     #[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
     #[allow(dead_code)]
     struct TestTx;
     impl Transaction for TestTx {
+        type TxOk = Vec<u8>;
+        type TxErr = ();
+
         fn as_bytes(&self) -> Vec<u8> {
             Vec::new()
         }
-        fn from_bytes(_bytes: Vec<u8>) -> Result<Self> {
+        fn from_bytes(_bytes: Vec<u8>) -> Result<Self, SyneviError> {
             Ok(Self)
         }
     }
@@ -517,7 +527,7 @@ pub mod tests {
         E: Executor,
         S: Store,
     {
-        pub async fn failing_pre_accept(&mut self) -> Result<()> {
+        pub async fn failing_pre_accept(&mut self) -> Result<(), SyneviError> {
             self.node
                 .stats
                 .total_requests
@@ -541,7 +551,7 @@ pub mod tests {
             let pa_responses = pre_accepted_responses
                 .into_iter()
                 .map(|res| res.into_inner())
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>, SyneviError>>()?;
 
             self.pre_accept_consensus(&pa_responses).await?;
             Ok(())
