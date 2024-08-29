@@ -2,7 +2,7 @@ use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
 use crate::wait_handler::WaitAction;
 use ahash::RandomState;
-use anyhow::Result;
+use synevi_types::error::{BroadCastError, CoordinatorError};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -77,12 +77,12 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    pub async fn run(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
+    pub async fn run(&mut self) -> Result<<E::Tx as Transaction>::TxOk, ConsensusError<<E::Tx as Transaction>::TxErr>> {
         self.pre_accept().await
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn pre_accept(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
+    async fn pre_accept(&mut self) -> Result<<E::Tx as Transaction>::TxOk, ConsensusError<<E::Tx as Transaction>::TxErr>> {
         trace!(id = ?self.transaction.id, "Coordinator: Preaccept");
 
         self.node
@@ -108,7 +108,7 @@ where
         let pa_responses = pre_accepted_responses
             .into_iter()
             .map(|res| res.into_inner())
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, BroadCastError>>()?;
 
         if pa_responses
             .iter()
@@ -123,7 +123,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn pre_accept_consensus(&mut self, responses: &[PreAcceptResponse]) -> Result<()> {
+    async fn pre_accept_consensus(&mut self, responses: &[PreAcceptResponse]) -> Result<(), CoordinatorError> {
         // Collect deps by t_zero and only keep the max t
         for response in responses {
             let t_response = T::try_from(response.timestamp.as_slice())?;
@@ -146,7 +146,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn accept(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
+    async fn accept(&mut self) -> Result<<E::Tx as Transaction>::TxOk, ConsensusError<<E::Tx as Transaction>::TxErr>> {
         trace!(id = ?self.transaction.id, "Coordinator: Accept");
 
         // Safeguard: T0 <= T
@@ -173,7 +173,7 @@ where
             let pa_responses = accepted_responses
                 .into_iter()
                 .map(|res| res.into_inner())
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>, BroadCastError>>()?;
 
             if pa_responses.iter().any(|AcceptResponse { nack, .. }| *nack) {
                 return Err(ConsensusError::CompetingCoordinator);
@@ -185,7 +185,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn accept_consensus(&mut self, responses: &[AcceptResponse]) -> Result<()> {
+    async fn accept_consensus(&mut self, responses: &[AcceptResponse]) -> Result<(), CoordinatorError> {
         // A little bit redundant, but I think the alternative to create a common behavior between responses may be even worse
         // Handle returned dependencies
         for response in responses {
@@ -207,7 +207,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn commit(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
+    async fn commit(&mut self) -> Result<<E::Tx as Transaction>::TxOk, ConsensusError<<E::Tx as Transaction>::TxErr>> {
         trace!(id = ?self.transaction.id, "Coordinator: Commit");
 
         let committed_request = CommitRequest {
@@ -231,7 +231,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn commit_consensus(&mut self) -> Result<()> {
+    async fn commit_consensus(&mut self) -> Result<(), CoordinatorError> {
         self.transaction.state = State::Commited;
 
         let (sx, rx) = tokio::sync::oneshot::channel();
@@ -240,7 +240,7 @@ where
             .read()
             .await
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Missing wait handler"))?
+            .ok_or_else(|| CoordinatorError::MissingWaitHandler)?
             .send_msg(
                 self.transaction.t_zero,
                 self.transaction.t,
@@ -257,7 +257,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn apply(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
+    async fn apply(&mut self) -> Result<<E::Tx as Transaction>::TxOk, ConsensusError<<E::Tx as Transaction>::TxErr>> {
         trace!(id = ?self.transaction.id, "Coordinator: Apply");
 
         let result = self.execute_consensus().await;
@@ -278,7 +278,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn execute_consensus(&mut self) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
+    async fn execute_consensus(&mut self) -> Result<<E::Tx as Transaction>::TxOk, ConsensusError<<E::Tx as Transaction>::TxErr>> {
         self.transaction.state = State::Applied;
         let (sx, _rx) = tokio::sync::oneshot::channel();
         self.node
@@ -302,7 +302,7 @@ where
             .transaction
             .as_ref()
             .map(|tx| tx.clone())
-            .ok_or_else(|| anyhow::anyhow!("Transaction not found in coordinator"))?;
+            .ok_or_else(|| CoordinatorError::TransactionNotFound)?;
 
         self.node.executor.execute(transaction).await
     }
@@ -311,7 +311,7 @@ where
     pub async fn recover(
         node: Arc<Node<N, E, S>>,
         t0_recover: T0,
-    ) -> Result<E::TxOk, ConsensusError<E::TxErr>> {
+    ) -> Result<<E::Tx as Transaction>::TxOk, ConsensusError<<E::Tx as Transaction>::TxErr>> {
         loop {
             let node = node.clone();
             let recover_event = node
@@ -349,7 +349,7 @@ where
                     recover_responses
                         .into_iter()
                         .map(|res| res.into_inner())
-                        .collect::<Result<Vec<_>>>()?,
+                        .collect::<Result<Vec<_>, BroadCastError>>()?,
                 )
                 .await?;
             match recover_result {
@@ -368,7 +368,7 @@ where
     async fn recover_consensus(
         &mut self,
         mut responses: Vec<RecoverResponse>,
-    ) -> Result<RecoveryState<E::TxOk>, ConsensusError<E::TxErr>> {
+    ) -> Result<<E::Tx as Transaction>::TxOk, ConsensusError<<E::Tx as Transaction>::TxErr>> {
         // Keep track of values to replace
         let mut highest_ballot: Option<Ballot> = None;
         let mut superseding = false;

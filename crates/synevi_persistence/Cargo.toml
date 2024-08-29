@@ -9,10 +9,9 @@ license.workspace = true
 [dependencies]
 monotime = { path = "../monotime" }
 synevi_types = { path = "../synevi_types" }
-anyhow = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
-heed = "0.20.4"
+heed = { workspace = true }
 chrono = "0.4.38"
 diesel-ulid = { workspace = true }
 futures = "0.3.30"
@@ -23,7 +22,7 @@ tonic = { workspace = true }
 tracing = { workspace = true }
 rand = "0.8.5"
 async-trait = { workspace = true }
-thiserror = "1.0.61"
+thiserror = { workspace = true }
 async-channel = "2.3.1"
 ahash = { workspace = true }
 sha3 = "0.10.8"

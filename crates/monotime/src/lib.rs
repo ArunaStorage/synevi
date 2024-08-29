@@ -1,11 +1,12 @@
-use anyhow::bail;
-use anyhow::Result;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use error::MonotimeError;
 use serde::Deserialize;
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+pub mod error;
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
@@ -170,11 +171,11 @@ impl From<MonoTime> for Vec<u8> {
 }
 
 impl TryFrom<&[u8]> for MonoTime {
-    type Error = anyhow::Error;
+    type Error = MonotimeError;
 
-    fn try_from(value: &[u8]) -> Result<Self> {
+    fn try_from(value: &[u8]) -> Result<Self, MonotimeError> {
         if value.len() != 16 {
-            bail!("Invalid length");
+            return Err(MonotimeError::InvalidLength);
         }
         let ts = u128::from_be_bytes(value[0..16].try_into()?);
         Ok(MonoTime(ts))

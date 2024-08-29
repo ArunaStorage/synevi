@@ -1,9 +1,10 @@
 use ahash::RandomState;
-use anyhow::Result;
 use bytes::Bytes;
 use monotime::MonoTime;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, ops::Deref};
+
+use crate::error::DeserializeError;
 
 #[derive(
     Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Serialize, Deserialize,
@@ -11,15 +12,15 @@ use std::{collections::HashSet, ops::Deref};
 pub struct T0(pub MonoTime);
 
 impl TryFrom<Bytes> for T0 {
-    type Error = anyhow::Error;
-    fn try_from(value: Bytes) -> Result<Self> {
+    type Error = DeserializeError;
+    fn try_from(value: Bytes) -> Result<Self, DeserializeError> {
         Ok(T0(MonoTime::try_from(value.as_ref())?))
     }
 }
 
 impl TryFrom<&[u8]> for T0 {
-    type Error = anyhow::Error;
-    fn try_from(value: &[u8]) -> Result<Self> {
+    type Error = DeserializeError;
+    fn try_from(value: &[u8]) -> Result<Self, DeserializeError> {
         Ok(T0(MonoTime::try_from(value)?))
     }
 }
@@ -56,15 +57,15 @@ impl Deref for T {
 }
 
 impl TryFrom<Bytes> for T {
-    type Error = anyhow::Error;
-    fn try_from(value: Bytes) -> Result<Self> {
+    type Error = DeserializeError;
+    fn try_from(value: Bytes) -> Result<Self, DeserializeError> {
         Ok(T(MonoTime::try_from(value.as_ref())?))
     }
 }
 
 impl TryFrom<&[u8]> for T {
-    type Error = anyhow::Error;
-    fn try_from(value: &[u8]) -> Result<Self> {
+    type Error = DeserializeError;
+    fn try_from(value: &[u8]) -> Result<Self, DeserializeError> {
         Ok(T(MonoTime::try_from(value)?))
     }
 }
@@ -93,8 +94,8 @@ impl Deref for Ballot {
 }
 
 impl TryFrom<Bytes> for Ballot {
-    type Error = anyhow::Error;
-    fn try_from(value: Bytes) -> Result<Self> {
+    type Error = DeserializeError;
+    fn try_from(value: Bytes) -> Result<Self, DeserializeError> {
         Ok(Ballot(MonoTime::try_from(value.as_ref())?))
     }
 }
@@ -106,8 +107,8 @@ impl From<Ballot> for Bytes {
 }
 
 impl TryFrom<&[u8]> for Ballot {
-    type Error = anyhow::Error;
-    fn try_from(value: &[u8]) -> Result<Self> {
+    type Error = DeserializeError;
+    fn try_from(value: &[u8]) -> Result<Self, DeserializeError> {
         Ok(Ballot(MonoTime::try_from(value)?))
     }
 }

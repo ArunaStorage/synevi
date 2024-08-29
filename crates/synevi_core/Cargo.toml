@@ -11,7 +11,6 @@ synevi_network = { path = "../synevi_network" }
 synevi_persistence = { path = "../synevi_persistence" }
 synevi_types = { path = "../synevi_types" }
 monotime = { path = "../monotime" }
-anyhow = { workspace = true }
 bytes = { workspace = true }
 chrono = "0.4.38"
 diesel-ulid = { workspace = true }
@@ -24,7 +23,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 rand = "0.8.5"
 async-trait = { workspace = true }
-thiserror = "1.0.61"
+thiserror = { workspace = true }
 async-channel = "2.3.1"
 ahash = { workspace = true }
 sha3 = "0.10.8"

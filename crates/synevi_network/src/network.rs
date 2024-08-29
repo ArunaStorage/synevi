@@ -1,6 +1,5 @@
 use crate::configure_transport::time_service_server::TimeServiceServer;
 use crate::consensus_transport::{RecoverRequest, RecoverResponse};
-use crate::error::BroadCastError;
 use crate::latency_service::get_latency;
 use crate::{
     consensus_transport::{
@@ -11,8 +10,8 @@ use crate::{
     },
     replica::{Replica, ReplicaBox},
 };
-use anyhow::Result;
 use diesel_ulid::DieselUlid;
+use synevi_types::error::{BroadCastError, NetworkError};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::{Mutex, RwLock};
@@ -32,8 +31,8 @@ pub trait NetworkInterface: Send + Sync {
 pub trait Network: Send + Sync + 'static {
     type Ni: NetworkInterface;
     async fn add_members(&self, members: Vec<(DieselUlid, u16, String)>);
-    async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<()>;
-    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<()>;
+    async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<(), NetworkError>;
+    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<(), NetworkError>;
     async fn get_interface(&self) -> Arc<Self::Ni>;
     async fn get_waiting_time(&self, node_serial: u16) -> u64;
 }
@@ -50,11 +49,11 @@ where
         self.as_ref().add_members(members).await;
     }
 
-    async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
+    async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<(), NetworkError> {
         self.as_ref().add_member(id, serial, host).await
     }
 
-    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<()> {
+    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<(), NetworkError> {
         self.as_ref().spawn_server(server).await
     }
 
@@ -124,7 +123,7 @@ pub enum BroadcastResponse {
 pub struct GrpcNetwork {
     pub socket_addr: SocketAddr,
     pub members: Arc<RwLock<Vec<MemberWithLatency>>>,
-    join_set: Mutex<JoinSet<Result<()>>>,
+    join_set: Mutex<JoinSet<Result<(), NetworkError>>>,
 }
 
 #[derive(Debug)]
@@ -164,7 +163,7 @@ impl Network for GrpcNetwork {
         }
     }
 
-    async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<()> {
+    async fn add_member(&self, id: DieselUlid, serial: u16, host: String) -> Result<(), NetworkError> {
         let channel = Channel::from_shared(host.clone())?.connect().await?;
         self.members.write().await.push(MemberWithLatency {
             member: Arc::new(Member {
@@ -178,7 +177,7 @@ impl Network for GrpcNetwork {
         Ok(())
     }
 
-    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<()> {
+    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<(), NetworkError> {
         let new_replica_box = ReplicaBox::new(server);
         let addr = self.socket_addr;
         self.join_set.lock().await.spawn(async move {

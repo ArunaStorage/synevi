@@ -8,7 +8,6 @@ license.workspace = true
 
 [dependencies]
 ahash = {workspace = true}
-anyhow = { workspace = true}
 diesel-ulid = { workspace = true}
 synevi_network = { path = "../synevi_network" }
 synevi_persistence = {path = "../synevi_persistence"}

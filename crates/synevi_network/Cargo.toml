@@ -10,13 +10,13 @@ license.workspace = true
 prost = "0.13.0"
 tokio = {workspace = true}
 tonic = {workspace = true}
-anyhow = {workspace = true}
 tonic-build = "0.12.0"
 diesel-ulid = {workspace = true}
 async-trait = {workspace = true}
 tracing = { workspace = true }
-thiserror = "1.0.61"
+thiserror = { workspace = true }
 bytes = { workspace = true}
+synevi_types = { path = "../synevi_types" }
 
 [build-dependencies]
 tonic-build = "0.12.0"

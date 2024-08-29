@@ -1,6 +1,5 @@
 use crate::error::KVError;
 use ahash::RandomState;
-use anyhow::{anyhow, Result};
 use diesel_ulid::DieselUlid;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -40,6 +39,10 @@ pub enum Transaction {
 }
 
 impl synevi_types::Transaction for Transaction {
+
+    type TxErr = KVError;
+    type TxOk = String;
+
     fn as_bytes(&self) -> Vec<u8> {
         serde_json::to_vec(self).unwrap()
     }
@@ -55,8 +58,6 @@ impl synevi_types::Transaction for Transaction {
 #[async_trait::async_trait]
 impl Executor for KVExecutor {
     type Tx = Transaction;
-    type TxOk = String;
-    type TxErr = KVError;
     async fn execute(&self, transaction: Self::Tx) -> Result<String, ConsensusError<Self::TxErr>> {
         Ok(match transaction {
             Transaction::Read { key } => {

@@ -1,5 +1,5 @@
-use anyhow::Result;
 use bytes::{BufMut, BytesMut};
+use synevi_types::error::{LatencyError, NetworkError};
 use std::{
     sync::Arc,
     time::{self, Duration, Instant},
@@ -10,13 +10,12 @@ use tonic::{Request, Response};
 use crate::{
     configure_transport::{
         time_service_client::TimeServiceClient, GetTimeRequest, GetTimeResponse,
-    },
-    network::MemberWithLatency,
+    }, network::MemberWithLatency
 };
 
 const LATENCY_INTERVAL: u64 = 10;
 
-pub async fn get_latency(members: Arc<RwLock<Vec<MemberWithLatency>>>) -> Result<()> {
+pub async fn get_latency(members: Arc<RwLock<Vec<MemberWithLatency>>>) -> Result<(), NetworkError> {
     loop {
         for member in members.read().await.iter() {
             let mut client = TimeServiceClient::new(member.member.channel.clone());
@@ -34,10 +33,7 @@ pub async fn get_latency(members: Arc<RwLock<Vec<MemberWithLatency>>>) -> Result
                 }))
                 .await
             else {
-                println!(
-                    "Failed to get time from member: {:?}",
-                    member.member.info.id
-                );
+                tracing::error!("Failed to get time from {:?}", member.member);
                 continue;
             };
             let Ok((latency, skew)) = calculate_times(now, response) else {
@@ -57,7 +53,7 @@ pub async fn get_latency(members: Arc<RwLock<Vec<MemberWithLatency>>>) -> Result
 fn calculate_times(
     instant_before: Instant,
     response: Response<GetTimeResponse>,
-) -> Result<(u64, i64)> {
+) -> Result<(u64, i64), LatencyError> {
     let elapsed = instant_before.elapsed().as_nanos();
     let time_now = time::SystemTime::now()
         .duration_since(time::UNIX_EPOCH)

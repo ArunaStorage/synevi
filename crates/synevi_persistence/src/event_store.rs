@@ -2,7 +2,7 @@ use crate::database::Storage;
 use crate::event::Event;
 use crate::event::UpsertEvent;
 use ahash::RandomState;
-use anyhow::Result;
+use synevi_types::error::PersistenceError;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
 use synevi_types::types::RecoverDependencies;
@@ -25,7 +25,7 @@ pub struct EventStore {
 type Dependencies = HashSet<T0, RandomState>;
 
 pub trait Store: Send + Sync + Sized + 'static {
-    fn new(node_serial: u16) -> Result<Self>;
+    fn new(node_serial: u16) -> Result<Self, PersistenceError>;
     // Initialize a new t0
     fn init_t_zero(&mut self, node_serial: u16) -> T0;
     // Pre-accept a transaction
@@ -34,18 +34,18 @@ pub trait Store: Send + Sync + Sized + 'static {
         id: u128,
         t_zero: T0,
         transaction: Vec<u8>,
-    ) -> Result<(T, Dependencies)>;
+    ) -> Result<(T, Dependencies), PersistenceError>;
     // Get the dependencies for a transaction
     fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> Dependencies;
     // Get the recover dependencies for a transaction
-    fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies>;
+    fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, PersistenceError>;
     // Tries to recover an unfinished event from the store
-    fn recover_event(&mut self, t_zero_recover: &T0, node_serial: u16) -> Result<RecoverEvent>;
+    fn recover_event(&mut self, t_zero_recover: &T0, node_serial: u16) -> Result<RecoverEvent, PersistenceError>;
     // Check and update the ballot for a transaction
     // Returns true if the ballot was accepted (current <= ballot)
     fn accept_tx_ballot(&mut self, t_zero: &T0, ballot: Ballot) -> Option<Ballot>;
     // Update or insert a transaction, returns the hash of the transaction if applied
-    fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<Option<[u8; 32]>>;
+    fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<Option<[u8; 32]>, PersistenceError>;
 
     fn get_event_state(&self, t_zero: &T0) -> Option<State>;
 
@@ -53,7 +53,7 @@ pub trait Store: Send + Sync + Sized + 'static {
 }
 
 impl EventStore {
-    pub fn new_with_persistence(node_serial: u16, path: String) -> Result<Self> {
+    pub fn new_with_path(node_serial: u16, path: String) -> Result<Self, PersistenceError> {
         let db = Storage::new(path)?;
         Ok(EventStore {
             events: BTreeMap::default(),
@@ -66,13 +66,27 @@ impl EventStore {
         })
     }
 
-    pub fn new_from_persistence(_path: String) -> Result<Self> {
+    pub fn new_with_env(node_serial: u16, env: heed::Env) -> Self {
+        let db = Storage::new_with_env(env);
+        EventStore {
+            events: BTreeMap::default(),
+            mappings: BTreeMap::default(),
+            last_applied: T::default(),
+            latest_t0: T0::default(),
+            database: Some(db),
+            node_serial,
+            latest_hash: [0; 32],
+        }
+    }
+
+    pub fn new_from_persistence(_path: String) -> Result<Self, PersistenceError> {
         todo!()
     }
 }
 
 impl Store for EventStore {
-    fn new(node_serial: u16) -> Result<Self> {
+    #[instrument(level = "trace")]
+    fn new(node_serial: u16) -> Result<Self, PersistenceError> {
         Ok(EventStore {
             events: BTreeMap::default(),
             mappings: BTreeMap::default(),
@@ -97,7 +111,7 @@ impl Store for EventStore {
         id: u128,
         t_zero: T0,
         transaction: Vec<u8>,
-    ) -> Result<(T, HashSet<T0, RandomState>)> {
+    ) -> Result<(T, HashSet<T0, RandomState>), PersistenceError> {
         let (t, deps) = {
             let t = T(if let Some((last_t, _)) = self.mappings.last_key_value() {
                 if **last_t > *t_zero {
@@ -162,7 +176,7 @@ impl Store for EventStore {
     }
 
     #[instrument(level = "trace")]
-    fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<Option<[u8; 32]>> {
+    fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<Option<[u8; 32]>, PersistenceError> {
         let Some(event) = self.events.get_mut(&upsert_event.t_zero) else {
             let event = Event::from(upsert_event.clone());
             self.events.insert(upsert_event.t_zero, event);
@@ -227,18 +241,18 @@ impl Store for EventStore {
     }
 
     #[instrument(level = "trace")]
-    fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies> {
+    fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, PersistenceError> {
         let mut recover_deps = RecoverDependencies {
             timestamp: self
                 .events
                 .get(t_zero)
                 .map(|event| event.t)
-                .ok_or_else(|| anyhow::anyhow!("Event not found for t_zero: {:?}", t_zero))?,
+                .ok_or_else(|| PersistenceError::EventNotFound(t_zero.get_inner()))?,
             ..Default::default()
         };
         for (t_dep, t_zero_dep) in self.mappings.range(self.last_applied..) {
             let dep_event = self.events.get(t_zero_dep).ok_or_else(|| {
-                anyhow::anyhow!("Dependency not found for t_zero: {:?}", t_zero_dep)
+                PersistenceError::DependencyNotFound(t_zero_dep.get_inner())
             })?;
             match dep_event.state {
                 State::Accepted => {
@@ -283,15 +297,12 @@ impl Store for EventStore {
         self.events.get(t_zero).map(|event| event.state)
     }
 
-    fn recover_event(&mut self, t_zero_recover: &T0, node_serial: u16) -> Result<RecoverEvent> {
+    fn recover_event(&mut self, t_zero_recover: &T0, node_serial: u16) -> Result<RecoverEvent, PersistenceError> {
         let Some(state) = self.get_event_state(t_zero_recover) else {
-            return Err(anyhow::anyhow!(
-                "No state found for t0 {:?}",
-                t_zero_recover
-            ));
+            return Err(PersistenceError::EventNotFound(t_zero_recover.get_inner()));
         };
         if matches!(state, synevi_types::State::Undefined) {
-            return Err(anyhow::anyhow!("Undefined recovery"));
+            return Err(PersistenceError::UndefinedRecovery);
         }
 
         if let Some(event) = self.events.get_mut(t_zero_recover) {
@@ -307,10 +318,7 @@ impl Store for EventStore {
                 ballot: event.ballot,
             })
         } else {
-            Err(anyhow::anyhow!(
-                "Event not found for t0 {:?}",
-                t_zero_recover
-            ))
+            Err(PersistenceError::EventNotFound(t_zero_recover.get_inner()))
         }
     }
 
@@ -320,7 +328,7 @@ impl Store for EventStore {
 }
 
 impl EventStore {
-    pub fn init(path: Option<String>, node_serial: u16) -> Result<Self> {
+    pub fn init(path: Option<String>, node_serial: u16) -> Result<Self, PersistenceError> {
         match path {
             Some(path) => {
                 // TODO: Read all from DB and fill event store
