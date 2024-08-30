@@ -3,7 +3,7 @@ use crate::messages::{Body, Message, MessageType};
 use crate::network::MaelstromNetwork;
 use crate::protocol::MessageHandler;
 use anyhow::{anyhow, Result};
-use diesel_ulid::DieselUlid;
+use ulid::Ulid;
 use std::sync::Arc;
 use synevi_kv::error::KVError;
 use synevi_kv::kv_store::KVStore;
@@ -20,8 +20,8 @@ impl MaelstromServer {
 
         eprintln!("Spawning maelstrom server");
         let init_msg = rx.recv().await.unwrap();
-        let mut node_info: (DieselUlid, u16, String) = (DieselUlid::generate(), 0, "".to_string());
-        let mut members: Vec<(DieselUlid, u16, String)> = Vec::new();
+        let mut node_info: (Ulid, u16, String) = (Ulid::new(), 0, "".to_string());
+        let mut members: Vec<(Ulid, u16, String)> = Vec::new();
         if let MessageType::Init {
             ref node_id,
             ref node_ids,
@@ -29,10 +29,10 @@ impl MaelstromServer {
         {
             for (num, node) in node_ids.iter().enumerate() {
                 if node == node_id {
-                    node_info = (DieselUlid::generate(), num as u16, node.clone());
+                    node_info = (Ulid::new(), num as u16, node.clone());
                     continue;
                 }
-                members.push((DieselUlid::generate(), num as u16, node.clone()));
+                members.push((Ulid::new(), num as u16, node.clone()));
             }
         } else {
             eprintln!("Unexpected message type: {:?}", init_msg);

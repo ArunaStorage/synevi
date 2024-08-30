@@ -8,7 +8,6 @@ license.workspace = true
 
 [dependencies]
 ahash = {workspace = true}
-diesel-ulid = { workspace = true}
 synevi_network = { path = "../synevi_network" }
 synevi_persistence = {path = "../synevi_persistence"}
 synevi_core = {path = "../synevi_core"}
@@ -18,3 +17,4 @@ tokio = {workspace = true}
 thiserror = "1.0.61"
 serde ={workspace = true}
 serde_json = {workspace = true}
+ulid ={workspace = true}

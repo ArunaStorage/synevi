@@ -1,7 +1,7 @@
 use crate::coordinator::Coordinator;
 use crate::replica::ReplicaConfig;
 use crate::wait_handler::WaitHandler;
-use diesel_ulid::DieselUlid;
+use ulid::Ulid;
 use std::fmt::Debug;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::network::{Network, NodeInfo};
@@ -40,7 +40,7 @@ where
 {
     #[instrument(level = "trace", skip(network, executor))]
     pub async fn new_with_network_and_executor(
-        id: DieselUlid,
+        id: Ulid,
         serial: u16,
         network: N,
         executor: E,
@@ -98,7 +98,7 @@ where
     #[instrument(level = "trace", skip(self))]
     pub async fn add_member(
         &self,
-        id: DieselUlid,
+        id: Ulid,
         serial: u16,
         host: String,
     ) -> Result<(), SyneviError> {
@@ -144,7 +144,7 @@ where
 mod tests {
     use crate::coordinator::Coordinator;
     use crate::{node::Node, tests::DummyExecutor};
-    use diesel_ulid::DieselUlid;
+    use ulid::Ulid;
     use std::collections::BTreeMap;
     use std::net::SocketAddr;
     use std::str::FromStr;
@@ -173,7 +173,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn recovery_single() {
-        let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
+        let node_names: Vec<_> = (0..5).map(|_| Ulid::new()).collect();
         let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor>>> = vec![];
 
         for (i, m) in node_names.iter().enumerate() {
@@ -219,7 +219,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn recovery_random_test() {
-        let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
+        let node_names: Vec<_> = (0..5).map(|_| Ulid::new()).collect();
         let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor>>> = vec![];
 
         for (i, m) in node_names.iter().enumerate() {

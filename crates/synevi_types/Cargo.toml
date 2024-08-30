@@ -11,9 +11,8 @@ bytes = { workspace = true }
 tokio = { workspace = true }
 monotime = { path = "../monotime" }
 chrono = "0.4.38"
-diesel-ulid = { workspace = true }
+ulid = { workspace = true }
 futures = "0.3.30"
-rusty_ulid = "2.0.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tonic = { workspace = true }

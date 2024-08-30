@@ -392,8 +392,8 @@ impl WaiterState {
 
 #[cfg(test)]
 mod tests {
-    use diesel_ulid::DieselUlid;
     use monotime::MonoTime;
+    use ulid::Ulid;
 
     use crate::{
         tests::{DummyExecutor, NetworkMock},
@@ -406,7 +406,7 @@ mod tests {
             async_channel::unbounded();
 
         let node = Node::new_with_network_and_executor(
-            DieselUlid::generate(),
+            Ulid::new(),
             1,
             NetworkMock::default(),
             DummyExecutor,
@@ -426,8 +426,8 @@ mod tests {
         // let notify_2_1_future = notify_2_1.notified();
         // let notify_2_2_future = notify_2_2.notified();
 
-        let id_1 = u128::from_be_bytes(DieselUlid::generate().as_byte_array());
-        let _id_2 = u128::from_be_bytes(DieselUlid::generate().as_byte_array());
+        let id_1 = u128::from_be_bytes(Ulid::new().to_bytes());
+        let _id_2 = u128::from_be_bytes(Ulid::new().to_bytes());
         let t0_1 = T0(MonoTime::new_with_time(1u128, 0, 0));
         let t0_2 = T0(MonoTime::new_with_time(2u128, 0, 0));
         let t_1 = T(MonoTime::new_with_time(1u128, 0, 0));

@@ -496,7 +496,7 @@ pub mod tests {
     use crate::node::Node;
     use crate::tests::DummyExecutor;
     use crate::tests::NetworkMock;
-    use diesel_ulid::DieselUlid;
+    use ulid::Ulid;
     use std::sync::atomic::Ordering;
     use synevi_network::consensus_transport::PreAcceptRequest;
     use synevi_network::network::Network;
@@ -561,7 +561,7 @@ pub mod tests {
     #[tokio::test]
     async fn init_test() {
         let node = Node::<NetworkMock, DummyExecutor, EventStore>::new_with_network_and_executor(
-            DieselUlid::generate(),
+            Ulid::new(),
             0,
             NetworkMock::default(),
             DummyExecutor,

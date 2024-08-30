@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use diesel_ulid::DieselUlid;
+use ulid::Ulid;
 use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 use synevi_core::{node::Node, tests::DummyExecutor};
 use synevi_network::network::GrpcNetwork;
@@ -10,7 +10,7 @@ async fn prepare() -> (
     Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>>,
     Vec<u8>,
 ) {
-    let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
+    let node_names: Vec<_> = (0..5).map(|_| Ulid::new()).collect();
     let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>> = vec![];
 
     for (i, m) in node_names.iter().enumerate() {

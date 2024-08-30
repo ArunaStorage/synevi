@@ -1,7 +1,7 @@
 use crate::messages::{Body, Message, MessageType};
 use async_trait::async_trait;
-use diesel_ulid::DieselUlid;
 use monotime::MonoTime;
+use ulid::Ulid;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -64,7 +64,7 @@ impl MaelstromNetwork {
 impl Network for MaelstromNetwork {
     type Ni = MaelstromNetwork;
 
-    async fn add_members(&self, members: Vec<(DieselUlid, u16, String)>) {
+    async fn add_members(&self, members: Vec<(Ulid, u16, String)>) {
         for (id, serial, host) in members {
             self.add_member(id, serial, host).await.unwrap()
         }
@@ -72,7 +72,7 @@ impl Network for MaelstromNetwork {
 
     async fn add_member(
         &self,
-        _id: DieselUlid,
+        _id: Ulid,
         _serial: u16,
         host: String,
     ) -> Result<(), SyneviError> {

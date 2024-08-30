@@ -6,7 +6,7 @@ pub mod utils;
 mod wait_handler;
 
 pub mod tests {
-    use diesel_ulid::DieselUlid;
+    use ulid::Ulid;
     use std::sync::Arc;
     use synevi_network::network::BroadcastResponse;
     use synevi_network::network::NetworkInterface;
@@ -42,11 +42,11 @@ pub mod tests {
     #[async_trait::async_trait]
     impl Network for NetworkMock {
         type Ni = Self;
-        async fn add_members(&self, _members: Vec<(DieselUlid, u16, String)>) {}
+        async fn add_members(&self, _members: Vec<(Ulid, u16, String)>) {}
 
         async fn add_member(
             &self,
-            _id: DieselUlid,
+            _id: Ulid,
             _serial: u16,
             _host: String,
         ) -> Result<(), SyneviError> {

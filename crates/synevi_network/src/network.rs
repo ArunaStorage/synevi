@@ -10,7 +10,7 @@ use crate::{
     },
     replica::{Replica, ReplicaBox},
 };
-use diesel_ulid::DieselUlid;
+use ulid::Ulid;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::{net::SocketAddr, sync::Arc};
 use synevi_types::error::SyneviError;
@@ -30,10 +30,10 @@ pub trait NetworkInterface: Send + Sync {
 #[async_trait::async_trait]
 pub trait Network: Send + Sync + 'static {
     type Ni: NetworkInterface;
-    async fn add_members(&self, members: Vec<(DieselUlid, u16, String)>);
+    async fn add_members(&self, members: Vec<(Ulid, u16, String)>);
     async fn add_member(
         &self,
-        id: DieselUlid,
+        id: Ulid,
         serial: u16,
         host: String,
     ) -> Result<(), SyneviError>;
@@ -50,13 +50,13 @@ where
 {
     type Ni = N::Ni;
 
-    async fn add_members(&self, members: Vec<(DieselUlid, u16, String)>) {
+    async fn add_members(&self, members: Vec<(Ulid, u16, String)>) {
         self.as_ref().add_members(members).await;
     }
 
     async fn add_member(
         &self,
-        id: DieselUlid,
+        id: Ulid,
         serial: u16,
         host: String,
     ) -> Result<(), SyneviError> {
@@ -91,7 +91,7 @@ where
 
 #[derive(Clone, Debug, Default)]
 pub struct NodeInfo {
-    pub id: DieselUlid,
+    pub id: Ulid,
     pub serial: u16,
 }
 
@@ -167,7 +167,7 @@ impl GrpcNetwork {
 impl Network for GrpcNetwork {
     type Ni = GrpcNetworkSet;
 
-    async fn add_members(&self, members: Vec<(DieselUlid, u16, String)>) {
+    async fn add_members(&self, members: Vec<(Ulid, u16, String)>) {
         for (id, serial, host) in members {
             self.add_member(id, serial, host).await.unwrap();
         }
@@ -175,7 +175,7 @@ impl Network for GrpcNetwork {
 
     async fn add_member(
         &self,
-        id: DieselUlid,
+        id: Ulid,
         serial: u16,
         host: String,
     ) -> Result<(), SyneviError> {

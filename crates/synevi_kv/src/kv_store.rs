@@ -1,7 +1,7 @@
 use crate::error::KVError;
 use ahash::RandomState;
-use diesel_ulid::DieselUlid;
 use serde::{Deserialize, Serialize};
+use ulid::Ulid;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
@@ -96,10 +96,10 @@ where
     N: Network,
 {
     pub async fn init(
-        id: DieselUlid,
+        id: Ulid,
         serial: u16,
         network: N,
-        members: Vec<(DieselUlid, u16, String)>,
+        members: Vec<(Ulid, u16, String)>,
     ) -> Result<Self, KVError> {
         let executor = KVExecutor {
             store: Arc::new(Mutex::new(HashMap::default())),
@@ -116,29 +116,29 @@ where
 
     async fn transaction(
         &self,
-        id: DieselUlid,
+        id: Ulid,
         transaction: Transaction,
     ) -> Result<String, KVError> {
         let node = self.node.clone();
-        node.transaction(u128::from_be_bytes(id.as_byte_array()), transaction)
+        node.transaction(u128::from_be_bytes(id.to_bytes()), transaction)
             .await?
     }
 
     pub async fn read(&self, key: String) -> Result<String, KVError> {
-        let id = DieselUlid::generate();
+        let id = Ulid::new();
         let payload = Transaction::Read { key: key.clone() };
         let response = self.transaction(id, payload).await?;
         Ok(response)
     }
 
     pub async fn write(&self, key: String, value: String) -> Result<(), KVError> {
-        let id = DieselUlid::generate();
+        let id = Ulid::new();
         let payload = Transaction::Write { key, value };
         let _response = self.transaction(id, payload).await?;
         Ok(())
     }
     pub async fn cas(&self, key: String, from: String, to: String) -> Result<(), KVError> {
-        let id = DieselUlid::generate();
+        let id = Ulid::new();
         let payload = Transaction::Cas { key, from, to };
         let _response = self.transaction(id, payload).await?;
         Ok(())

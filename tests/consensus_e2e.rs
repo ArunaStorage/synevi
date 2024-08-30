@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use diesel_ulid::DieselUlid;
+    use ulid::Ulid;
     use std::collections::BTreeMap;
     use std::net::SocketAddr;
     use std::str::FromStr;
@@ -14,7 +14,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn parallel_execution() {
-        let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
+        let node_names: Vec<_> = (0..5).map(|_| Ulid::new()).collect();
         let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>> = vec![];
 
         for (i, m) in node_names.iter().enumerate() {
@@ -124,7 +124,7 @@ mod tests {
 
         let handle = runtime.handle().clone();
         handle.block_on(async move {
-            let node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
+            let node_names: Vec<_> = (0..5).map(|_| Ulid::new()).collect();
             let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>> = vec![];
 
             for (i, m) in node_names.iter().enumerate() {
@@ -165,7 +165,7 @@ mod tests {
                 joinset.spawn(async move {
                     coordinator1
                         .transaction(
-                            u128::from_be_bytes(DieselUlid::generate().as_byte_array()),
+                            u128::from_be_bytes(Ulid::new().to_bytes()),
                             Vec::from("C1"),
                         )
                         .await
@@ -173,7 +173,7 @@ mod tests {
                 joinset.spawn(async move {
                     coordinator2
                         .transaction(
-                            u128::from_be_bytes(DieselUlid::generate().as_byte_array()),
+                            u128::from_be_bytes(Ulid::new().to_bytes()),
                             Vec::from("C2"),
                         )
                         .await
@@ -181,7 +181,7 @@ mod tests {
                 joinset.spawn(async move {
                     coordinator3
                         .transaction(
-                            u128::from_be_bytes(DieselUlid::generate().as_byte_array()),
+                            u128::from_be_bytes(Ulid::new().to_bytes()),
                             Vec::from("C3"),
                         )
                         .await
@@ -189,7 +189,7 @@ mod tests {
                 joinset.spawn(async move {
                     coordinator4
                         .transaction(
-                            u128::from_be_bytes(DieselUlid::generate().as_byte_array()),
+                            u128::from_be_bytes(Ulid::new().to_bytes()),
                             Vec::from("C4"),
                         )
                         .await
@@ -197,7 +197,7 @@ mod tests {
                 joinset.spawn(async move {
                     coordinator5
                         .transaction(
-                            u128::from_be_bytes(DieselUlid::generate().as_byte_array()),
+                            u128::from_be_bytes(Ulid::new().to_bytes()),
                             Vec::from("C5"),
                         )
                         .await
@@ -317,7 +317,7 @@ mod tests {
 
         let handle = runtime.handle().clone();
         handle.block_on(async move {
-            let mut node_names: Vec<_> = (0..5).map(|_| DieselUlid::generate()).collect();
+            let mut node_names: Vec<_> = (0..5).map(|_| Ulid::new()).collect();
             let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>> = vec![];
 
             for (i, m) in node_names.iter().enumerate() {

@@ -13,9 +13,8 @@ synevi_types = { path = "../synevi_types" }
 monotime = { path = "../monotime" }
 bytes = { workspace = true }
 chrono = "0.4.38"
-diesel-ulid = { workspace = true }
+ulid = { workspace = true }
 futures = "0.3.30"
-rusty_ulid = "2.0.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tonic = { workspace = true }
