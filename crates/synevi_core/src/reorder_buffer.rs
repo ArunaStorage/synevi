@@ -56,8 +56,7 @@ where
         latency: u64,
         id: u128,
     ) -> Result<(), SyneviError> {
-        Ok(self
-            .sender
+        self.sender
             .send(ReorderMessage {
                 t0,
                 notify,
@@ -66,7 +65,7 @@ where
                 id,
             })
             .await
-            .map_err(|e| SyneviError::SendError(e.to_string()))?)
+            .map_err(|e| SyneviError::SendError(e.to_string()))
     }
 
     pub async fn run(&self) -> Result<(), SyneviError> {

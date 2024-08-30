@@ -1,10 +1,10 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use ulid::Ulid;
 use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 use synevi_core::{node::Node, tests::DummyExecutor};
 use synevi_network::network::GrpcNetwork;
 use synevi_persistence::event_store::EventStore;
 use tokio::runtime;
+use ulid::Ulid;
 
 async fn prepare() -> (
     Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>>,

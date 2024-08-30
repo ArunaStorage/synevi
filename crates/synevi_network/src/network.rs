@@ -10,7 +10,6 @@ use crate::{
     },
     replica::{Replica, ReplicaBox},
 };
-use ulid::Ulid;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::{net::SocketAddr, sync::Arc};
 use synevi_types::error::SyneviError;
@@ -18,6 +17,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
 use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
 use tonic::transport::{Channel, Server};
+use ulid::Ulid;
 
 #[async_trait::async_trait]
 pub trait NetworkInterface: Send + Sync {
@@ -31,12 +31,7 @@ pub trait NetworkInterface: Send + Sync {
 pub trait Network: Send + Sync + 'static {
     type Ni: NetworkInterface;
     async fn add_members(&self, members: Vec<(Ulid, u16, String)>);
-    async fn add_member(
-        &self,
-        id: Ulid,
-        serial: u16,
-        host: String,
-    ) -> Result<(), SyneviError>;
+    async fn add_member(&self, id: Ulid, serial: u16, host: String) -> Result<(), SyneviError>;
     async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<(), SyneviError>;
     async fn get_interface(&self) -> Arc<Self::Ni>;
     async fn get_waiting_time(&self, node_serial: u16) -> u64;
@@ -54,12 +49,7 @@ where
         self.as_ref().add_members(members).await;
     }
 
-    async fn add_member(
-        &self,
-        id: Ulid,
-        serial: u16,
-        host: String,
-    ) -> Result<(), SyneviError> {
+    async fn add_member(&self, id: Ulid, serial: u16, host: String) -> Result<(), SyneviError> {
         self.as_ref().add_member(id, serial, host).await
     }
 
@@ -173,12 +163,7 @@ impl Network for GrpcNetwork {
         }
     }
 
-    async fn add_member(
-        &self,
-        id: Ulid,
-        serial: u16,
-        host: String,
-    ) -> Result<(), SyneviError> {
+    async fn add_member(&self, id: Ulid, serial: u16, host: String) -> Result<(), SyneviError> {
         let channel = Channel::from_shared(host.clone())?.connect().await?;
         self.members.write().await.push(MemberWithLatency {
             member: Arc::new(Member {

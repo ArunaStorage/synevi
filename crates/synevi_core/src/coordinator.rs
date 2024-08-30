@@ -312,8 +312,7 @@ where
         let transaction = self
             .transaction
             .transaction
-            .as_ref()
-            .map(|tx| tx.clone())
+            .clone()
             .ok_or_else(|| SyneviError::TransactionNotFound)?;
 
         self.node.executor.execute(transaction).await
@@ -496,7 +495,6 @@ pub mod tests {
     use crate::node::Node;
     use crate::tests::DummyExecutor;
     use crate::tests::NetworkMock;
-    use ulid::Ulid;
     use std::sync::atomic::Ordering;
     use synevi_network::consensus_transport::PreAcceptRequest;
     use synevi_network::network::Network;
@@ -505,6 +503,7 @@ pub mod tests {
     use synevi_persistence::event_store::{EventStore, Store};
     use synevi_types::SyneviError;
     use synevi_types::{Executor, State, Transaction};
+    use ulid::Ulid;
 
     #[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
     #[allow(dead_code)]

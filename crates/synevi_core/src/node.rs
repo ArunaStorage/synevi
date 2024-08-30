@@ -1,7 +1,6 @@
 use crate::coordinator::Coordinator;
 use crate::replica::ReplicaConfig;
 use crate::wait_handler::WaitHandler;
-use ulid::Ulid;
 use std::fmt::Debug;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::network::{Network, NodeInfo};
@@ -10,6 +9,7 @@ use synevi_types::types::SyneviResult;
 use synevi_types::{Executor, SyneviError};
 use tokio::sync::{Mutex, RwLock};
 use tracing::instrument;
+use ulid::Ulid;
 
 #[derive(Debug, Default)]
 pub struct Stats {
@@ -96,12 +96,7 @@ where
     S: Store,
 {
     #[instrument(level = "trace", skip(self))]
-    pub async fn add_member(
-        &self,
-        id: Ulid,
-        serial: u16,
-        host: String,
-    ) -> Result<(), SyneviError> {
+    pub async fn add_member(&self, id: Ulid, serial: u16, host: String) -> Result<(), SyneviError> {
         self.network.add_member(id, serial, host).await
     }
 
@@ -144,7 +139,6 @@ where
 mod tests {
     use crate::coordinator::Coordinator;
     use crate::{node::Node, tests::DummyExecutor};
-    use ulid::Ulid;
     use std::collections::BTreeMap;
     use std::net::SocketAddr;
     use std::str::FromStr;
@@ -153,6 +147,7 @@ mod tests {
     use synevi_network::network::Network;
     use synevi_persistence::event_store::Store;
     use synevi_types::{Executor, State, SyneviError, T, T0};
+    use ulid::Ulid;
 
     impl<N, E> Node<N, E>
     where

@@ -1,6 +1,5 @@
 #[cfg(test)]
 mod tests {
-    use ulid::Ulid;
     use std::collections::BTreeMap;
     use std::net::SocketAddr;
     use std::str::FromStr;
@@ -11,6 +10,7 @@ mod tests {
     use synevi_persistence::event_store::{EventStore, Store};
     use synevi_types::{State, T, T0};
     use tokio::runtime::Builder;
+    use ulid::Ulid;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn parallel_execution() {
@@ -164,42 +164,27 @@ mod tests {
                 let coordinator5 = coordinator5.clone();
                 joinset.spawn(async move {
                     coordinator1
-                        .transaction(
-                            u128::from_be_bytes(Ulid::new().to_bytes()),
-                            Vec::from("C1"),
-                        )
+                        .transaction(u128::from_be_bytes(Ulid::new().to_bytes()), Vec::from("C1"))
                         .await
                 });
                 joinset.spawn(async move {
                     coordinator2
-                        .transaction(
-                            u128::from_be_bytes(Ulid::new().to_bytes()),
-                            Vec::from("C2"),
-                        )
+                        .transaction(u128::from_be_bytes(Ulid::new().to_bytes()), Vec::from("C2"))
                         .await
                 });
                 joinset.spawn(async move {
                     coordinator3
-                        .transaction(
-                            u128::from_be_bytes(Ulid::new().to_bytes()),
-                            Vec::from("C3"),
-                        )
+                        .transaction(u128::from_be_bytes(Ulid::new().to_bytes()), Vec::from("C3"))
                         .await
                 });
                 joinset.spawn(async move {
                     coordinator4
-                        .transaction(
-                            u128::from_be_bytes(Ulid::new().to_bytes()),
-                            Vec::from("C4"),
-                        )
+                        .transaction(u128::from_be_bytes(Ulid::new().to_bytes()), Vec::from("C4"))
                         .await
                 });
                 joinset.spawn(async move {
                     coordinator5
-                        .transaction(
-                            u128::from_be_bytes(Ulid::new().to_bytes()),
-                            Vec::from("C5"),
-                        )
+                        .transaction(u128::from_be_bytes(Ulid::new().to_bytes()), Vec::from("C5"))
                         .await
                 });
             }

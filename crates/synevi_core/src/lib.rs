@@ -6,7 +6,6 @@ pub mod utils;
 mod wait_handler;
 
 pub mod tests {
-    use ulid::Ulid;
     use std::sync::Arc;
     use synevi_network::network::BroadcastResponse;
     use synevi_network::network::NetworkInterface;
@@ -16,6 +15,7 @@ pub mod tests {
     use synevi_types::Executor;
     use synevi_types::SyneviError;
     use tokio::sync::Mutex;
+    use ulid::Ulid;
 
     #[derive(Debug, Default)]
     pub struct NetworkMock {

@@ -3,11 +3,11 @@ use crate::messages::{Body, Message, MessageType};
 use crate::network::MaelstromNetwork;
 use crate::protocol::MessageHandler;
 use anyhow::{anyhow, Result};
-use ulid::Ulid;
 use std::sync::Arc;
 use synevi_kv::error::KVError;
 use synevi_kv::kv_store::KVStore;
 use tokio::task::JoinHandle;
+use ulid::Ulid;
 
 pub struct MaelstromServer;
 
@@ -86,7 +86,7 @@ pub(crate) async fn kv_dispatch(
             Err(KVError::KeyNotFound) => msg.reply(Body {
                 msg_type: MessageType::Error {
                     code: 20,
-                    text: format!("Key not found"),
+                    text: "Key not found".to_string(),
                 },
                 ..Default::default()
             }),

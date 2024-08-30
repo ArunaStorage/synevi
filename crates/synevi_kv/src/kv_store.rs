@@ -1,7 +1,6 @@
 use crate::error::KVError;
 use ahash::RandomState;
 use serde::{Deserialize, Serialize};
-use ulid::Ulid;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
@@ -9,6 +8,7 @@ use synevi_core::node::Node;
 use synevi_network::network::Network;
 use synevi_types::types::SyneviResult;
 use synevi_types::{error::SyneviError, Executor};
+use ulid::Ulid;
 
 #[derive(Clone)]
 pub struct KVExecutor {
@@ -114,11 +114,7 @@ where
         Ok(KVStore { node })
     }
 
-    async fn transaction(
-        &self,
-        id: Ulid,
-        transaction: Transaction,
-    ) -> Result<String, KVError> {
+    async fn transaction(&self, id: Ulid, transaction: Transaction) -> Result<String, KVError> {
         let node = self.node.clone();
         node.transaction(u128::from_be_bytes(id.to_bytes()), transaction)
             .await?

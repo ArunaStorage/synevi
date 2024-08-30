@@ -1,7 +1,6 @@
 use crate::messages::{Body, Message, MessageType};
 use async_trait::async_trait;
 use monotime::MonoTime;
-use ulid::Ulid;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -15,6 +14,7 @@ use synevi_types::{State, SyneviError, T0};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
+use ulid::Ulid;
 
 pub struct MaelstromNetwork {
     pub node_id: String,
@@ -70,12 +70,7 @@ impl Network for MaelstromNetwork {
         }
     }
 
-    async fn add_member(
-        &self,
-        _id: Ulid,
-        _serial: u16,
-        host: String,
-    ) -> Result<(), SyneviError> {
+    async fn add_member(&self, _id: Ulid, _serial: u16, host: String) -> Result<(), SyneviError> {
         self.members.write().unwrap().push(host);
         Ok(())
     }

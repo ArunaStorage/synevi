@@ -25,10 +25,10 @@ impl Storage {
     }
 
     pub fn read_all(&self) -> Result<Vec<Event>, SyneviError> {
-        let mut wtxn = self.db.read_txn()?;
+        let wtxn = self.db.read_txn()?;
         let events_db: Database<U128<BigEndian>, SerdeBincode<Event>> = self
             .db
-            .open_database(&mut wtxn, Some(DB_NAME))?
+            .open_database(&wtxn, Some(DB_NAME))?
             .ok_or_else(|| SyneviError::DatabaseNotFound(DB_NAME))?;
         let result = events_db
             .iter(&wtxn)?
