@@ -26,6 +26,8 @@ pub enum SyneviError {
 
     #[error("Invalid uri")]
     InvalidUri(#[from] http::uri::InvalidUri),
+    #[error("Invalid conversion from_bytes: {0}")]
+    InvalidConversionFromBytes(String),
     #[error("Invalid conversion int: {0}")]
     InvalidConversionInt(#[from] std::num::TryFromIntError),
     #[error("Invalid conversion slice: {0}")]
