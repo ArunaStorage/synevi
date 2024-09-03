@@ -2,6 +2,7 @@ use crate::coordinator::Coordinator;
 use crate::replica::ReplicaConfig;
 use crate::wait_handler::WaitHandler;
 use std::fmt::Debug;
+use std::sync::atomic::AtomicBool;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::network::{Network, NodeInfo};
 use synevi_persistence::event_store::{EventStore, Store};
@@ -31,6 +32,7 @@ where
     pub stats: Stats,
     pub wait_handler: RwLock<Option<Arc<WaitHandler<N, E, S>>>>,
     semaphore: Arc<tokio::sync::Semaphore>,
+    has_members: AtomicBool,
 }
 
 impl<N, E> Node<N, E, EventStore>
@@ -45,6 +47,18 @@ where
         network: N,
         executor: E,
     ) -> Result<Arc<Self>, SyneviError> {
+        let store = EventStore::new(serial)?;
+        Self::new(id, serial, network, executor, store).await
+    }
+}
+impl<N, E, S> Node<N, E, S>
+where
+    N: Network,
+    E: Executor,
+    S: Store,
+{
+    #[instrument(level = "trace", skip(network, executor, store))]
+    pub async fn new(id: Ulid, serial: u16, network: N, executor: E, store: S) -> Result<Arc<Self>, SyneviError> {
         let node_name = NodeInfo { id, serial };
 
         let stats = Stats {
@@ -60,8 +74,6 @@ where
         //     reorder_clone.run().await.unwrap();
         // });
 
-        let store = EventStore::new(serial)?;
-
         let node = Arc::new(Node {
             info: node_name,
             event_store: Mutex::new(store),
@@ -70,6 +82,7 @@ where
             semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
             executor,
             wait_handler: RwLock::new(None),
+            has_members: AtomicBool::new(false),
         });
 
         let wait_handler = WaitHandler::new(node.clone());
@@ -88,20 +101,21 @@ where
         // If no config / persistence -> default
         Ok(node)
     }
-}
-impl<N, E, S> Node<N, E, S>
-where
-    N: Network,
-    E: Executor,
-    S: Store,
-{
+    
+
+
     #[instrument(level = "trace", skip(self))]
     pub async fn add_member(&self, id: Ulid, serial: u16, host: String) -> Result<(), SyneviError> {
-        self.network.add_member(id, serial, host).await
+        self.network.add_member(id, serial, host).await?;
+        self.has_members.store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
     }
 
     #[instrument(level = "trace", skip(self, transaction))]
     pub async fn transaction(self: Arc<Self>, id: u128, transaction: E::Tx) -> SyneviResult<E> {
+        if !self.has_members.load(std::sync::atomic::Ordering::Relaxed) {
+            tracing::warn!("Consensus omitted: No members in the network");
+        };
         let _permit = self.semaphore.acquire().await?;
         let mut coordinator = Coordinator::new(self.clone(), transaction, id).await;
         coordinator.run().await
@@ -303,5 +317,21 @@ mod tests {
 
             assert!(!got_mismatch);
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn single_node_consensus() {
+        let node = Node::new_with_network_and_executor(
+            Ulid::new(),
+            0,
+            synevi_network::network::GrpcNetwork::new(SocketAddr::from_str("0.0.0.0:1337").unwrap()),
+            DummyExecutor,
+        )
+        .await
+        .unwrap();
+
+        let result = node.transaction(0, vec![127u8]).await.unwrap().unwrap();
+
+        assert_eq!(result, vec![127u8]);
     }
 }

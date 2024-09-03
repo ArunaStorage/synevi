@@ -356,7 +356,7 @@ impl NetworkInterface for GrpcNetworkSet {
             }
         }
 
-        if result.len() < majority {
+        if result.len() < majority && !self.members.is_empty() {
             println!("Majority not reached: {:?}", result);
             return Err(SyneviError::MajorityNotReached);
         }
