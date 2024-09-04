@@ -13,6 +13,7 @@ pub mod network {
     pub use synevi_network::network::Network;
     pub use synevi_network::network::NetworkInterface;
     pub use synevi_network::replica::Replica;
+    pub use synevi_network::network::GrpcNetwork;
 
     pub mod requests {
         pub use synevi_network::network::BroadcastRequest;
