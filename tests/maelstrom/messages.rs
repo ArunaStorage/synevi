@@ -107,6 +107,8 @@ pub enum MessageType {
         t0: Vec<u8>,
         t: Vec<u8>,
         deps: Vec<u8>,
+        transaction_hash: Vec<u8>,
+        execution_hash: Vec<u8>,
     },
     ApplyOk {
         t0: Vec<u8>,

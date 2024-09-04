@@ -2,6 +2,7 @@ use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
 use crate::wait_handler::WaitAction;
 use ahash::RandomState;
+use sha3::{Digest, Sha3_256};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -11,7 +12,7 @@ use synevi_network::consensus_transport::{
 };
 use synevi_network::network::{BroadcastRequest, Network, NetworkInterface};
 use synevi_network::utils::IntoInner;
-use synevi_persistence::event_store::Store;
+use synevi_types::traits::Store;
 use synevi_types::types::{RecoveryState, SyneviResult};
 use synevi_types::{Ballot, Executor, State, SyneviError, Transaction, T, T0};
 use tracing::{instrument, trace};
@@ -274,12 +275,18 @@ where
 
         let result = self.execute_consensus().await;
 
+        let mut hasher = Sha3_256::new();
+        postcard::to_io(&result, &mut hasher)?;
+        let hash = hasher.finalize();
+
         let applied_request = ApplyRequest {
             id: self.transaction.id.to_be_bytes().into(),
             event: self.transaction.get_transaction_bytes(),
             timestamp: (*self.transaction.t).into(),
             timestamp_zero: (*self.transaction.t_zero).into(),
             dependencies: into_dependency(&self.transaction.dependencies),
+            execution_hash: hash.to_vec(),
+            transaction_hash: todo!(),
         };
 
         self.network_interface
@@ -307,7 +314,7 @@ where
             )
             .await?;
 
-        //let _ = _rx.await;
+        let _ = _rx.await;
 
         let transaction = self
             .transaction
@@ -500,7 +507,8 @@ pub mod tests {
     use synevi_network::network::Network;
     use synevi_network::network::{BroadcastRequest, NetworkInterface};
     use synevi_network::utils::IntoInner;
-    use synevi_persistence::event_store::{EventStore, Store};
+    use synevi_persistence::event_store::EventStore;
+    use synevi_types::traits::Store;
     use synevi_types::SyneviError;
     use synevi_types::{Executor, State, Transaction};
     use ulid::Ulid;

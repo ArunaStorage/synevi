@@ -9,8 +9,8 @@ use synevi_network::consensus_transport::{
 };
 use synevi_network::network::Network;
 use synevi_network::replica::Replica;
-use synevi_persistence::event::UpsertEvent;
-use synevi_persistence::event_store::Store;
+use synevi_types::traits::Store;
+use synevi_types::types::UpsertEvent;
 use synevi_types::{Ballot, Executor, State, T, T0};
 use synevi_types::{SyneviError, Transaction};
 use tracing::{instrument, trace};
@@ -124,6 +124,7 @@ where
                 transaction: Some(request.event),
                 dependencies: Some(from_dependency(request.dependencies)?),
                 ballot: Some(request_ballot),
+                execution_hash: None,
             })?;
 
             store.get_tx_dependencies(&t, &t_zero)

@@ -3,8 +3,7 @@ use ahash::RandomState;
 use bytes::BufMut;
 use monotime::MonoTime;
 use std::collections::HashSet;
-use synevi_persistence::event::UpsertEvent;
-use synevi_types::{SyneviError, Transaction, T0};
+use synevi_types::{types::UpsertEvent, SyneviError, Transaction, T0};
 
 pub fn into_dependency(map: &HashSet<T0, RandomState>) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(map.len() * 16);
@@ -36,6 +35,7 @@ where
             transaction: value.transaction.as_ref().map(|v| v.as_bytes()),
             dependencies: Some(value.dependencies.clone()),
             ballot: Some(value.ballot),
+            execution_hash: None,
         }
     }
 }

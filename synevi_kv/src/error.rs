@@ -1,3 +1,4 @@
+use serde::Serialize;
 use synevi_types::SyneviError;
 use thiserror::Error;
 
@@ -11,4 +12,13 @@ pub enum KVError {
     ProtocolError(#[from] SyneviError),
     #[error("Receive error")]
     RcvError(#[from] tokio::sync::oneshot::error::RecvError),
+}
+
+impl Serialize for KVError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.to_string().serialize(serializer)
+    }
 }

@@ -9,8 +9,8 @@ use std::{
     time::{Duration, Instant},
 };
 use synevi_network::network::Network;
-use synevi_persistence::event::UpsertEvent;
-use synevi_persistence::event_store::Store;
+use synevi_types::traits::Store;
+use synevi_types::types::UpsertEvent;
 use synevi_types::{Executor, State, SyneviError, T, T0};
 use tokio::{sync::oneshot, time::timeout};
 

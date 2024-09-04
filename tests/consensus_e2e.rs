@@ -4,11 +4,11 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
+    use synevi::{State, Store, T, T0};
     use synevi_core::node::Node;
     use synevi_core::tests::DummyExecutor;
     use synevi_network::network::GrpcNetwork;
-    use synevi_persistence::event_store::{EventStore, Store};
-    use synevi::{State, T, T0};
+    use synevi_persistence::event_store::EventStore;
     use tokio::runtime::Builder;
     use ulid::Ulid;
 

@@ -28,6 +28,7 @@ thiserror = { workspace = true }
 async-channel = "2.3.1"
 ahash = { workspace = true }
 sha3 = "0.10.8"
+postcard = {version = "1.0.10", features = ["use-std"]}
 
 [dev-dependencies]
 monotime = { path = "../monotime", features = ["unsafe_time"] }

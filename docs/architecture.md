@@ -76,4 +76,12 @@ Send PreAccept (t0) to majority (all)
     ```
 
 
-TBC
+### Consistency checking
+
+Both the transaction as well as the execution result are hashed.
+Together they create a signature that makes sure that all nodes came to the same execution result.
+An applied transaction also contains the hash of the previous applied transaction, forming a hash-chain.
+
+The execution of each transaction also creates an execution signature, this signature is not part of the transaction itself but 
+allows replicas to detect storage failures or wrong preconditions and prevents them from accumulating a wrong state.
+Updates of the execution logic might change this hash, so it is only valid at the time of execution under the condition that all replicas run the same execution logic.

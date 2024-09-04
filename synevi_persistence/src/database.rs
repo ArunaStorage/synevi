@@ -3,9 +3,7 @@ use heed::{
     types::{SerdeBincode, U128},
     Database, Env, EnvOpenOptions,
 };
-use synevi_types::error::SyneviError;
-
-use crate::event::Event;
+use synevi_types::{error::SyneviError, types::Event};
 
 #[derive(Clone, Debug)]
 pub struct Storage {

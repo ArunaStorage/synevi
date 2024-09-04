@@ -5,8 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 use synevi_network::network::Network;
-use synevi_persistence::event_store::Store;
-use synevi_types::{Executor, SyneviError, T, T0};
+use synevi_types::{traits::Store, Executor, SyneviError, T, T0};
 use tokio::{sync::oneshot, time::timeout};
 
 use crate::{node::Node, utils::into_dependency};

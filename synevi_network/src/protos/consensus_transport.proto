@@ -55,7 +55,8 @@ message ApplyRequest {
   bytes timestamp_zero = 3;
   bytes timestamp = 4;
   bytes dependencies = 5;
-  // bytes result = 5; // Theoretically not needed?
+  bytes transaction_hash = 6;
+  bytes execution_hash = 7; 
 }
 
 message ApplyResponse {}

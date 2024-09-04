@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use synevi::network::requests::{
-    BroadcastRequest, BroadcastResponse,
-    AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
-    PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse,
+    AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, BroadcastRequest,
+    BroadcastResponse, CommitRequest, CommitResponse, PreAcceptRequest, PreAcceptResponse,
+    RecoverRequest, RecoverResponse,
 };
 use synevi::network::{Network, NetworkInterface, Replica};
 use synevi::{State, SyneviError, T0};
@@ -290,6 +290,8 @@ impl NetworkInterface for MaelstromNetwork {
                                     t0: req.timestamp_zero.clone(),
                                     t: req.timestamp.clone(),
                                     deps: req.dependencies.clone(),
+                                    transaction_hash: req.transaction_hash.clone(),
+                                    execution_hash: req.execution_hash.clone(),
                                 },
                             },
                         })
@@ -475,6 +477,8 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
             ref t0,
             ref t,
             ref deps,
+            ref transaction_hash,
+            ref execution_hash,
         } => {
             eprintln!("Replica dispatch apply {:?}", t0);
             replica
@@ -484,6 +488,8 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
                     timestamp_zero: t0.clone(),
                     timestamp: t.clone(),
                     dependencies: deps.clone(),
+                    transaction_hash: transaction_hash.clone(),
+                    execution_hash: execution_hash.clone(),
                 })
                 .await?;
 

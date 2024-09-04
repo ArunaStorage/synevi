@@ -1,12 +1,11 @@
 use crate::database::Storage;
-use crate::event::Event;
-use crate::event::UpsertEvent;
 use ahash::RandomState;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
 use synevi_types::error::SyneviError;
-use synevi_types::types::RecoverDependencies;
+use synevi_types::traits::Store;
 use synevi_types::types::RecoverEvent;
+use synevi_types::types::{Event, Hashes, RecoverDependencies, UpsertEvent};
 use synevi_types::State;
 use synevi_types::{Ballot, T, T0};
 use tracing::instrument;
@@ -20,40 +19,6 @@ pub struct EventStore {
     pub(crate) latest_t0: T0,             // last created or recognized t0
     pub node_serial: u16,
     latest_hash: [u8; 32],
-}
-
-type Dependencies = HashSet<T0, RandomState>;
-
-pub trait Store: Send + Sync + Sized + 'static {
-    fn new(node_serial: u16) -> Result<Self, SyneviError>;
-    // Initialize a new t0
-    fn init_t_zero(&mut self, node_serial: u16) -> T0;
-    // Pre-accept a transaction
-    fn pre_accept_tx(
-        &mut self,
-        id: u128,
-        t_zero: T0,
-        transaction: Vec<u8>,
-    ) -> Result<(T, Dependencies), SyneviError>;
-    // Get the dependencies for a transaction
-    fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> Dependencies;
-    // Get the recover dependencies for a transaction
-    fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, SyneviError>;
-    // Tries to recover an unfinished event from the store
-    fn recover_event(
-        &mut self,
-        t_zero_recover: &T0,
-        node_serial: u16,
-    ) -> Result<RecoverEvent, SyneviError>;
-    // Check and update the ballot for a transaction
-    // Returns true if the ballot was accepted (current <= ballot)
-    fn accept_tx_ballot(&mut self, t_zero: &T0, ballot: Ballot) -> Option<Ballot>;
-    // Update or insert a transaction, returns the hash of the transaction if applied
-    fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<Option<[u8; 32]>, SyneviError>;
-
-    fn get_event_state(&self, t_zero: &T0) -> Option<State>;
-
-    fn get_event_store(&self) -> BTreeMap<T0, Event>;
 }
 
 impl EventStore {
@@ -180,7 +145,7 @@ impl Store for EventStore {
     }
 
     #[instrument(level = "trace")]
-    fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<Option<[u8; 32]>, SyneviError> {
+    fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<Option<Hashes>, SyneviError> {
         let Some(event) = self.events.get_mut(&upsert_event.t_zero) else {
             let event = Event::from(upsert_event.clone());
             self.events.insert(upsert_event.t_zero, event);
@@ -200,7 +165,7 @@ impl Store for EventStore {
 
         // Event is already applied
         if event.state == State::Applied {
-            return Ok(Some(event.hash_event()));
+            return Ok(event.hashes.clone());
         }
 
         if event.is_update(&upsert_event) {
@@ -223,19 +188,22 @@ impl Store for EventStore {
                 }
             }
 
-            let hash = if event.state == State::Applied {
+            if event.state == State::Applied {
                 self.last_applied = event.t;
-                event.previous_hash = Some(self.latest_hash);
-                self.latest_hash = event.hash_event();
-                Some(self.latest_hash)
-            } else {
-                None
+                let hashes = event.hash_event(
+                    upsert_event
+                        .execution_hash
+                        .ok_or_else(|| SyneviError::MissingExecutionHash)?,
+                    self.latest_hash,
+                );
+                self.latest_hash = hashes.transaction_hash;
+                event.hashes = Some(hashes);
             };
 
             if let Some(db) = &self.database {
                 db.upsert_object(event.clone())?;
             }
-            Ok(hash)
+            Ok(event.hashes.clone())
         } else {
             if let Some(db) = &self.database {
                 db.upsert_object(event.clone())?;

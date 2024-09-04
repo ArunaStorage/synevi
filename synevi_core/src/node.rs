@@ -5,7 +5,8 @@ use std::fmt::Debug;
 use std::sync::atomic::AtomicBool;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::network::{Network, NodeInfo};
-use synevi_persistence::event_store::{EventStore, Store};
+use synevi_persistence::event_store::EventStore;
+use synevi_types::traits::Store;
 use synevi_types::types::SyneviResult;
 use synevi_types::{Executor, SyneviError};
 use tokio::sync::{Mutex, RwLock};
@@ -58,7 +59,13 @@ where
     S: Store,
 {
     #[instrument(level = "trace", skip(network, executor, store))]
-    pub async fn new(id: Ulid, serial: u16, network: N, executor: E, store: S) -> Result<Arc<Self>, SyneviError> {
+    pub async fn new(
+        id: Ulid,
+        serial: u16,
+        network: N,
+        executor: E,
+        store: S,
+    ) -> Result<Arc<Self>, SyneviError> {
         let node_name = NodeInfo { id, serial };
 
         let stats = Stats {
@@ -101,13 +108,12 @@ where
         // If no config / persistence -> default
         Ok(node)
     }
-    
-
 
     #[instrument(level = "trace", skip(self))]
     pub async fn add_member(&self, id: Ulid, serial: u16, host: String) -> Result<(), SyneviError> {
         self.network.add_member(id, serial, host).await?;
-        self.has_members.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.has_members
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -159,7 +165,7 @@ mod tests {
     use std::sync::Arc;
     use synevi_network::network::GrpcNetwork;
     use synevi_network::network::Network;
-    use synevi_persistence::event_store::Store;
+    use synevi_types::traits::Store;
     use synevi_types::{Executor, State, SyneviError, T, T0};
     use ulid::Ulid;
 
@@ -324,7 +330,9 @@ mod tests {
         let node = Node::new_with_network_and_executor(
             Ulid::new(),
             0,
-            synevi_network::network::GrpcNetwork::new(SocketAddr::from_str("0.0.0.0:1337").unwrap()),
+            synevi_network::network::GrpcNetwork::new(
+                SocketAddr::from_str("0.0.0.0:1337").unwrap(),
+            ),
             DummyExecutor,
         )
         .await

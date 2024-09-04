@@ -1,3 +1,4 @@
+use serde::Serialize;
 use thiserror::Error;
 use tokio::task::JoinError;
 
@@ -34,6 +35,8 @@ pub enum SyneviError {
     InvalidConversionSlice(#[from] std::array::TryFromSliceError),
     #[error("Invalid conversion serde_json: {0}")]
     InvalidConversionSerdeJson(#[from] serde_json::Error),
+    #[error("Invalid conversion serde_postcard: {0}")]
+    InvalidConversionSerdePostcard(#[from] postcard::Error),
     #[error("Invalid serialization for monotime {0}")]
     InvalidMonotime(#[from] monotime::error::MonotimeError),
 
@@ -47,9 +50,19 @@ pub enum SyneviError {
     TransactionNotFound,
     #[error("Dependency {0} not found")]
     DependencyNotFound(u128),
-
+    #[error("Missing execution hash")]
+    MissingExecutionHash,
     #[error("Competing coordinator")]
     CompetingCoordinator,
     #[error("Undefined recovery")]
     UndefinedRecovery,
+}
+
+impl Serialize for SyneviError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.to_string().serialize(serializer)
+    }
 }
