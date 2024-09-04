@@ -5,6 +5,8 @@ authors.workspace = true
 edition.workspace = true
 repository.workspace = true
 license.workspace = true
+description.workspace = true
+tags.workspace = true
 
 [dependencies]
 prost = "0.13.0"
@@ -16,7 +18,7 @@ async-trait = {workspace = true}
 tracing = { workspace = true }
 thiserror = { workspace = true }
 bytes = { workspace = true}
-synevi_types = { path = "../synevi_types" }
+synevi_types = { path = "../synevi_types", version = "0.1.0"}
 
 [build-dependencies]
 tonic-build = "0.12.0"

@@ -5,10 +5,12 @@ authors.workspace = true
 edition.workspace = true
 repository.workspace = true
 license.workspace = true
+description.workspace = true
+tags.workspace = true
 
 [dependencies]
-monotime = { path = "../monotime" }
-synevi_types = { path = "../synevi_types" }
+monotime = { path = "../monotime", version = "0.1.0"}
+synevi_types = { path = "../synevi_types", version = "0.1.0" }
 bytes = { workspace = true }
 tokio = { workspace = true }
 heed = { workspace = true }

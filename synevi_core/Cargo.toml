@@ -7,10 +7,10 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-synevi_network = { path = "../synevi_network" }
-synevi_persistence = { path = "../synevi_persistence" }
-synevi_types = { path = "../synevi_types" }
-monotime = { path = "../monotime" }
+synevi_types = { path = "../synevi_types", version = "0.1.0" }
+synevi_network = { path = "../synevi_network", version = "0.1.0" }
+synevi_persistence = { path = "../synevi_persistence", version = "0.1.0" }
+monotime = { path = "../monotime", version = "0.1.0" }
 bytes = { workspace = true }
 chrono = "0.4.38"
 ulid = { workspace = true }

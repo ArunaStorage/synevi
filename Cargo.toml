@@ -4,6 +4,7 @@ resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
+description = "A leaderless, consensus library based on Apache Cassandra's Accord algorithm"
 edition = "2021"
 authors = [
     "Sebastian Beyvers <sb@pus.de>",
@@ -12,6 +13,7 @@ authors = [
 ]
 repository = "https://github.com/ArunaStorage/synevi"
 license = "MIT OR Apache-2.0"
+tags = ["consensus", "distributed", "raft", "paxos", "cassandra", "accord", "synevi"]
 
 [workspace.dependencies]
 thiserror = "1.0.63"
