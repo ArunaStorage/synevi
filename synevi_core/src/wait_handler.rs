@@ -10,7 +10,7 @@ use std::{
 };
 use synevi_network::network::Network;
 use synevi_types::traits::Store;
-use synevi_types::types::UpsertEvent;
+use synevi_types::types::{Hashes, UpsertEvent};
 use synevi_types::{Executor, State, SyneviError, T, T0};
 use tokio::{sync::oneshot, time::timeout};
 
@@ -28,7 +28,8 @@ pub struct WaitMessage {
     deps: HashSet<T0, RandomState>,
     transaction: Vec<u8>,
     action: WaitAction,
-    notify: Option<oneshot::Sender<()>>,
+    execution_hash: Option<[u8; 32]>,
+    notify: Option<oneshot::Sender<Option<Hashes>>>,
 }
 
 #[derive(Clone)]
@@ -80,7 +81,7 @@ where
         deps: HashSet<T0, RandomState>,
         transaction: Vec<u8>,
         action: WaitAction,
-        notify: oneshot::Sender<()>,
+        notify: oneshot::Sender<Option<Hashes>>,
         id: u128,
     ) -> Result<(), SyneviError> {
         self.sender
