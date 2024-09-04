@@ -1,0 +1,17 @@
+[package]
+name = "synevi"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+
+
+
+[dependencies]
+synevi_core = { path = "../synevi_core" }
+synevi_types = { path = "../synevi_types" }
+synevi_network = { path = "../synevi_network" }
+synevi_persistence = { path = "../synevi_persistence" }
+monotime = { path = "../monotime" }

@@ -7,12 +7,12 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-synevi_core = { path = "../crates/synevi_core" }
-synevi_network = { path = "../crates/synevi_network" }
-synevi_kv = { path = "../crates/synevi_kv" }
-synevi_persistence = { path = "../crates/synevi_persistence" }
-synevi_types = { path = "../crates/synevi_types" }
-monotime = { path = "../crates/monotime" }
+synevi = { path = "../synevi" }
+synevi_core = { path = "../synevi_core" }
+synevi_network = { path = "../synevi_network" }
+synevi_kv = { path = "../synevi_kv" }
+synevi_persistence = { path = "../synevi_persistence" }
+synevi_types = { path = "../synevi_types" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 ahash = { workspace = true }

@@ -7,10 +7,10 @@ repository.workspace = true
 license.workspace = true
 
 [dev-dependencies]
-synevi_core = { path = "../crates/synevi_core" }
-synevi_network = { path = "../crates/synevi_network" }
-synevi_persistence = { path = "../crates/synevi_persistence" }
-monotime = { path = "../crates/monotime" }
+synevi_core = { path = "../synevi_core" }
+synevi_network = { path = "../synevi_network" }
+synevi_persistence = { path = "../synevi_persistence" }
+monotime = { path = "../monotime" }
 anyhow = { workspace = true }
 bytes = "1.6.0"
 chrono = "0.4.38"

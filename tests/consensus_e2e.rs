@@ -8,7 +8,7 @@ mod tests {
     use synevi_core::tests::DummyExecutor;
     use synevi_network::network::GrpcNetwork;
     use synevi_persistence::event_store::{EventStore, Store};
-    use synevi_types::{State, T, T0};
+    use synevi::{State, T, T0};
     use tokio::runtime::Builder;
     use ulid::Ulid;
 

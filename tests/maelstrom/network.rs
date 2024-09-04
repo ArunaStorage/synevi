@@ -1,16 +1,15 @@
 use crate::messages::{Body, Message, MessageType};
 use async_trait::async_trait;
-use monotime::MonoTime;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use synevi_network::consensus_transport::{
+use synevi::network::requests::{
+    BroadcastRequest, BroadcastResponse,
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
     PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse,
 };
-use synevi_network::network::{BroadcastRequest, BroadcastResponse, Network, NetworkInterface};
-use synevi_network::replica::Replica;
-use synevi_types::{State, SyneviError, T0};
+use synevi::network::{Network, NetworkInterface, Replica};
+use synevi::{State, SyneviError, T0};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -175,7 +174,7 @@ impl NetworkInterface for MaelstromNetwork {
         let members = self.members.read().unwrap().clone();
         let t0 = match &request {
             BroadcastRequest::PreAccept(req, _serial) => {
-                let t0 = T0(MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap());
+                let t0 = T0::try_from(req.timestamp_zero.as_slice()).unwrap();
                 self.broadcast_responses
                     .lock()
                     .await
@@ -205,7 +204,7 @@ impl NetworkInterface for MaelstromNetwork {
                 (State::PreAccepted, t0)
             }
             BroadcastRequest::Accept(req) => {
-                let t0 = T0(MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap());
+                let t0 = T0::try_from(req.timestamp_zero.as_slice()).unwrap();
                 self.broadcast_responses
                     .lock()
                     .await
@@ -238,7 +237,7 @@ impl NetworkInterface for MaelstromNetwork {
                 (State::Accepted, t0)
             }
             BroadcastRequest::Commit(req) => {
-                let t0 = T0(MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap());
+                let t0 = T0::try_from(req.timestamp_zero.as_slice()).unwrap();
                 self.broadcast_responses
                     .lock()
                     .await
@@ -271,7 +270,7 @@ impl NetworkInterface for MaelstromNetwork {
                 (State::Commited, t0)
             }
             BroadcastRequest::Apply(req) => {
-                let t0 = T0(MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap());
+                let t0 = T0::try_from(req.timestamp_zero.as_slice()).unwrap();
                 self.broadcast_responses
                     .lock()
                     .await
@@ -303,7 +302,7 @@ impl NetworkInterface for MaelstromNetwork {
                 (State::Applied, t0)
             }
             BroadcastRequest::Recover(req) => {
-                let t0 = T0(MonoTime::try_from(req.timestamp_zero.as_slice()).unwrap());
+                let t0 = T0::try_from(req.timestamp_zero.as_slice()).unwrap();
                 self.broadcast_responses
                     .lock()
                     .await
@@ -551,7 +550,7 @@ impl MaelstromNetwork {
                 ref deps,
                 ref nack,
             } => {
-                let key = T0(MonoTime::try_from(t0.as_slice())?);
+                let key = T0::try_from(t0.as_slice())?;
                 let lock = self.broadcast_responses.lock().await;
                 if let Some(entry) = lock.get(&(State::PreAccepted, key)) {
                     entry
@@ -568,7 +567,7 @@ impl MaelstromNetwork {
                 ref deps,
                 ref nack,
             } => {
-                let key = T0(MonoTime::try_from(t0.as_slice())?);
+                let key = T0::try_from(t0.as_slice())?;
                 let lock = self.broadcast_responses.lock().await;
                 if let Some(entry) = lock.get(&(State::Accepted, key)) {
                     entry
@@ -580,7 +579,7 @@ impl MaelstromNetwork {
                 }
             }
             MessageType::CommitOk { t0 } => {
-                let key = T0(MonoTime::try_from(t0.as_slice())?);
+                let key = T0::try_from(t0.as_slice())?;
                 let lock = self.broadcast_responses.lock().await;
                 if let Some(entry) = lock.get(&(State::Commited, key)) {
                     entry
@@ -589,7 +588,7 @@ impl MaelstromNetwork {
                 }
             }
             MessageType::ApplyOk { t0 } => {
-                let key = T0(MonoTime::try_from(t0.as_slice())?);
+                let key = T0::try_from(t0.as_slice())?;
                 let lock = self.broadcast_responses.lock().await;
                 if let Some(entry) = lock.get(&(State::Applied, key)) {
                     entry
@@ -606,7 +605,7 @@ impl MaelstromNetwork {
                 ref t,
                 ref nack,
             } => {
-                let key = T0(MonoTime::try_from(t0.as_slice())?);
+                let key = T0::try_from(t0.as_slice())?;
                 let lock = self.broadcast_responses.lock().await;
                 if let Some(entry) = lock.get(&(State::Undefined, key)) {
                     entry
