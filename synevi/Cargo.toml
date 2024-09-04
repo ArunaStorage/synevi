@@ -6,7 +6,7 @@ edition.workspace = true
 repository.workspace = true
 license.workspace = true
 description.workspace = true
-tags.workspace = true
+keywords.workspace = true
 
 [dependencies]
 synevi_core = { path = "../synevi_core", version = "0.1.0" }

@@ -13,7 +13,7 @@ authors = [
 ]
 repository = "https://github.com/ArunaStorage/synevi"
 license = "MIT OR Apache-2.0"
-tags = ["consensus", "distributed", "raft", "paxos", "cassandra", "accord", "synevi"]
+keywords = ["consensus", "distributed", "raft", "paxos", "cassandra", "accord", "synevi"]
 
 [workspace.dependencies]
 thiserror = "1.0.63"

@@ -6,7 +6,6 @@ edition.workspace = true
 repository.workspace = true
 license.workspace = true
 description.workspace = true
-tags.workspace = true
 
 [dependencies]
 bytes = { workspace = true }
