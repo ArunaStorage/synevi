@@ -19,3 +19,16 @@ message GetTimeResponse {
 
 // RoundTripLatency -> Diff between Request and Response
 // Skew ~ LocalTimestamp - (Timestamp + RoundTripLatency / 2) -> Between Node Get and Node Respond
+
+service ReconfigurationService {
+    rpc NewConfig(NewConfigRequest) returns (NewConfigResponse) {} // TODO: Stream response
+}
+
+message NewConfigRequest {
+    bytes last_applied = 1; // if new T0::default, else last_applied
+}
+
+message NewConfigResponse {
+    bytes events = 1; // encoded events
+}
+
