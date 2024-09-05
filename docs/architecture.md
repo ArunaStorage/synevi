@@ -85,3 +85,14 @@ An applied transaction also contains the hash of the previous applied transactio
 The execution of each transaction also creates an execution signature, this signature is not part of the transaction itself but 
 allows replicas to detect storage failures or wrong preconditions and prevents them from accumulating a wrong state.
 Updates of the execution logic might change this hash, so it is only valid at the time of execution under the condition that all replicas run the same execution logic.
+
+### Dependencies & Reconfiguration
+
+Add last applied event of coordinator to pre_accept to minimize dependency calculation and for
+reconfiguration. If the last applied value of the coordinator gets sent, and this coordinator was
+repeatedly in a minority of quorums, this prevents sending all applied dependencies of all other
+replicas and can be used to sync nodes after crashing. This mechanism can also be integrated into 
+a reconfiguration protocol to sync all nodes and added/removed members.
+
+A reconfiguration protocol must then handle adding and removing members via consensus and
+integrating a syncing step when all wait for applying the new member set.

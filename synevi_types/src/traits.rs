@@ -71,7 +71,7 @@ where
     }
 }
 
-type Dependencies = HashSet<T0, RandomState>;
+pub type Dependencies = HashSet<T0, RandomState>;
 
 pub trait Store: Send + Sync + Sized + 'static {
     fn new(node_serial: u16) -> Result<Self, SyneviError>;
