@@ -230,16 +230,10 @@ impl Event {
         hasher.update(Vec::<u8>::from(self.id.to_be_bytes()).as_slice());
         hasher.update(Vec::<u8>::from(self.t_zero).as_slice());
         hasher.update(Vec::<u8>::from(self.t).as_slice());
-        hasher.update(Vec::<u8>::from(self.ballot).as_slice());
         hasher.update(i32::from(self.state).to_be_bytes().as_slice());
         hasher.update(self.transaction.as_slice());
         hasher.update(previous_hash);
-        // for dep in &self.dependencies {
-        //     hasher.update(Vec::<u8>::from(*dep).as_slice());
-        // }
-        // Do we want to include ballots in our hash?
-        // -> hasher.update(Vec::<u8>::from(self.ballot).as_slice());
-
+        
         let event_hash = hasher.finalize().into();
         Hashes {
             previous_hash,

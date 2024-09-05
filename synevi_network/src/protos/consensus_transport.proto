@@ -14,6 +14,7 @@ message PreAcceptRequest {
   bytes id = 1;
   bytes event = 2;
   bytes timestamp_zero = 3;
+  bytes last_applied = 4;
 }
 
 message PreAcceptResponse {
@@ -29,6 +30,7 @@ message AcceptRequest {
   bytes timestamp_zero = 4;
   bytes timestamp = 5;
   bytes dependencies = 6;
+  bytes last_applied = 7;
 }
 
 message AcceptResponse {
@@ -55,8 +57,8 @@ message ApplyRequest {
   bytes timestamp_zero = 3;
   bytes timestamp = 4;
   bytes dependencies = 5;
-  bytes transaction_hash = 6;
-  bytes execution_hash = 7; 
+  bytes transaction_hash = 6; // if != self.transaction_hash -> Try reconfiguration
+  bytes execution_hash = 7;  // if execution hash is not equal -> Try reconfigure X-times and then go into read-only mode
 }
 
 message ApplyResponse {}
