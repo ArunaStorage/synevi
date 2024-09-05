@@ -20,15 +20,23 @@ message GetTimeResponse {
 // RoundTripLatency -> Diff between Request and Response
 // Skew ~ LocalTimestamp - (Timestamp + RoundTripLatency / 2) -> Between Node Get and Node Respond
 
-service ReconfigurationService {
-    rpc NewConfig(NewConfigRequest) returns (NewConfigResponse) {} // TODO: Stream response
+service BroadcastService {
+    rpc RestartNode(RestartNodeRequest) returns (RestartNodeResponse) {}
+    rpc CustomBroadcast(CustomBroadcastRequest) returns (CustomBroadcastResponse) {}
 }
 
-message NewConfigRequest {
+message RestartNodeRequest {
     bytes last_applied = 1; // if new T0::default, else last_applied
+    bytes last_applied_hash = 2;
 }
 
-message NewConfigResponse {
-    bytes events = 1; // encoded events
+message RestartNodeResponse {
+    bytes event = 1; // encoded events
 }
+
+message CustomBroadcastRequest {
+    bytes message = 1;
+}
+
+message CustomBroadcastResponse {}
 
