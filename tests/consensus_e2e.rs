@@ -8,14 +8,14 @@ mod tests {
     use synevi_core::node::Node;
     use synevi_core::tests::DummyExecutor;
     use synevi_network::network::GrpcNetwork;
-    use synevi_persistence::event_store::EventStore;
+    use synevi_persistence::mem_store::MemStore;
     use tokio::runtime::Builder;
     use ulid::Ulid;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn parallel_execution() {
         let node_names: Vec<_> = (0..5).map(|_| Ulid::new()).collect();
-        let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>> = vec![];
+        let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, MemStore>>> = vec![];
 
         for (i, m) in node_names.iter().enumerate() {
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
@@ -125,7 +125,7 @@ mod tests {
         let handle = runtime.handle().clone();
         handle.block_on(async move {
             let node_names: Vec<_> = (0..5).map(|_| Ulid::new()).collect();
-            let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>> = vec![];
+            let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, MemStore>>> = vec![];
 
             for (i, m) in node_names.iter().enumerate() {
                 let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 11000 + i)).unwrap();
@@ -303,7 +303,7 @@ mod tests {
         let handle = runtime.handle().clone();
         handle.block_on(async move {
             let mut node_names: Vec<_> = (0..5).map(|_| Ulid::new()).collect();
-            let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>> = vec![];
+            let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, MemStore>>> = vec![];
 
             for (i, m) in node_names.iter().enumerate() {
                 let _path = format!("../tests/database/{}_test_db", i);

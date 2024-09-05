@@ -1,4 +1,3 @@
-use crate::database::Storage;
 use ahash::RandomState;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
@@ -11,9 +10,8 @@ use synevi_types::{Ballot, T, T0};
 use tracing::instrument;
 
 #[derive(Debug)]
-pub struct EventStore {
-    pub events: BTreeMap<T0, Event>, // Key: t0, value: Event
-    pub database: Option<Storage>,
+pub struct MemStore {
+    pub events: BTreeMap<T0, Event>,      // Key: t0, value: Event
     pub(crate) mappings: BTreeMap<T, T0>, // Key: t, value t0
     pub last_applied: T,                  // t of last applied entry
     pub(crate) latest_t0: T0,             // last created or recognized t0
@@ -21,47 +19,14 @@ pub struct EventStore {
     latest_hash: [u8; 32],
 }
 
-impl EventStore {
-    pub fn new_with_path(node_serial: u16, path: String) -> Result<Self, SyneviError> {
-        let db = Storage::new(path)?;
-        Ok(EventStore {
-            events: BTreeMap::default(),
-            mappings: BTreeMap::default(),
-            last_applied: T::default(),
-            latest_t0: T0::default(),
-            database: Some(db),
-            node_serial,
-            latest_hash: [0; 32],
-        })
-    }
-
-    pub fn new_with_env(node_serial: u16, env: heed::Env) -> Self {
-        let db = Storage::new_with_env(env);
-        EventStore {
-            events: BTreeMap::default(),
-            mappings: BTreeMap::default(),
-            last_applied: T::default(),
-            latest_t0: T0::default(),
-            database: Some(db),
-            node_serial,
-            latest_hash: [0; 32],
-        }
-    }
-
-    pub fn new_from_persistence(_path: String) -> Result<Self, SyneviError> {
-        todo!()
-    }
-}
-
-impl Store for EventStore {
+impl Store for MemStore {
     #[instrument(level = "trace")]
     fn new(node_serial: u16) -> Result<Self, SyneviError> {
-        Ok(EventStore {
+        Ok(MemStore {
             events: BTreeMap::default(),
             mappings: BTreeMap::default(),
             last_applied: T::default(),
             latest_t0: T0::default(),
-            database: None,
             node_serial,
             latest_hash: [0; 32],
         })
@@ -200,14 +165,8 @@ impl Store for EventStore {
                 event.hashes = Some(hashes);
             };
 
-            if let Some(db) = &self.database {
-                db.upsert_object(event.clone())?;
-            }
             Ok(event.hashes.clone())
         } else {
-            if let Some(db) = &self.database {
-                db.upsert_object(event.clone())?;
-            }
             Ok(None)
         }
     }
@@ -301,49 +260,5 @@ impl Store for EventStore {
 
     fn get_event_store(&self) -> BTreeMap<T0, Event> {
         self.events.clone()
-    }
-}
-
-impl EventStore {
-    pub fn init(path: Option<String>, node_serial: u16) -> Result<Self, SyneviError> {
-        match path {
-            Some(path) => {
-                // TODO: Read all from DB and fill event store
-                let mut events = BTreeMap::default();
-                let mut mappings = BTreeMap::default();
-                let mut last_applied = T::default();
-                let mut latest_t0 = T0::default();
-                let db = Storage::new(path)?;
-                let result = db.read_all()?;
-                for event in result {
-                    if event.state == State::Applied && event.t > last_applied {
-                        last_applied = event.t;
-                    }
-                    if latest_t0 < event.t_zero {
-                        latest_t0 = event.t_zero;
-                    }
-                    mappings.insert(event.t, event.t_zero);
-                    events.insert(event.t_zero, event);
-                }
-                Ok(EventStore {
-                    events,
-                    mappings,
-                    last_applied,
-                    latest_t0,
-                    database: Some(db),
-                    node_serial,
-                    latest_hash: [0; 32], // TODO: Read from DB
-                })
-            }
-            None => Ok(EventStore {
-                events: BTreeMap::default(),
-                mappings: BTreeMap::default(),
-                last_applied: T::default(),
-                latest_t0: T0::default(),
-                database: None,
-                node_serial,
-                latest_hash: [0; 32],
-            }),
-        }
     }
 }

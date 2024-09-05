@@ -5,7 +5,7 @@ use std::fmt::Debug;
 use std::sync::atomic::AtomicBool;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::network::{Network, NodeInfo};
-use synevi_persistence::event_store::EventStore;
+use synevi_persistence::mem_store::MemStore;
 use synevi_types::traits::Store;
 use synevi_types::types::SyneviResult;
 use synevi_types::{Executor, SyneviError};
@@ -20,7 +20,7 @@ pub struct Stats {
     pub total_recovers: AtomicU64,
 }
 
-pub struct Node<N, E, S = EventStore>
+pub struct Node<N, E, S = MemStore>
 where
     N: Network + Send + Sync,
     E: Executor + Send + Sync,
@@ -36,7 +36,7 @@ where
     has_members: AtomicBool,
 }
 
-impl<N, E> Node<N, E, EventStore>
+impl<N, E> Node<N, E, MemStore>
 where
     N: Network,
     E: Executor,
@@ -48,7 +48,7 @@ where
         network: N,
         executor: E,
     ) -> Result<Arc<Self>, SyneviError> {
-        let store = EventStore::new(serial)?;
+        let store = MemStore::new(serial)?;
         Self::new(id, serial, network, executor, store).await
     }
 }

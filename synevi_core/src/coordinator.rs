@@ -507,7 +507,7 @@ pub mod tests {
     use synevi_network::network::Network;
     use synevi_network::network::{BroadcastRequest, NetworkInterface};
     use synevi_network::utils::IntoInner;
-    use synevi_persistence::event_store::EventStore;
+    use synevi_persistence::mem_store::MemStore;
     use synevi_types::traits::Store;
     use synevi_types::SyneviError;
     use synevi_types::{Executor, State, Transaction};
@@ -567,7 +567,7 @@ pub mod tests {
 
     #[tokio::test]
     async fn init_test() {
-        let node = Node::<NetworkMock, DummyExecutor, EventStore>::new_with_network_and_executor(
+        let node = Node::<NetworkMock, DummyExecutor, MemStore>::new_with_network_and_executor(
             Ulid::new(),
             0,
             NetworkMock::default(),

@@ -1,2 +1,2 @@
 mod database;
-pub mod event_store;
+pub mod mem_store;

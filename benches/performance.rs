@@ -2,16 +2,16 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 use synevi_core::{node::Node, tests::DummyExecutor};
 use synevi_network::network::GrpcNetwork;
-use synevi_persistence::event_store::EventStore;
+use synevi_persistence::mem_store::MemStore;
 use tokio::runtime;
 use ulid::Ulid;
 
 async fn prepare() -> (
-    Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>>,
+    Vec<Arc<Node<GrpcNetwork, DummyExecutor, MemStore>>>,
     Vec<u8>,
 ) {
     let node_names: Vec<_> = (0..5).map(|_| Ulid::new()).collect();
-    let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>> = vec![];
+    let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, MemStore>>> = vec![];
 
     for (i, m) in node_names.iter().enumerate() {
         let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
@@ -35,7 +35,7 @@ async fn prepare() -> (
     (nodes, payload.clone())
 }
 
-async fn parallel_execution(coordinator: Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>) {
+async fn parallel_execution(coordinator: Arc<Node<GrpcNetwork, DummyExecutor, MemStore>>) {
     let mut joinset = tokio::task::JoinSet::new();
 
     for i in 0..1000 {
@@ -52,7 +52,7 @@ async fn parallel_execution(coordinator: Arc<Node<GrpcNetwork, DummyExecutor, Ev
 }
 
 async fn contention_execution(
-    coordinators: Vec<Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>>,
+    coordinators: Vec<Arc<Node<GrpcNetwork, DummyExecutor, MemStore>>>,
 ) {
     let mut joinset = tokio::task::JoinSet::new();
 
@@ -72,7 +72,7 @@ async fn contention_execution(
 }
 
 async fn _bigger_payloads_execution(
-    coordinator: Arc<Node<GrpcNetwork, DummyExecutor, EventStore>>,
+    coordinator: Arc<Node<GrpcNetwork, DummyExecutor, MemStore>>,
     payload: Vec<u8>,
 ) {
     let mut joinset = tokio::task::JoinSet::new();
