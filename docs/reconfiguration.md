@@ -8,7 +8,59 @@ The first node starts with `epoch = 0`. It adds itself to the config (address et
 
 # Join cluster as new node
 
+TODO: Electorate Networkinterface pre-accept
+Electorate @ pre-accept = Set of all members from current epoch
+If pre-accept returns a new epoch... Fetch configuration.
+Accept to all members of old epoch and all members of new epoch
+
+In our impl:
+When the coordinator receives info about a new epoch in PA responses.
+-> Fetch config of epoch from appropriate node
+Await fetch && PA to all (old + new)
+
+1. Update Config request (UpdateConfigRequest) on node N1
+2. Wait for the current epoch to be ready ? (ReadyEpoch = e)
+3. If node was part of e-1
+
+
+
+
+
+--------------------------------
+
 ### Onboarding Phase 1
+
+- New node gets created -> Send Join request to an existing node
+- Wait for the current epoch (e) to be ready
+    - Responds with current config (e)
+- Existing node creates a transaction (to the old electorate) with the new epoch and asynchronously starts the reconfiguration protocol.
+    - Replicas notice the new epoch and initialize the reconfiguration protocol after fetching from node
+
+X |      |      | X
+New epoch +1 (ts)
+
+- Reconfiguration protocol: 
+
+- Wait for the current epoch to be ready
+- If node was part of e-1 (previous epoch) 
+    - Wait until the ReadyElectorate is true
+    - Send join electorate to all new nodes
+- If node is a "new" one (Is part of e+1 but not e)
+    - ReadyElectorate = false
+- else: ReadyElectorate = true
+
+- Increase epoch e = e+1
+- 
+
+
+
+
+
+
+
+
+-------
+## Old ideas
 0. Accept all consensus requests and put them to a buffer.
 
 1. Ask all node for last applied + hash + current configuration
