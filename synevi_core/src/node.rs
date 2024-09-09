@@ -7,7 +7,7 @@ use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::network::{Network, NodeInfo};
 use synevi_persistence::mem_store::MemStore;
 use synevi_types::traits::Store;
-use synevi_types::types::SyneviResult;
+use synevi_types::types::{Config, SyneviResult, TxPayload};
 use synevi_types::{Executor, SyneviError};
 use tokio::sync::{Mutex, RwLock};
 use tracing::instrument;
@@ -123,7 +123,23 @@ where
             tracing::warn!("Consensus omitted: No members in the network");
         };
         let _permit = self.semaphore.acquire().await?;
-        let mut coordinator = Coordinator::new(self.clone(), transaction, id).await;
+        let mut coordinator = Coordinator::new(
+            self.clone(),
+            synevi_types::types::TxPayload::Custom(transaction),
+            id,
+        )
+        .await;
+        coordinator.run().await
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    pub async fn config_change(self: Arc<Self>, id: u128, config: Config) -> SyneviResult<E> {
+        if !self.has_members.load(std::sync::atomic::Ordering::Relaxed) {
+            tracing::warn!("Consensus omitted: No members in the network");
+        };
+        let _permit = self.semaphore.acquire().await?;
+        let mut coordinator =
+            Coordinator::new(self.clone(), TxPayload::ConfigChange(config), id).await;
         coordinator.run().await
     }
 
@@ -180,7 +196,7 @@ mod tests {
             transaction: Vec<u8>,
         ) -> Result<(), SyneviError> {
             let _permit = self.semaphore.acquire().await?;
-            let mut coordinator = Coordinator::new(self.clone(), transaction, id).await;
+            let mut coordinator = Coordinator::new(self.clone(), synevi_types::types::TxPayload::Custom(transaction), id).await;
             coordinator.failing_pre_accept().await?;
             Ok(())
         }

@@ -14,7 +14,6 @@ message PreAcceptRequest {
   bytes id = 1;
   bytes event = 2;
   bytes timestamp_zero = 3;
-  bytes last_applied = 4;
 }
 
 message PreAcceptResponse {
@@ -30,7 +29,6 @@ message AcceptRequest {
   bytes timestamp_zero = 4;
   bytes timestamp = 5;
   bytes dependencies = 6;
-  bytes last_applied = 7;
 }
 
 message AcceptResponse {
