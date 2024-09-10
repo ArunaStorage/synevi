@@ -8,7 +8,6 @@ use std::{
     ops::Deref,
     time::{SystemTime, UNIX_EPOCH},
 };
-use ulid::Ulid;
 
 use crate::{error::SyneviError, Executor, Transaction};
 
@@ -225,106 +224,6 @@ pub struct UpsertEvent {
     pub execution_hash: Option<[u8; 32]>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Config {
-    pub epoch: u16,
-    pub transaction_id: Ulid,
-    pub member_id: Ulid,
-    pub member_serial: u16,
-    pub member_host: String,
-}
-
-impl Transaction for Config {
-    type TxErr = SyneviError;
-    type TxOk = Self;
-
-    fn as_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-
-        bytes.extend_from_slice(&self.epoch.to_be_bytes());
-        bytes.extend_from_slice(&self.transaction_id.to_bytes());
-        bytes.extend_from_slice(&self.member_id.to_bytes());
-        bytes.extend_from_slice(&self.member_serial.to_be_bytes());
-        bytes.extend_from_slice(&self.member_host.as_bytes());
-
-        bytes
-    }
-
-    fn from_bytes(mut bytes: Vec<u8>) -> Result<Self, SyneviError>
-    where
-        Self: Sized,
-    {
-        let epoch = bytes.split_off(16);
-        let epoch = u16::from_be_bytes(epoch.as_slice().try_into()?);
-        let transaction_id = bytes.split_off(128);
-        let transaction_id = Ulid::from_bytes(transaction_id.as_slice().try_into()?);
-        let member_id = bytes.split_off(128);
-        let member_id = Ulid::from_bytes(member_id.as_slice().try_into()?);
-        let member_serial = bytes.split_off(16);
-        let member_serial = u16::from_be_bytes(member_serial.as_slice().try_into()?);
-        let member_host = String::from_utf8(bytes)
-            .map_err(|e| SyneviError::InvalidConversionFromBytes(e.to_string()))?;
-
-        Ok(Config {
-            epoch,
-            transaction_id,
-            member_id,
-            member_serial,
-            member_host,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum TxPayload<Tx: Transaction> {
-    #[default]
-    None,
-    ConfigChange(Config),
-    ConfigReady(Config),
-    Custom(Tx),
-}
-
-impl<Tx: Transaction + Serialize> Transaction for TxPayload<Tx> {
-    type TxErr = SyneviError;
-    type TxOk = TxPayload<Tx>;
-
-    fn as_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        match self {
-            TxPayload::None => bytes.push(0u8),
-            TxPayload::ConfigChange(config) => {
-                bytes.push(1u8);
-                bytes.extend_from_slice(&config.as_bytes());
-            },
-            TxPayload::ConfigReady(config) => {
-                bytes.push(2u8);
-                bytes.extend_from_slice(&config.as_bytes());
-            }
-            TxPayload::Custom(tx) => {
-                bytes.push(3u8);
-                bytes.extend_from_slice(&tx.as_bytes());
-            }
-        }
-        bytes
-    }
-
-    fn from_bytes(mut bytes: Vec<u8>) -> Result<Self, SyneviError>
-    where
-        Self: Sized {
-
-        let enum_field = bytes.remove(0);
-
-        Ok(match enum_field {
-            0 => TxPayload::None,
-            1 => TxPayload::ConfigChange(Config::from_bytes(bytes)?),
-            2 => TxPayload::ConfigReady(Config::from_bytes(bytes)?),
-            3 => TxPayload::Custom(Tx::from_bytes(bytes)?),
-            _ => return Err(SyneviError::InvalidConversionFromBytes("Invalid transaction conversion for TxPayload enum".to_string()))
-        })
-        
-    }
-}
-
 impl Event {
     pub fn hash_event(&self, execution_hash: [u8; 32], previous_hash: [u8; 32]) -> Hashes {
         let mut hasher = Sha3_256::new();
@@ -334,7 +233,7 @@ impl Event {
         hasher.update(i32::from(self.state).to_be_bytes().as_slice());
         hasher.update(self.transaction.as_slice());
         hasher.update(previous_hash);
-
+        
         let event_hash = hasher.finalize().into();
         Hashes {
             previous_hash,

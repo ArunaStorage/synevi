@@ -2,7 +2,6 @@ use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
 use crate::wait_handler::WaitAction;
 use ahash::RandomState;
-use serde::Serialize;
 use sha3::{Digest, Sha3_256};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
@@ -14,7 +13,7 @@ use synevi_network::consensus_transport::{
 use synevi_network::network::{BroadcastRequest, Network, NetworkInterface};
 use synevi_network::utils::IntoInner;
 use synevi_types::traits::Store;
-use synevi_types::types::{RecoveryState, SyneviResult, TxPayload};
+use synevi_types::types::{RecoveryState, SyneviResult};
 use synevi_types::{Ballot, Executor, State, SyneviError, Transaction, T, T0};
 use tracing::{instrument, trace};
 
@@ -43,7 +42,7 @@ where
 pub struct TransactionStateMachine<Tx: Transaction> {
     pub id: u128,
     pub state: State,
-    pub transaction: TxPayload<Tx>,
+    pub transaction: Option<Tx>,
     pub t_zero: T0,
     pub t: T,
     pub dependencies: HashSet<T0, RandomState>,
@@ -52,12 +51,12 @@ pub struct TransactionStateMachine<Tx: Transaction> {
 
 impl<Tx> TransactionStateMachine<Tx>
 where
-    Tx: Transaction + Serialize,
+    Tx: Transaction,
 {
     fn get_transaction_bytes(&self) -> Vec<u8> {
-        self.transaction.as_bytes()
-        // .as_ref()
-        // .map_or_else(Vec::new, |tx| tx.as_bytes())
+        self.transaction
+            .as_ref()
+            .map_or_else(Vec::new, |tx| tx.as_bytes())
     }
 }
 
@@ -68,7 +67,7 @@ where
     S: Store,
 {
     #[instrument(level = "trace", skip(node, transaction))]
-    pub async fn new(node: Arc<Node<N, E, S>>, transaction: TxPayload<E::Tx>, id: u128) -> Self {
+    pub async fn new(node: Arc<Node<N, E, S>>, transaction: E::Tx, id: u128) -> Self {
         trace!(?id, "Coordinator: New");
         let t0 = node.event_store.lock().await.init_t_zero(node.info.serial);
         let network_interface = node.network.get_interface().await;
@@ -78,7 +77,7 @@ where
             transaction: TransactionStateMachine {
                 id,
                 state: State::Undefined,
-                transaction,
+                transaction: Some(transaction),
                 t_zero: t0,
                 t: T(*t0),
                 dependencies: HashSet::default(),
@@ -317,12 +316,13 @@ where
 
         let _ = _rx.await;
 
-        match &self.transaction.transaction {
-            TxPayload::None => Err(SyneviError::TransactionNotFound),
-            TxPayload::ConfigChange(config) => todo!(),
-            TxPayload::ConfigReady(config) => todo!(),
-            TxPayload::Custom(tx) => self.node.executor.execute(tx.clone()).await,
-        }
+        let transaction = self
+            .transaction
+            .transaction
+            .clone()
+            .ok_or_else(|| SyneviError::TransactionNotFound)?;
+
+        self.node.executor.execute(transaction).await
     }
 
     #[instrument(level = "trace", skip(node))]
@@ -349,7 +349,7 @@ where
                 node,
                 network_interface,
                 transaction: TransactionStateMachine {
-                    transaction: TxPayload::from_bytes(recover_event.transaction)?,
+                    transaction: Some(E::Tx::from_bytes(recover_event.transaction)?),
                     t_zero: recover_event.t_zero,
                     t: recover_event.t,
                     ballot: recover_event.ballot,
@@ -576,12 +576,7 @@ pub mod tests {
         .await
         .unwrap();
 
-        let coordinator = Coordinator::new(
-            node,
-            synevi_types::types::TxPayload::Custom(b"foo".to_vec()),
-            0,
-        )
-        .await;
+        let coordinator = Coordinator::new(node, b"foo".to_vec(), 0).await;
 
         assert_eq!(coordinator.transaction.state, State::Undefined);
         assert_eq!(*coordinator.transaction.t_zero, *coordinator.transaction.t);

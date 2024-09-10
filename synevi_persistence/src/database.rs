@@ -149,137 +149,133 @@ impl Store for PersistentStore {
 
     #[instrument(level = "trace")]
     fn accept_tx_ballot(&mut self, t_zero: &T0, ballot: Ballot) -> Option<Ballot> {
-        todo!()
-        // let event = self.events.get_mut(t_zero)?;
+        let event = self.events.get_mut(t_zero)?;
 
-        // if event.ballot < ballot {
-        //     event.ballot = ballot;
-        // }
+        if event.ballot < ballot {
+            event.ballot = ballot;
+        }
 
-        // Some(event.ballot)
+        Some(event.ballot)
     }
 
     #[instrument(level = "trace")]
     fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<Option<Hashes>, SyneviError> {
-        todo!()
-        // let Some(event) = self.events.get_mut(&upsert_event.t_zero) else {
-        //     let event = Event::from(upsert_event.clone());
-        //     self.events.insert(upsert_event.t_zero, event);
-        //     self.mappings.insert(upsert_event.t, upsert_event.t_zero);
-        //     return Ok(None);
-        // };
+        let Some(event) = self.events.get_mut(&upsert_event.t_zero) else {
+            let event = Event::from(upsert_event.clone());
+            self.events.insert(upsert_event.t_zero, event);
+            self.mappings.insert(upsert_event.t, upsert_event.t_zero);
+            return Ok(None);
+        };
 
-        // // Update the latest t0
-        // if self.latest_t0 < event.t_zero {
-        //     self.latest_t0 = event.t_zero;
-        // }
+        // Update the latest t0
+        if self.latest_t0 < event.t_zero {
+            self.latest_t0 = event.t_zero;
+        }
 
-        // // Do not update to a "lower" state
-        // if upsert_event.state < event.state {
-        //     return Ok(None);
-        // }
+        // Do not update to a "lower" state
+        if upsert_event.state < event.state {
+            return Ok(None);
+        }
 
-        // // Event is already applied
-        // if event.state == State::Applied {
-        //     return Ok(event.hashes.clone());
-        // }
+        // Event is already applied
+        if event.state == State::Applied {
+            return Ok(event.hashes.clone());
+        }
 
-        // if event.is_update(&upsert_event) {
-        //     if let Some(old_t) = event.update_t(upsert_event.t) {
-        //         self.mappings.remove(&old_t);
-        //         self.mappings.insert(event.t, event.t_zero);
-        //     }
-        //     if let Some(deps) = upsert_event.dependencies {
-        //         event.dependencies = deps;
-        //     }
-        //     if let Some(transaction) = upsert_event.transaction {
-        //         if event.transaction.is_empty() && !transaction.is_empty() {
-        //             event.transaction = transaction;
-        //         }
-        //     }
-        //     event.state = upsert_event.state;
-        //     if let Some(ballot) = upsert_event.ballot {
-        //         if event.ballot < ballot {
-        //             event.ballot = ballot;
-        //         }
-        //     }
+        if event.is_update(&upsert_event) {
+            if let Some(old_t) = event.update_t(upsert_event.t) {
+                self.mappings.remove(&old_t);
+                self.mappings.insert(event.t, event.t_zero);
+            }
+            if let Some(deps) = upsert_event.dependencies {
+                event.dependencies = deps;
+            }
+            if let Some(transaction) = upsert_event.transaction {
+                if event.transaction.is_empty() && !transaction.is_empty() {
+                    event.transaction = transaction;
+                }
+            }
+            event.state = upsert_event.state;
+            if let Some(ballot) = upsert_event.ballot {
+                if event.ballot < ballot {
+                    event.ballot = ballot;
+                }
+            }
 
-        //     if event.state == State::Applied {
-        //         self.last_applied = event.t;
-        //         let hashes = event.hash_event(
-        //             upsert_event
-        //                 .execution_hash
-        //                 .ok_or_else(|| SyneviError::MissingExecutionHash)?,
-        //             self.latest_hash,
-        //         );
-        //         self.latest_hash = hashes.transaction_hash;
-        //         event.hashes = Some(hashes);
-        //     };
+            if event.state == State::Applied {
+                self.last_applied = event.t;
+                let hashes = event.hash_event(
+                    upsert_event
+                        .execution_hash
+                        .ok_or_else(|| SyneviError::MissingExecutionHash)?,
+                    self.latest_hash,
+                );
+                self.latest_hash = hashes.transaction_hash;
+                event.hashes = Some(hashes);
+            };
 
-        //     Ok(event.hashes.clone())
-        // } else {
-        //     Ok(None)
-        // }
+            Ok(event.hashes.clone())
+        } else {
+            Ok(None)
+        }
     }
 
     #[instrument(level = "trace")]
     fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, SyneviError> {
-        todo!()
-        // let mut recover_deps = RecoverDependencies {
-        //     timestamp: self
-        //         .events
-        //         .get(t_zero)
-        //         .map(|event| event.t)
-        //         .ok_or_else(|| SyneviError::EventNotFound(t_zero.get_inner()))?,
-        //     ..Default::default()
-        // };
-        // for (t_dep, t_zero_dep) in self.mappings.range(self.last_applied..) {
-        //     let dep_event = self
-        //         .events
-        //         .get(t_zero_dep)
-        //         .ok_or_else(|| SyneviError::DependencyNotFound(t_zero_dep.get_inner()))?;
-        //     match dep_event.state {
-        //         State::Accepted => {
-        //             if dep_event
-        //                 .dependencies
-        //                 .iter()
-        //                 .any(|t_zero_dep_dep| t_zero == t_zero_dep_dep)
-        //             {
-        //                 // Wait -> Accord p19 l7 + l9
-        //                 if t_zero_dep < t_zero && **t_dep > **t_zero {
-        //                     recover_deps.wait.insert(*t_zero_dep);
-        //                 }
-        //                 // Superseding -> Accord: p19 l10
-        //                 if t_zero_dep > t_zero {
-        //                     recover_deps.superseding = true;
-        //                 }
-        //             }
-        //         }
-        //         State::Commited => {
-        //             if dep_event
-        //                 .dependencies
-        //                 .iter()
-        //                 .any(|t_zero_dep_dep| t_zero == t_zero_dep_dep)
-        //             {
-        //                 // Superseding -> Accord: p19 l11
-        //                 if **t_dep > **t_zero {
-        //                     recover_deps.superseding = true;
-        //                 }
-        //             }
-        //         }
-        //         _ => {}
-        //     }
-        //     // Collect "normal" deps -> Accord: p19 l16
-        //     if t_zero_dep < t_zero {
-        //         recover_deps.dependencies.insert(*t_zero_dep);
-        //     }
-        // }
-        // Ok(recover_deps)
+        let mut recover_deps = RecoverDependencies {
+            timestamp: self
+                .events
+                .get(t_zero)
+                .map(|event| event.t)
+                .ok_or_else(|| SyneviError::EventNotFound(t_zero.get_inner()))?,
+            ..Default::default()
+        };
+        for (t_dep, t_zero_dep) in self.mappings.range(self.last_applied..) {
+            let dep_event = self
+                .events
+                .get(t_zero_dep)
+                .ok_or_else(|| SyneviError::DependencyNotFound(t_zero_dep.get_inner()))?;
+            match dep_event.state {
+                State::Accepted => {
+                    if dep_event
+                        .dependencies
+                        .iter()
+                        .any(|t_zero_dep_dep| t_zero == t_zero_dep_dep)
+                    {
+                        // Wait -> Accord p19 l7 + l9
+                        if t_zero_dep < t_zero && **t_dep > **t_zero {
+                            recover_deps.wait.insert(*t_zero_dep);
+                        }
+                        // Superseding -> Accord: p19 l10
+                        if t_zero_dep > t_zero {
+                            recover_deps.superseding = true;
+                        }
+                    }
+                }
+                State::Commited => {
+                    if dep_event
+                        .dependencies
+                        .iter()
+                        .any(|t_zero_dep_dep| t_zero == t_zero_dep_dep)
+                    {
+                        // Superseding -> Accord: p19 l11
+                        if **t_dep > **t_zero {
+                            recover_deps.superseding = true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            // Collect "normal" deps -> Accord: p19 l16
+            if t_zero_dep < t_zero {
+                recover_deps.dependencies.insert(*t_zero_dep);
+            }
+        }
+        Ok(recover_deps)
     }
 
     fn get_event_state(&self, t_zero: &T0) -> Option<State> {
-        todo!()
-        // self.events.get(t_zero).map(|event| event.state)
+        self.events.get(t_zero).map(|event| event.state)
     }
 
     fn recover_event(
@@ -287,34 +283,32 @@ impl Store for PersistentStore {
         t_zero_recover: &T0,
         node_serial: u16,
     ) -> Result<RecoverEvent, SyneviError> {
-        todo!()
-        // let Some(state) = self.get_event_state(t_zero_recover) else {
-        //     return Err(SyneviError::EventNotFound(t_zero_recover.get_inner()));
-        // };
-        // if matches!(state, synevi_types::State::Undefined) {
-        //     return Err(SyneviError::UndefinedRecovery);
-        // }
+        let Some(state) = self.get_event_state(t_zero_recover) else {
+            return Err(SyneviError::EventNotFound(t_zero_recover.get_inner()));
+        };
+        if matches!(state, synevi_types::State::Undefined) {
+            return Err(SyneviError::UndefinedRecovery);
+        }
 
-        // if let Some(event) = self.events.get_mut(t_zero_recover) {
-        //     event.ballot = Ballot(event.ballot.next_with_node(node_serial).into_time());
+        if let Some(event) = self.events.get_mut(t_zero_recover) {
+            event.ballot = Ballot(event.ballot.next_with_node(node_serial).into_time());
 
-        //     Ok(RecoverEvent {
-        //         id: event.id,
-        //         t_zero: event.t_zero,
-        //         t: event.t,
-        //         state,
-        //         transaction: event.transaction.clone(),
-        //         dependencies: event.dependencies.clone(),
-        //         ballot: event.ballot,
-        //     })
-        // } else {
-        //     Err(SyneviError::EventNotFound(t_zero_recover.get_inner()))
-        // }
+            Ok(RecoverEvent {
+                id: event.id,
+                t_zero: event.t_zero,
+                t: event.t,
+                state,
+                transaction: event.transaction.clone(),
+                dependencies: event.dependencies.clone(),
+                ballot: event.ballot,
+            })
+        } else {
+            Err(SyneviError::EventNotFound(t_zero_recover.get_inner()))
+        }
     }
 
     fn get_event_store(&self) -> BTreeMap<T0, Event> {
-        todo!()
-        // self.events.clone()
+        self.events.clone()
     }
 }
 
