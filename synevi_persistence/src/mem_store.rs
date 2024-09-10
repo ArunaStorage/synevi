@@ -19,7 +19,7 @@ pub struct MemStore {
     latest_hash: [u8; 32],
 }
 
-impl Store for MemStore {
+impl MemStore {
     #[instrument(level = "trace")]
     fn new(node_serial: u16) -> Result<Self, SyneviError> {
         Ok(MemStore {
@@ -31,7 +31,9 @@ impl Store for MemStore {
             latest_hash: [0; 32],
         })
     }
+}
 
+impl Store for MemStore {
     #[instrument(level = "trace")]
     fn init_t_zero(&mut self, node_serial: u16) -> T0 {
         let t0 = T0(self.latest_t0.next_with_node(node_serial).into_time());
@@ -260,5 +262,9 @@ impl Store for MemStore {
 
     fn get_event_store(&self) -> BTreeMap<T0, Event> {
         self.events.clone()
+    }
+
+    fn last_applied(&mut self) -> T {
+        self.last_applied
     }
 }

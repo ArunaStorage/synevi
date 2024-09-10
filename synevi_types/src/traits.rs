@@ -74,7 +74,7 @@ where
 pub type Dependencies = HashSet<T0, RandomState>;
 
 pub trait Store: Send + Sync + Sized + 'static {
-    fn new(node_serial: u16) -> Result<Self, SyneviError>;
+    // fn new(node_serial: u16) -> Result<Self, SyneviError>;
     // Initialize a new t0
     fn init_t_zero(&mut self, node_serial: u16) -> T0;
     // Pre-accept a transaction
@@ -103,4 +103,5 @@ pub trait Store: Send + Sync + Sized + 'static {
     fn get_event_state(&self, t_zero: &T0) -> Option<State>;
 
     fn get_event_store(&self) -> BTreeMap<T0, Event>;
+    fn last_applied(&mut self) -> T;
 }

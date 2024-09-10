@@ -100,11 +100,14 @@ where
             .total_requests
             .fetch_add(1, Ordering::Relaxed);
 
+        let last_applied = self.node.event_store.lock().await.last_applied();
+
         // Create the PreAccepted msg
         let pre_accepted_request = PreAcceptRequest {
             id: self.transaction.id.to_be_bytes().into(),
             event: self.transaction.get_transaction_bytes(),
             timestamp_zero: (*self.transaction.t_zero).into(),
+            last_applied
         };
 
         let pre_accepted_responses = self
@@ -170,6 +173,7 @@ where
                 .stats
                 .total_accepts
                 .fetch_add(1, Ordering::Relaxed);
+            let last_applied = self.node.event_store.lock().await.last_applied();
             let accepted_request = AcceptRequest {
                 id: self.transaction.id.to_be_bytes().into(),
                 ballot: self.transaction.ballot.into(),
@@ -177,6 +181,7 @@ where
                 timestamp_zero: (*self.transaction.t_zero).into(),
                 timestamp: (*self.transaction.t).into(),
                 dependencies: into_dependency(&self.transaction.dependencies),
+                last_applied
             };
             let accepted_responses = self
                 .network_interface
@@ -540,11 +545,14 @@ pub mod tests {
                 .total_requests
                 .fetch_add(1, Ordering::Relaxed);
 
+            let last_applied = self.node.event_store.lock().await.last_applied();
+
             // Create the PreAccepted msg
             let pre_accepted_request = PreAcceptRequest {
                 id: self.transaction.id.to_be_bytes().into(),
                 event: self.transaction.get_transaction_bytes(),
                 timestamp_zero: (*self.transaction.t_zero).into(),
+                last_applied,
             };
 
             let pre_accepted_responses = self
