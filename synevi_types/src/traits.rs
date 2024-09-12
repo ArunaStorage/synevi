@@ -56,13 +56,7 @@ where
 {
     type Tx = E::Tx;
 
-    async fn execute(
-        &self,
-        transaction: Self::Tx,
-    ) -> Result<
-        Result<<Self::Tx as Transaction>::TxOk, <Self::Tx as Transaction>::TxErr>,
-        SyneviError,
-    > {
+    async fn execute(&self, transaction: Self::Tx) -> SyneviResult<Self> {
         self.upgrade()
             .ok_or_else(|| SyneviError::ArcDropped)?
             .as_ref()

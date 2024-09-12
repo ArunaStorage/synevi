@@ -75,7 +75,7 @@ pub mod tests {
         type Tx = Vec<u8>;
 
         async fn execute(&self, data: Vec<u8>) -> SyneviResult<Self> {
-            Ok(Ok(data))
+            Ok(synevi_types::types::ExecutorResult::External(Ok(data)))
         }
     }
 }

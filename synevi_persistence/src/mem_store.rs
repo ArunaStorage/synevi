@@ -21,7 +21,7 @@ pub struct MemStore {
 
 impl MemStore {
     #[instrument(level = "trace")]
-    fn new(node_serial: u16) -> Result<Self, SyneviError> {
+    pub fn new(node_serial: u16) -> Result<Self, SyneviError> {
         Ok(MemStore {
             events: BTreeMap::default(),
             mappings: BTreeMap::default(),

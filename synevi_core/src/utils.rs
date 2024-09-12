@@ -2,6 +2,7 @@ use crate::coordinator::TransactionStateMachine;
 use ahash::RandomState;
 use bytes::BufMut;
 use monotime::MonoTime;
+use serde::Serialize;
 use std::collections::HashSet;
 use synevi_types::{types::UpsertEvent, SyneviError, Transaction, T0};
 
@@ -24,7 +25,7 @@ pub fn from_dependency(deps: Vec<u8>) -> Result<HashSet<T0, RandomState>, Synevi
 
 impl<Tx> From<&TransactionStateMachine<Tx>> for UpsertEvent
 where
-    Tx: Transaction,
+    Tx: Transaction + Serialize,
 {
     fn from(value: &TransactionStateMachine<Tx>) -> Self {
         UpsertEvent {
@@ -32,7 +33,7 @@ where
             t_zero: value.t_zero,
             t: value.t,
             state: value.state,
-            transaction: value.transaction.as_ref().map(|v| v.as_bytes()),
+            transaction: Some(value.transaction.as_bytes()),
             dependencies: Some(value.dependencies.clone()),
             ballot: Some(value.ballot),
             execution_hash: None,

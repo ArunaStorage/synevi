@@ -1,3 +1,4 @@
+use crate::{error::SyneviError, Executor, Transaction};
 use ahash::RandomState;
 use bytes::Bytes;
 use monotime::MonoTime;
@@ -8,13 +9,101 @@ use std::{
     ops::Deref,
     time::{SystemTime, UNIX_EPOCH},
 };
-
-use crate::{error::SyneviError, Executor, Transaction};
+use ulid::Ulid;
 
 pub type SyneviResult<E> = Result<
-    Result<<<E as Executor>::Tx as Transaction>::TxOk, <<E as Executor>::Tx as Transaction>::TxErr>,
+    ExecutorResult<<E as Executor>::Tx>,
+    //Result<<<E as Executor>::Tx as Transaction>::TxOk, <<E as Executor>::Tx as Transaction>::TxErr>,
     SyneviError,
 >;
+
+#[derive(Serialize)]
+pub enum ExecutorResult<T: Transaction> {
+    External(Result<T::TxOk, T::TxErr>),
+    Internal(Result<Member, SyneviError>),
+}
+
+#[derive(Default, PartialEq, PartialOrd, Ord, Eq, Clone, Debug, Serialize)]
+pub enum TransactionPayload<T: Transaction> {
+    #[default]
+    None,
+    External(T),
+    Internal(Member),
+}
+
+#[derive(Debug, Clone, Serialize, Eq, PartialEq, PartialOrd, Ord)]
+pub struct Member {
+    pub id: Ulid,
+    pub serial: u16,
+    pub host: String,
+}
+
+impl<T: Transaction + Serialize> Transaction for TransactionPayload<T> {
+    type TxErr = SyneviError;
+    type TxOk = TransactionPayload<T>;
+
+    fn as_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        match self {
+            Self::None => bytes.push(0),
+            Self::External(tx) => {
+                bytes.push(1);
+                bytes.extend_from_slice(&tx.as_bytes());
+            }
+            Self::Internal(member) => {
+                bytes.push(2);
+                bytes.extend_from_slice(&member.as_bytes());
+            }
+        }
+        bytes
+    }
+
+    fn from_bytes(mut bytes: Vec<u8>) -> Result<Self, SyneviError>
+    where
+        Self: Sized,
+    {
+        let first = bytes.split_off(1);
+        match first.first() {
+            Some(0) => Ok(Self::None),
+            Some(1) => Ok(Self::External(T::from_bytes(bytes)?)),
+            Some(2) => Ok(Self::Internal(Member::from_bytes(bytes)?)),
+            _ => Err(SyneviError::InvalidConversionFromBytes(
+                "Invalid TransactionPayload variant".to_string(),
+            )),
+        }
+    }
+}
+
+impl Transaction for Member {
+    type TxErr = SyneviError;
+    type TxOk = Member;
+    fn as_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        bytes.extend_from_slice(&self.id.to_bytes());
+        bytes.extend_from_slice(&self.serial.to_be_bytes());
+        bytes.extend_from_slice(&self.host.as_bytes());
+
+        bytes
+    }
+
+    fn from_bytes(mut bytes: Vec<u8>) -> Result<Self, SyneviError> {
+        let id = bytes.split_off(128);
+        let id = Ulid::from_bytes(id.as_slice().try_into()?);
+        let serial = u16::from_be_bytes(
+            bytes
+                .split_off(16)
+                .try_into()
+                .map_err(|_| SyneviError::InvalidConversionFromBytes(String::new()))?,
+        );
+        let host = String::from_utf8(bytes).map_err(|e| SyneviError::InvalidConversionFromBytes(e.to_string()))?;
+        Ok(Member {
+            id,
+            serial,
+            host,
+        })
+    }
+}
 
 #[derive(
     Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Serialize, Deserialize,
@@ -233,7 +322,7 @@ impl Event {
         hasher.update(i32::from(self.state).to_be_bytes().as_slice());
         hasher.update(self.transaction.as_slice());
         hasher.update(previous_hash);
-        
+
         let event_hash = hasher.finalize().into();
         Hashes {
             previous_hash,

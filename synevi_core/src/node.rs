@@ -7,7 +7,7 @@ use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::network::{Network, NodeInfo};
 use synevi_persistence::mem_store::MemStore;
 use synevi_types::traits::Store;
-use synevi_types::types::SyneviResult;
+use synevi_types::types::{SyneviResult, TransactionPayload};
 use synevi_types::{Executor, SyneviError};
 use tokio::sync::{Mutex, RwLock};
 use tracing::instrument;
@@ -75,7 +75,6 @@ where
         };
 
         //let reorder_buffer = ReorderBuffer::new(event_store.clone());
-
         // let reorder_clone = reorder_buffer.clone();
         // tokio::spawn(async move {
         //     reorder_clone.run().await.unwrap();
@@ -118,7 +117,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self, transaction))]
-    pub async fn transaction(self: Arc<Self>, id: u128, transaction: E::Tx) -> SyneviResult<E> {
+    pub async fn transaction(self: Arc<Self>, id: u128, transaction: TransactionPayload<E::Tx>) -> SyneviResult<E> {
         if !self.has_members.load(std::sync::atomic::Ordering::Relaxed) {
             tracing::warn!("Consensus omitted: No members in the network");
         };
@@ -166,6 +165,7 @@ mod tests {
     use synevi_network::network::GrpcNetwork;
     use synevi_network::network::Network;
     use synevi_types::traits::Store;
+    use synevi_types::types::{ExecutorResult, TransactionPayload};
     use synevi_types::{Executor, State, SyneviError, T, T0};
     use ulid::Ulid;
 
@@ -180,7 +180,7 @@ mod tests {
             transaction: Vec<u8>,
         ) -> Result<(), SyneviError> {
             let _permit = self.semaphore.acquire().await?;
-            let mut coordinator = Coordinator::new(self.clone(), transaction, id).await;
+            let mut coordinator = Coordinator::new(self.clone(), synevi_types::types::TransactionPayload::External(transaction), id).await;
             coordinator.failing_pre_accept().await?;
             Ok(())
         }
@@ -217,7 +217,7 @@ mod tests {
 
         let _result = coordinator
             .clone()
-            .transaction(2, Vec::from("F"))
+            .transaction(2, synevi_types::types::TransactionPayload::External(Vec::from("F")))
             .await
             .unwrap();
 
@@ -265,12 +265,14 @@ mod tests {
                 .await
                 .unwrap();
         }
-        coordinator
+        match coordinator
             .clone()
-            .transaction(0, Vec::from("last transaction"))
+            .transaction(0, synevi_types::types::TransactionPayload::External(Vec::from("last transaction")))
             .await
-            .unwrap()
-            .unwrap();
+            .unwrap() {
+            ExecutorResult::External(e) => {e.unwrap()},
+            _ => panic!()
+        };
 
         let coordinator_store: BTreeMap<T0, T> = coordinator
             .event_store
@@ -338,7 +340,10 @@ mod tests {
         .await
         .unwrap();
 
-        let result = node.transaction(0, vec![127u8]).await.unwrap().unwrap();
+        let result = match node.transaction(0, TransactionPayload::External(vec![127u8])).await.unwrap() {
+            ExecutorResult::External(e) => e.unwrap(),
+            _ => panic!()
+        };
 
         assert_eq!(result, vec![127u8]);
     }

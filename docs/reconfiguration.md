@@ -22,7 +22,39 @@ Await fetch && PA to all (old + new)
 2. Wait for the current epoch to be ready ? (ReadyEpoch = e)
 3. If node was part of e-1
 
+--------------------------------
 
+### Onboarding revision 2
+
+ArunaCtx {
+    1. New node starts NewNodeCtx
+    2. New node requests config + all_applieds from ExistingNodeCtx
+    3. Existing node 1 sends special transaction (NewConfig + Epoch) to other nodes with new config
+}
+
+NewNodeCtx {
+    1. Init ReplicaBuffer and collect Commits/Applies
+    2. Apply all_applieds
+    3. Apply/Commit ReplicaBuffer
+    4. Send JoinElectorate && Init FullReplica
+}
+
+ExistingNodeCtx {
+    1. Receive UpdateConfig
+    2. Send all applieds
+    4. Update Config
+    5. Send NewConfig to all
+}
+
+ElectorateCtx {
+    1. Rcv & Apply NewConfig + Epoch
+    2. Broadcast to updated config
+    3. Keep old electorate until RcvJoinElectorate
+}
+
+OldElectorateCtx {
+    1. if new epoch start ArunaCtx ?
+}
 
 
 
