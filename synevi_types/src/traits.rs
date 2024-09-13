@@ -1,8 +1,8 @@
 use ahash::RandomState;
 use serde::Serialize;
+use tokio::sync::mpsc::Sender;
 use std::{
-    collections::{BTreeMap, HashSet},
-    sync::{Arc, Weak},
+    collections::{BTreeMap, HashSet}, future::Future, sync::{Arc, Weak}
 };
 
 use crate::{
@@ -98,4 +98,7 @@ pub trait Store: Send + Sync + Sized + 'static {
 
     fn get_event_store(&self) -> BTreeMap<T0, Event>;
     fn last_applied(&mut self) -> T;
+
+    fn get_all_events(&self, sdx: Sender<Event>) -> impl Future< Output = Result<(), SyneviError>> + Send;
 }
+

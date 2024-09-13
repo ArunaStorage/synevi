@@ -1,12 +1,18 @@
 use crate::{
-    configure_transport::{time_service_server::TimeService, GetTimeRequest, GetTimeResponse},
+    configure_transport::{
+        reconfiguration_service_server::ReconfigurationService, time_service_server::TimeService,
+        GetEventRequest, GetEventResponse, GetTimeRequest, GetTimeResponse, JoinElectorateRequest,
+        JoinElectorateResponse, ReadyElectorateRequest, ReadyElectorateResponse,
+    },
     consensus_transport::*,
+    reconfiguration::Reconfiguration,
 };
 use bytes::{BufMut, BytesMut};
 use consensus_transport_server::ConsensusTransport;
-use std::time;
+use std::{env::Args, process::Output, time};
 use std::{str::FromStr, sync::Arc};
 use synevi_types::error::SyneviError;
+use tokio_stream::{adapters::Map, wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Response, Status};
 
 #[async_trait::async_trait]
@@ -28,14 +34,14 @@ pub trait Replica: Send + Sync {
 
 pub struct ReplicaBox<R>
 where
-    R: Replica,
+    R: Replica + Reconfiguration,
 {
     inner: Arc<R>,
 }
 
 impl<R> Clone for ReplicaBox<R>
 where
-    R: Replica,
+    R: Replica + Reconfiguration,
 {
     fn clone(&self) -> Self {
         Self {
@@ -46,7 +52,7 @@ where
 
 impl<R> ReplicaBox<R>
 where
-    R: Replica,
+    R: Replica + Reconfiguration,
 {
     pub fn new(replica: R) -> Self {
         Self {
@@ -58,7 +64,7 @@ where
 #[tonic::async_trait]
 impl<R> TimeService for ReplicaBox<R>
 where
-    R: Replica + 'static,
+    R: Replica + 'static + Reconfiguration,
 {
     async fn get_time(
         &self,
@@ -95,7 +101,7 @@ where
 #[tonic::async_trait]
 impl<R> ConsensusTransport for ReplicaBox<R>
 where
-    R: Replica + 'static,
+    R: Replica + 'static + Reconfiguration,
 {
     async fn pre_accept(
         &self,
@@ -165,5 +171,31 @@ where
                 .await
                 .map_err(|e| tonic::Status::internal(e.to_string()))?,
         ))
+    }
+}
+
+#[async_trait::async_trait]
+impl<R: Replica + 'static + Reconfiguration> ReconfigurationService for ReplicaBox<R> {
+    async fn join_electorate(
+        &self,
+        request: tonic::Request<JoinElectorateRequest>,
+    ) -> Result<tonic::Response<JoinElectorateResponse>, tonic::Status> {
+        Ok(Response::new(self.inner.join_electorate().await.unwrap())) // TODO: Replace unwrap
+    }
+
+    type GetEventsStream = ReceiverStream<Result<GetEventResponse, tonic::Status>>;
+
+    async fn get_events(
+        &self,
+        request: tonic::Request<GetEventRequest>,
+    ) -> Result<tonic::Response<Self::GetEventsStream>, tonic::Status> {
+        Ok(Response::new(self.inner.get_events().await))
+    }
+
+    async fn ready_electorate(
+        &self,
+        request: tonic::Request<ReadyElectorateRequest>,
+    ) -> Result<tonic::Response<ReadyElectorateResponse>, tonic::Status> {
+        Ok(Response::new(self.inner.ready_electorate().await.unwrap())) // TODO: Replace unwrap
     }
 }

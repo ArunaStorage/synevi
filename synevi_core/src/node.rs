@@ -96,8 +96,11 @@ where
         tokio::spawn(async move {
             wait_handler_clone.run().await.unwrap();
         });
-
         *node.wait_handler.write().await = Some(wait_handler);
+
+        if node.has_members.load(std::sync::atomic::Ordering::Relaxed) {
+            node.reconfigure().await?;
+        }
 
         let replica = ReplicaConfig::new(node.clone());
 
@@ -109,6 +112,19 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
+    pub async fn reconfigure(&self) -> Result<(), SyneviError> {
+        // TODO:
+        // 1. Spawn ReplicaBuffer
+        // 2. Broadcast self config to other member
+        // 3. wait for JoinElectorate responses with expected majority
+        // 3.1 if majority replies with 0 events -> skip to 4.
+        // 3.2 else Request stream with events until last_applied (highest t of JoinElectorate)
+        // 3.3 Apply buffered commits & applies
+        // 4. Send ReadyJoinElectorate && kill ReplicaBuffer && spawn ReplicaServer
+        todo!()
+    }
+
+    #[instrument(level = "trace", skip(self))]
     pub async fn add_member(&self, id: Ulid, serial: u16, host: String) -> Result<(), SyneviError> {
         self.network.add_member(id, serial, host).await?;
         self.has_members
@@ -117,7 +133,11 @@ where
     }
 
     #[instrument(level = "trace", skip(self, transaction))]
-    pub async fn transaction(self: Arc<Self>, id: u128, transaction: TransactionPayload<E::Tx>) -> SyneviResult<E> {
+    pub async fn transaction(
+        self: Arc<Self>,
+        id: u128,
+        transaction: TransactionPayload<E::Tx>,
+    ) -> SyneviResult<E> {
         if !self.has_members.load(std::sync::atomic::Ordering::Relaxed) {
             tracing::warn!("Consensus omitted: No members in the network");
         };
@@ -180,7 +200,12 @@ mod tests {
             transaction: Vec<u8>,
         ) -> Result<(), SyneviError> {
             let _permit = self.semaphore.acquire().await?;
-            let mut coordinator = Coordinator::new(self.clone(), synevi_types::types::TransactionPayload::External(transaction), id).await;
+            let mut coordinator = Coordinator::new(
+                self.clone(),
+                synevi_types::types::TransactionPayload::External(transaction),
+                id,
+            )
+            .await;
             coordinator.failing_pre_accept().await?;
             Ok(())
         }
@@ -217,7 +242,10 @@ mod tests {
 
         let _result = coordinator
             .clone()
-            .transaction(2, synevi_types::types::TransactionPayload::External(Vec::from("F")))
+            .transaction(
+                2,
+                synevi_types::types::TransactionPayload::External(Vec::from("F")),
+            )
             .await
             .unwrap();
 
@@ -267,11 +295,15 @@ mod tests {
         }
         match coordinator
             .clone()
-            .transaction(0, synevi_types::types::TransactionPayload::External(Vec::from("last transaction")))
+            .transaction(
+                0,
+                synevi_types::types::TransactionPayload::External(Vec::from("last transaction")),
+            )
             .await
-            .unwrap() {
-            ExecutorResult::External(e) => {e.unwrap()},
-            _ => panic!()
+            .unwrap()
+        {
+            ExecutorResult::External(e) => e.unwrap(),
+            _ => panic!(),
         };
 
         let coordinator_store: BTreeMap<T0, T> = coordinator
@@ -340,9 +372,13 @@ mod tests {
         .await
         .unwrap();
 
-        let result = match node.transaction(0, TransactionPayload::External(vec![127u8])).await.unwrap() {
+        let result = match node
+            .transaction(0, TransactionPayload::External(vec![127u8]))
+            .await
+            .unwrap()
+        {
             ExecutorResult::External(e) => e.unwrap(),
-            _ => panic!()
+            _ => panic!(),
         };
 
         assert_eq!(result, vec![127u8]);

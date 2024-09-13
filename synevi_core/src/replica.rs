@@ -3,17 +3,24 @@ use crate::utils::{from_dependency, into_dependency};
 use crate::wait_handler::WaitAction;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use futures::TryStreamExt;
+use synevi_network::configure_transport::{
+    GetEventResponse, JoinElectorateResponse, ReadyElectorateResponse,
+};
 use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
     PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse,
 };
 use synevi_network::network::Network;
+use synevi_network::reconfiguration::Reconfiguration;
 use synevi_network::replica::Replica;
 use synevi_types::traits::Store;
-use synevi_types::types::UpsertEvent;
+use synevi_types::types::{Member, TransactionPayload, UpsertEvent};
 use synevi_types::{Ballot, Executor, State, T, T0};
 use synevi_types::{SyneviError, Transaction};
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::{instrument, trace};
+use ulid::Ulid;
 
 pub struct ReplicaConfig<N, E, S>
 where
@@ -239,6 +246,43 @@ where
             timestamp: recover_deps.timestamp.into(),
             nack: Ballot::default().into(),
         })
+    }
+}
+
+#[async_trait::async_trait]
+impl<N, E, S> Reconfiguration for ReplicaConfig<N, E, S>
+where
+    N: Network,
+    E: Executor,
+    S: Store,
+{
+    async fn join_electorate(&self) -> Result<JoinElectorateResponse, SyneviError> {
+        // TODO: 
+        // - Start reconfiguration transaction with NewMemberConfig
+        let node = self.node.clone();
+        let res = node.transaction(
+            Ulid::new().0,
+            TransactionPayload::Internal(Member {
+                id: todo!(),
+                serial: todo!(),
+                host: todo!(),
+            }),
+        ).await?;
+        // TODO:
+        // - respond with estimated member majority
+        Ok(JoinElectorateResponse{ last_applied: todo!(), last_applied_hash: todo!() })
+    }
+
+    async fn get_events(&self) -> ReceiverStream<Result<GetEventResponse, tonic::Status>> {
+        let (sdx, rcv) = tokio::sync::mpsc::channel(100);
+        let stream = ReceiverStream::new(rcv);
+        // Stream all events to member
+        todo!()
+    }
+
+    async fn ready_electorate(&self) -> Result<ReadyElectorateResponse, SyneviError> {
+        // Start ready electorate transaction with NewMemberUlid
+        todo!()
     }
 }
 

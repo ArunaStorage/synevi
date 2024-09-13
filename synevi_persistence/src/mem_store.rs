@@ -267,4 +267,13 @@ impl Store for MemStore {
     fn last_applied(&mut self) -> T {
         self.last_applied
     }
+
+    async fn get_all_events(&self, sdx: tokio::sync::mpsc::Sender<Event>) -> Result<(), SyneviError> {
+        // TODO: This is a problem because the event store is inside a mutex outside this scope and
+        // locks now for all events, besides sending them async
+        for (_, event) in self.events.iter() {
+            sdx.send(event.clone()).await.map_err(|e| SyneviError::SendError(e.to_string()));
+        }
+        Ok(())
+    }
 }

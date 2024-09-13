@@ -4,4 +4,4 @@ mod latency_service;
 pub mod network;
 pub mod replica;
 pub mod utils;
-pub mod replica_buffer;
+pub mod reconfiguration;

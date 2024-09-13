@@ -1,6 +1,8 @@
+use crate::configure_transport::reconfiguration_service_server::ReconfigurationServiceServer;
 use crate::configure_transport::time_service_server::TimeServiceServer;
 use crate::consensus_transport::{RecoverRequest, RecoverResponse};
 use crate::latency_service::get_latency;
+use crate::reconfiguration::Reconfiguration;
 use crate::{
     consensus_transport::{
         consensus_transport_client::ConsensusTransportClient,
@@ -32,7 +34,7 @@ pub trait Network: Send + Sync + 'static {
     type Ni: NetworkInterface;
     async fn add_members(&self, members: Vec<(Ulid, u16, String)>);
     async fn add_member(&self, id: Ulid, serial: u16, host: String) -> Result<(), SyneviError>;
-    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<(), SyneviError>;
+    async fn spawn_server<R: Replica + 'static + Reconfiguration>(&self, replica_server: R) -> Result<(), SyneviError>;
     async fn get_interface(&self) -> Arc<Self::Ni>;
     async fn get_waiting_time(&self, node_serial: u16) -> u64;
 }
@@ -53,7 +55,9 @@ where
         self.as_ref().add_member(id, serial, host).await
     }
 
-    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<(), SyneviError> {
+    // TODO: Spawn onboarding server process
+
+    async fn spawn_server<R: Replica + 'static + Reconfiguration>(&self, server: R) -> Result<(), SyneviError> {
         self.as_ref().spawn_server(server).await
     }
 
@@ -177,13 +181,14 @@ impl Network for GrpcNetwork {
         Ok(())
     }
 
-    async fn spawn_server<R: Replica + 'static>(&self, server: R) -> Result<(), SyneviError> {
+    async fn spawn_server<R: Replica + 'static + Reconfiguration>(&self, server: R) -> Result<(), SyneviError> {
         let new_replica_box = ReplicaBox::new(server);
         let addr = self.socket_addr;
         self.join_set.lock().await.spawn(async move {
             let builder = Server::builder()
                 .add_service(ConsensusTransportServer::new(new_replica_box.clone()))
-                .add_service(TimeServiceServer::new(new_replica_box));
+                .add_service(TimeServiceServer::new(new_replica_box.clone()))
+                .add_service(ReconfigurationServiceServer::new(new_replica_box));
             builder.serve(addr).await?;
             Ok(())
         });

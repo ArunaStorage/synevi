@@ -1,14 +1,24 @@
-use crate::consensus_transport::{
+use crate::{configure_transport::{GetEventResponse, JoinElectorateResponse, ReadyElectorateResponse}, consensus_transport::{
         consensus_transport_server::ConsensusTransport, AcceptRequest, AcceptResponse,
         ApplyRequest, ApplyResponse, CommitRequest, CommitResponse, PreAcceptRequest,
         PreAcceptResponse, RecoverRequest, RecoverResponse,
-    };
+    }};
 use std::sync::Arc;
+use synevi_types::SyneviError;
 use tokio::sync::Mutex;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 pub struct ReplicaBuffer {
     inner: Arc<Mutex<Vec<BufferedMessage>>>,
+}
+
+
+#[async_trait::async_trait]
+pub trait Reconfiguration {
+    async fn join_electorate(&self) -> Result<JoinElectorateResponse, SyneviError>;
+    async fn get_events(&self) -> ReceiverStream<Result<GetEventResponse, tonic::Status>>;
+    async fn ready_electorate(&self) -> Result<ReadyElectorateResponse, SyneviError>;
 }
 
 pub enum BufferedMessage {
@@ -64,6 +74,8 @@ impl ConsensusTransport for ReplicaBuffer {
         &self,
         _request: Request<RecoverRequest>,
     ) -> Result<Response<RecoverResponse>, Status> {
-        Err(tonic::Status::unimplemented("Recover is not implemented for ReplicaBuffers"))
+        Err(tonic::Status::unimplemented(
+            "Recover is not implemented for ReplicaBuffers",
+        ))
     }
 }
