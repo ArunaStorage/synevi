@@ -1,28 +1,110 @@
-use crate::{configure_transport::{GetEventResponse, JoinElectorateResponse, ReadyElectorateResponse}, consensus_transport::{
+use crate::{
+    configure_transport::{
+        init_service_server::InitService, Config, GetEventRequest, GetEventResponse,
+        JoinElectorateRequest, JoinElectorateResponse, ReadyElectorateRequest,
+        ReadyElectorateResponse, ReportLastAppliedRequest, ReportLastAppliedResponse,
+    },
+    consensus_transport::{
         consensus_transport_server::ConsensusTransport, AcceptRequest, AcceptResponse,
         ApplyRequest, ApplyResponse, CommitRequest, CommitResponse, PreAcceptRequest,
         PreAcceptResponse, RecoverRequest, RecoverResponse,
-    }};
+    },
+};
 use std::sync::Arc;
-use synevi_types::SyneviError;
-use tokio::sync::Mutex;
+use synevi_types::{SyneviError, T};
+use tokio::sync::{mpsc::Sender, Mutex};
 use tonic::{Request, Response, Status};
+use ulid::Ulid;
 
 pub struct ReplicaBuffer {
     inner: Arc<Mutex<Vec<BufferedMessage>>>,
+    notifier: Sender<Report>,
 }
 
+impl ReplicaBuffer {
+    pub fn new(sdx: Sender<Report>) -> Self {
+        ReplicaBuffer {
+            inner: Arc::new(Mutex::new(Vec::new())),
+            notifier: sdx,
+        }
+    }
+}
 
 #[async_trait::async_trait]
 pub trait Reconfiguration {
-    async fn join_electorate(&self) -> Result<JoinElectorateResponse, SyneviError>;
-    async fn get_events(&self) -> tokio::sync::mpsc::Receiver<Result<GetEventResponse, SyneviError>>;
-    async fn ready_electorate(&self) -> Result<ReadyElectorateResponse, SyneviError>;
+    async fn join_electorate(
+        &self,
+        request: JoinElectorateRequest,
+    ) -> Result<JoinElectorateResponse, SyneviError>;
+    async fn get_events(
+        &self,
+        request: GetEventRequest,
+    ) -> tokio::sync::mpsc::Receiver<Result<GetEventResponse, SyneviError>>;
+    async fn ready_electorate(
+        &self,
+        request: ReadyElectorateRequest,
+    ) -> Result<ReadyElectorateResponse, SyneviError>;
 }
 
 pub enum BufferedMessage {
     Commit(CommitRequest),
     Apply(ApplyRequest),
+}
+
+pub struct Report {
+    pub node_id: Ulid,
+    pub node_serial: u16,
+    pub node_host: String,
+    pub last_applied: T,
+    pub last_applied_hash: [u8; 32],
+}
+
+#[async_trait::async_trait]
+impl ConsensusTransport for Arc<ReplicaBuffer> {
+    async fn pre_accept(
+        &self,
+        request: tonic::Request<PreAcceptRequest>,
+    ) -> Result<tonic::Response<PreAcceptResponse>, tonic::Status> {
+        self.as_ref().pre_accept(request).await
+    }
+
+    async fn commit(
+        &self,
+        request: tonic::Request<CommitRequest>,
+    ) -> Result<tonic::Response<CommitResponse>, tonic::Status> {
+        self.as_ref().commit(request).await
+    }
+
+    async fn accept(
+        &self,
+        request: tonic::Request<AcceptRequest>,
+    ) -> Result<tonic::Response<AcceptResponse>, tonic::Status> {
+        self.as_ref().accept(request).await
+    }
+
+    async fn apply(
+        &self,
+        request: tonic::Request<ApplyRequest>,
+    ) -> Result<tonic::Response<ApplyResponse>, tonic::Status> {
+        self.as_ref().apply(request).await
+    }
+
+    async fn recover(
+        &self,
+        request: tonic::Request<RecoverRequest>,
+    ) -> Result<tonic::Response<RecoverResponse>, tonic::Status> {
+        self.recover(request).await
+    }
+}
+
+#[tonic::async_trait]
+impl InitService for Arc<ReplicaBuffer> {
+    async fn report_last_applied(
+        &self,
+        request: tonic::Request<ReportLastAppliedRequest>,
+    ) -> Result<tonic::Response<ReportLastAppliedResponse>, tonic::Status> {
+        self.as_ref().report_last_applied(request).await
+    }
 }
 
 #[tonic::async_trait]
@@ -76,5 +158,48 @@ impl ConsensusTransport for ReplicaBuffer {
         Err(tonic::Status::unimplemented(
             "Recover is not implemented for ReplicaBuffers",
         ))
+    }
+}
+
+#[async_trait::async_trait]
+impl InitService for ReplicaBuffer {
+    async fn report_last_applied(
+        &self,
+        request: tonic::Request<ReportLastAppliedRequest>,
+    ) -> Result<tonic::Response<ReportLastAppliedResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let Some(Config {
+            node_serial,
+            node_id,
+            host,
+        }) = request.config
+        else {
+            return Err(tonic::Status::invalid_argument("Missing config"));
+        };
+        let report = Report {
+            node_id: Ulid::from_bytes(
+                node_id
+                    .try_into()
+                    .map_err(|_| tonic::Status::invalid_argument("Invalid node id"))?,
+            ),
+            node_serial: node_serial
+                .try_into()
+                .map_err(|_| tonic::Status::invalid_argument("Invalid node serial"))?,
+            node_host: host,
+            last_applied: request
+                .last_applied
+                .as_slice()
+                .try_into()
+                .map_err(|_| tonic::Status::invalid_argument("Invalid T"))?,
+            last_applied_hash: request
+                .last_applied_hash
+                .try_into()
+                .map_err(|_| tonic::Status::invalid_argument("Invalid hash"))?,
+        };
+        self.notifier
+            .send(report)
+            .await
+            .map_err(|_| tonic::Status::internal("Sender closed for receiving configs"))?;
+        Ok(Response::new(ReportLastAppliedResponse {}))
     }
 }

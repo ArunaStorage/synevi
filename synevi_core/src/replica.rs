@@ -4,7 +4,8 @@ use crate::wait_handler::WaitAction;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use synevi_network::configure_transport::{
-    GetEventResponse, JoinElectorateResponse, ReadyElectorateResponse,
+    Config, GetEventRequest, GetEventResponse, JoinElectorateRequest, JoinElectorateResponse,
+    ReadyElectorateRequest, ReadyElectorateResponse,
 };
 use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
@@ -18,7 +19,6 @@ use synevi_types::types::{Member, TransactionPayload, UpsertEvent};
 use synevi_types::{Ballot, Executor, State, T, T0};
 use synevi_types::{SyneviError, Transaction};
 use tokio::sync::mpsc::Receiver;
-use tokio_stream::wrappers::ReceiverStream;
 use tracing::{instrument, trace};
 use ulid::Ulid;
 
@@ -278,29 +278,39 @@ where
     E: Executor,
     S: Store,
 {
-    async fn join_electorate(&self) -> Result<JoinElectorateResponse, SyneviError> {
-        // TODO:
-        // - Start reconfiguration transaction with NewMemberConfig
+    async fn join_electorate(
+        &self,
+        request: JoinElectorateRequest,
+    ) -> Result<JoinElectorateResponse, SyneviError> {
+        let Some(Config {
+            node_id,
+            node_serial,
+            host,
+        }) = request.config
+        else {
+            return Err(SyneviError::TonicStatusError(
+                tonic::Status::invalid_argument("No config provided"),
+            ));
+        };
         let node = self.node.clone();
-        let res = node
+        let majority = self.node.network.get_member_len().await;
+        let _res = node
             .transaction(
                 Ulid::new().0,
                 TransactionPayload::Internal(Member {
-                    id: todo!(),
-                    serial: todo!(),
-                    host: todo!(),
+                    id: Ulid::from_bytes(node_id.as_slice().try_into()?),
+                    serial: node_serial.try_into()?,
+                    host,
                 }),
             )
             .await?;
-        // TODO:
-        // - respond with estimated member majority
-        Ok(JoinElectorateResponse {
-            last_applied: todo!(),
-            last_applied_hash: todo!(),
-        })
+        Ok(JoinElectorateResponse { majority })
     }
 
-    async fn get_events(&self) -> Receiver<Result<GetEventResponse, SyneviError>> {
+    async fn get_events(
+        &self,
+        _request: GetEventRequest,
+    ) -> Receiver<Result<GetEventResponse, SyneviError>> {
         let (sdx, rcv) = tokio::sync::mpsc::channel(100);
         let mut store_rcv = self.node.event_store.get_events_until(T::default()).await;
         while let Some(Ok(event)) = store_rcv.recv().await {
@@ -329,7 +339,10 @@ where
         rcv
     }
 
-    async fn ready_electorate(&self) -> Result<ReadyElectorateResponse, SyneviError> {
+    async fn ready_electorate(
+        &self,
+        _request: ReadyElectorateRequest,
+    ) -> Result<ReadyElectorateResponse, SyneviError> {
         // Start ready electorate transaction with NewMemberUlid
         todo!()
     }

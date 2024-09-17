@@ -20,12 +20,11 @@ message GetTimeResponse {
 // RoundTripLatency -> Diff between Request and Response
 // Skew ~ LocalTimestamp - (Timestamp + RoundTripLatency / 2) -> Between Node Get and Node Respond
 
+
 service BroadcastService {
     rpc RestartNode(RestartNodeRequest) returns (RestartNodeResponse) {}
     rpc CustomBroadcast(CustomBroadcastRequest) returns (CustomBroadcastResponse) {}
 }
-
-
 
 message RestartNodeRequest {
     bytes last_applied = 1; // if new T0::default, else last_applied
@@ -43,30 +42,25 @@ message CustomBroadcastRequest {
 message CustomBroadcastResponse {}
 
 
+
 service ReconfigurationService {
     rpc JoinElectorate(JoinElectorateRequest) returns (JoinElectorateResponse) {}
     rpc GetEvents(GetEventRequest) returns (stream GetEventResponse) {}
     rpc ReadyElectorate(ReadyElectorateRequest) returns (ReadyElectorateResponse) {}
 }
 
-// Is this really neccessary?
-// In theory the node executing the JoinElectorate transaction could collect in the same step all
-// last_applieds, calculate the newest and return that to the joining node.
-// - As long as the joining node has started its ReplicaBuffer before joining, no event will be
-//  skiped
-// service InitService {
-//     rpc ReportLastApplied(ReportLastAppliedRequest) returns (ReportLastAppliedResponse) {}
-// }
-
 message JoinElectorateRequest {
+    Config config = 1;
+}
+
+message Config {
     uint32 node_serial = 1;
     bytes node_id = 2;
     string host = 3;
 }
 
 message JoinElectorateResponse {
-    bytes last_applied = 1;
-    bytes last_applied_hash = 2;
+    uint32 majority = 1;
 }
 
 message GetEventRequest {
@@ -93,3 +87,17 @@ message ReadyElectorateRequest {
 }
 
 message ReadyElectorateResponse {}
+
+
+service InitService {
+    rpc ReportLastApplied(ReportLastAppliedRequest) returns (ReportLastAppliedResponse) {}
+}
+
+message ReportLastAppliedRequest {
+    Config config = 1;
+    bytes last_applied = 2;
+    bytes last_applied_hash = 3;
+}
+
+message ReportLastAppliedResponse {}
+

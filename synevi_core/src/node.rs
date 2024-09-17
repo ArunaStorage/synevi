@@ -5,10 +5,11 @@ use std::fmt::Debug;
 use std::sync::atomic::AtomicBool;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::network::{Network, NodeInfo};
+use synevi_network::reconfiguration::ReplicaBuffer;
 use synevi_persistence::mem_store::MemStore;
 use synevi_types::traits::Store;
 use synevi_types::types::{SyneviResult, TransactionPayload};
-use synevi_types::{Executor, SyneviError};
+use synevi_types::{Executor, SyneviError, T};
 use tokio::sync::RwLock;
 use tracing::instrument;
 use ulid::Ulid;
@@ -113,13 +114,37 @@ where
 
     #[instrument(level = "trace", skip(self))]
     pub async fn reconfigure(&self) -> Result<(), SyneviError> {
+
         // TODO:
         // 1. Spawn ReplicaBuffer
+        let (sdx, mut rcv) = tokio::sync::mpsc::channel(1);
+        let replica_buffer = Arc::new(ReplicaBuffer::new(sdx));
+        self.network.spawn_init_server(replica_buffer).await?;
+
         // 2. Broadcast self config to other member
+        let all_members = self.network.broadcast_config().await?;
+
         // 3. wait for JoinElectorate responses with expected majority
+        let mut member_count = 0;
+        let mut highest_applied = T::default();
+        let mut execution_hash: [u8; 32] = [0; 32];
+        while let Some(report) = rcv.recv().await {
+            self.add_member(report.node_id, report.node_serial, report.node_host).await;
+            if report.last_applied > highest_applied {
+                highest_applied = report.last_applied;
+                execution_hash = report.last_applied_hash;
+            }
+            member_count += 1;
+            if member_count >= all_members {
+                break;
+            }
+        }
+
         // 3.1 if majority replies with 0 events -> skip to 4.
-        // 3.2 else Request stream with events until last_applied (highest t of JoinElectorate)
-        // 3.3 Apply buffered commits & applies
+        if highest_applied != T::default() {
+            // 3.2 else Request stream with events until last_applied (highest t of JoinElectorate)
+            // 3.3 Apply buffered commits & applies
+        }
         // 4. Send ReadyJoinElectorate && kill ReplicaBuffer && spawn ReplicaServer
         todo!()
     }
@@ -218,7 +243,12 @@ mod tests {
 
         for (i, m) in node_names.iter().enumerate() {
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13200 + i)).unwrap();
-            let network = synevi_network::network::GrpcNetwork::new(socket_addr);
+            let network = synevi_network::network::GrpcNetwork::new(
+                socket_addr,
+                format!("http://localhost:{}", 13200 + i),
+                *m,
+                i as u16,
+            );
             let node = Node::new_with_network_and_executor(*m, i as u16, network, DummyExecutor)
                 .await
                 .unwrap();
@@ -267,7 +297,12 @@ mod tests {
 
         for (i, m) in node_names.iter().enumerate() {
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13100 + i)).unwrap();
-            let network = synevi_network::network::GrpcNetwork::new(socket_addr);
+            let network = synevi_network::network::GrpcNetwork::new(
+                socket_addr,
+                format!("http://localhost:{}", 13100 + i),
+                *m,
+                i as u16,
+            );
             let node = Node::new_with_network_and_executor(*m, i as u16, network, DummyExecutor)
                 .await
                 .unwrap();
@@ -357,11 +392,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn single_node_consensus() {
+        let id = Ulid::new();
         let node = Node::new_with_network_and_executor(
-            Ulid::new(),
+            id,
             0,
             synevi_network::network::GrpcNetwork::new(
                 SocketAddr::from_str("0.0.0.0:1337").unwrap(),
+                format!("http://localhost:1337"),
+                id,
+                0,
             ),
             DummyExecutor,
         )

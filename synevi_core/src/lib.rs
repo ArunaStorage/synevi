@@ -10,6 +10,7 @@ pub mod tests {
     use synevi_network::network::BroadcastResponse;
     use synevi_network::network::NetworkInterface;
     use synevi_network::network::{BroadcastRequest, Network};
+    use synevi_network::reconfiguration::ReplicaBuffer;
     use synevi_network::replica::Replica;
     use synevi_types::types::SyneviResult;
     use synevi_types::Executor;
@@ -65,6 +66,20 @@ pub mod tests {
 
         async fn get_waiting_time(&self, _node_serial: u16) -> u64 {
             0
+        }
+        async fn get_member_len(&self) -> u32 {
+            0
+        }
+
+        async fn spawn_init_server(
+            &self,
+            _replica_buffer: Arc<ReplicaBuffer>,
+        ) -> Result<(), SyneviError> {
+            Ok(())
+        }
+
+        async fn broadcast_config(&self) -> Result<u32, SyneviError> {
+            Ok(0)
         }
     }
 

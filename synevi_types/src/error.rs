@@ -58,6 +58,8 @@ pub enum SyneviError {
     CompetingCoordinator,
     #[error("Undefined recovery")]
     UndefinedRecovery,
+    #[error("No members found")]
+    NoMembersFound,
 }
 
 impl Serialize for SyneviError {

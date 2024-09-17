@@ -180,7 +180,7 @@ impl<R: Replica + 'static + Reconfiguration> ReconfigurationService for ReplicaB
         &self,
         request: tonic::Request<JoinElectorateRequest>,
     ) -> Result<tonic::Response<JoinElectorateResponse>, tonic::Status> {
-        Ok(Response::new(self.inner.join_electorate().await.unwrap())) // TODO: Replace unwrap
+        Ok(Response::new(self.inner.join_electorate(request.into_inner()).await.unwrap())) // TODO: Replace unwrap
     }
 
     type GetEventsStream = ReceiverStream<Result<GetEventResponse, tonic::Status>>;
@@ -189,7 +189,7 @@ impl<R: Replica + 'static + Reconfiguration> ReconfigurationService for ReplicaB
         &self,
         request: tonic::Request<GetEventRequest>,
     ) -> Result<tonic::Response<Self::GetEventsStream>, tonic::Status> {
-        let mut receiver = self.inner.get_events().await;
+        let mut receiver = self.inner.get_events(request.into_inner()).await;
 
         let (sdx, rcv) = tokio::sync::mpsc::channel(100);
         while let Some(event) = receiver.recv().await {
@@ -207,6 +207,6 @@ impl<R: Replica + 'static + Reconfiguration> ReconfigurationService for ReplicaB
         &self,
         request: tonic::Request<ReadyElectorateRequest>,
     ) -> Result<tonic::Response<ReadyElectorateResponse>, tonic::Status> {
-        Ok(Response::new(self.inner.ready_electorate().await.unwrap())) // TODO: Replace unwrap
+        Ok(Response::new(self.inner.ready_electorate(request.into_inner()).await.unwrap())) // TODO: Replace unwrap
     }
 }
