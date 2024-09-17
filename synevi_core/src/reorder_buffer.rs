@@ -104,9 +104,7 @@ where
                             let (t, deps) = self
                                 .node
                                 .event_store
-                                .lock()
-                                .await
-                                .pre_accept_tx(id, t0_buffer, event)?;
+                                .pre_accept_tx(id, t0_buffer, event).await?;
                             let _ = notify.send((t, into_dependency(&deps)));
                         } else {
                             break;
@@ -126,9 +124,7 @@ where
                             let (t, deps) = self
                                 .node
                                 .event_store
-                                .lock()
-                                .await
-                                .pre_accept_tx(id, t0_buffer, event)?;
+                                .pre_accept_tx(id, t0_buffer, event).await?;
                             let _ = notify.send((t, into_dependency(&deps)));
                         }
                     }

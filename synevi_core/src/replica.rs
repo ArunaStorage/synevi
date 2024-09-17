@@ -3,7 +3,6 @@ use crate::utils::{from_dependency, into_dependency};
 use crate::wait_handler::WaitAction;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use futures::TryStreamExt;
 use synevi_network::configure_transport::{
     GetEventResponse, JoinElectorateResponse, ReadyElectorateResponse,
 };
@@ -18,6 +17,7 @@ use synevi_types::traits::Store;
 use synevi_types::types::{Member, TransactionPayload, UpsertEvent};
 use synevi_types::{Ballot, Executor, State, T, T0};
 use synevi_types::{SyneviError, Transaction};
+use tokio::sync::mpsc::Receiver;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{instrument, trace};
 use ulid::Ulid;
@@ -65,9 +65,8 @@ where
         if let Some(ballot) = self
             .node
             .event_store
-            .lock()
-            .await
             .accept_tx_ballot(&t0, Ballot::default())
+            .await
         {
             if ballot != Ballot::default() {
                 return Ok(PreAcceptResponse {
@@ -81,12 +80,11 @@ where
 
         // let (sx, rx) = oneshot::channel();
 
-        let (t, deps) =
-            self.node
-                .event_store
-                .lock()
-                .await
-                .pre_accept_tx(request_id, t0, request.event)?;
+        let (t, deps) = self
+            .node
+            .event_store
+            .pre_accept_tx(request_id, t0, request.event)
+            .await?;
 
         // self.reorder_buffer
         //      .send_msg(t0, sx, request.event, waiting_time)
@@ -112,10 +110,14 @@ where
         let t = T::try_from(request.timestamp.as_slice())?;
         let request_ballot = Ballot::try_from(request.ballot.as_slice())?;
 
+        // TODO/WARNING: This was initially in one mutex lock, but does not look like it needs this
         let dependencies = {
-            let mut store = self.node.event_store.lock().await;
-
-            if let Some(ballot) = store.accept_tx_ballot(&t_zero, request_ballot) {
+            if let Some(ballot) = self
+                .node
+                .event_store
+                .accept_tx_ballot(&t_zero, request_ballot)
+                .await
+            {
                 if ballot != request_ballot {
                     return Ok(AcceptResponse {
                         dependencies: Vec::new(),
@@ -123,18 +125,22 @@ where
                     });
                 }
             }
-            store.upsert_tx(UpsertEvent {
-                id: request_id,
-                t_zero,
-                t,
-                state: State::Accepted,
-                transaction: Some(request.event),
-                dependencies: Some(from_dependency(request.dependencies)?),
-                ballot: Some(request_ballot),
-                execution_hash: None,
-            })?;
 
-            store.get_tx_dependencies(&t, &t_zero)
+            self.node
+                .event_store
+                .upsert_tx(UpsertEvent {
+                    id: request_id,
+                    t_zero,
+                    t,
+                    state: State::Accepted,
+                    transaction: Some(request.event),
+                    dependencies: Some(from_dependency(request.dependencies)?),
+                    ballot: Some(request_ballot),
+                    execution_hash: None,
+                })
+                .await?;
+
+            self.node.event_store.get_tx_dependencies(&t, &t_zero).await
         };
         Ok(AcceptResponse {
             dependencies: into_dependency(&dependencies),
@@ -207,13 +213,20 @@ where
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Recover");
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
-        let mut event_store = self.node.event_store.lock().await;
 
-        if let Some(state) = event_store.get_event_state(&t_zero) {
+        // TODO/WARNING: This was initially in one Mutex lock
+        //let mut event_store = self.node.event_store.lock().await;
+
+        if let Some(state) = self.node.event_store.get_event_state(&t_zero).await {
             // If another coordinator has started recovery with a higher ballot
             // Return NACK with the higher ballot number
             let request_ballot = Ballot::try_from(request.ballot.as_slice())?;
-            if let Some(ballot) = event_store.accept_tx_ballot(&t_zero, request_ballot) {
+            if let Some(ballot) = self
+                .node
+                .event_store
+                .accept_tx_ballot(&t_zero, request_ballot)
+                .await
+            {
                 if request_ballot != ballot {
                     return Ok(RecoverResponse {
                         nack: ballot.into(),
@@ -223,20 +236,29 @@ where
             }
 
             if matches!(state, State::Undefined) {
-                event_store.pre_accept_tx(request_id, t_zero, request.event)?;
+                self.node
+                    .event_store
+                    .pre_accept_tx(request_id, t_zero, request.event)
+                    .await?;
             };
         } else {
-            event_store.pre_accept_tx(request_id, t_zero, request.event)?;
+            self.node
+                .event_store
+                .pre_accept_tx(request_id, t_zero, request.event)
+                .await?;
         }
-        let recover_deps = event_store.get_recover_deps(&t_zero)?;
+        let recover_deps = self.node.event_store.get_recover_deps(&t_zero).await?;
 
         self.node
             .stats
             .total_recovers
             .fetch_add(1, Ordering::Relaxed);
 
-        let local_state = event_store
+        let local_state = self
+            .node
+            .event_store
             .get_event_state(&t_zero)
+            .await
             .ok_or_else(|| SyneviError::EventNotFound(t_zero.get_inner()))?;
         Ok(RecoverResponse {
             local_state: local_state.into(),
@@ -257,27 +279,54 @@ where
     S: Store,
 {
     async fn join_electorate(&self) -> Result<JoinElectorateResponse, SyneviError> {
-        // TODO: 
+        // TODO:
         // - Start reconfiguration transaction with NewMemberConfig
         let node = self.node.clone();
-        let res = node.transaction(
-            Ulid::new().0,
-            TransactionPayload::Internal(Member {
-                id: todo!(),
-                serial: todo!(),
-                host: todo!(),
-            }),
-        ).await?;
+        let res = node
+            .transaction(
+                Ulid::new().0,
+                TransactionPayload::Internal(Member {
+                    id: todo!(),
+                    serial: todo!(),
+                    host: todo!(),
+                }),
+            )
+            .await?;
         // TODO:
         // - respond with estimated member majority
-        Ok(JoinElectorateResponse{ last_applied: todo!(), last_applied_hash: todo!() })
+        Ok(JoinElectorateResponse {
+            last_applied: todo!(),
+            last_applied_hash: todo!(),
+        })
     }
 
-    async fn get_events(&self) -> ReceiverStream<Result<GetEventResponse, tonic::Status>> {
+    async fn get_events(&self) -> Receiver<Result<GetEventResponse, SyneviError>> {
         let (sdx, rcv) = tokio::sync::mpsc::channel(100);
-        let stream = ReceiverStream::new(rcv);
+        let mut store_rcv = self.node.event_store.get_events_until(T::default()).await;
+        while let Some(Ok(event)) = store_rcv.recv().await {
+            let response = {
+                if let Some(hashes) = event.hashes {
+                    Ok(GetEventResponse {
+                        id: event.id.to_be_bytes().to_vec(),
+                        t_zero: event.t_zero.into(),
+                        t: event.t.into(),
+                        state: event.state as u32,
+                        transaction: event.transaction,
+                        dependencies: into_dependency(&event.dependencies),
+                        ballot: event.ballot.into(),
+                        last_updated: Vec::new(), // TODO
+                        previous_hash: hashes.previous_hash.to_vec(),
+                        transaction_hash: hashes.transaction_hash.to_vec(),
+                        execution_hash: hashes.execution_hash.to_vec(),
+                    })
+                } else {
+                    Err(SyneviError::MissingExecutionHash)
+                }
+            };
+            sdx.send(response).await.unwrap();
+        }
         // Stream all events to member
-        todo!()
+        rcv
     }
 
     async fn ready_electorate(&self) -> Result<ReadyElectorateResponse, SyneviError> {

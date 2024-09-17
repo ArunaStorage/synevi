@@ -9,7 +9,7 @@ use synevi_persistence::mem_store::MemStore;
 use synevi_types::traits::Store;
 use synevi_types::types::{SyneviResult, TransactionPayload};
 use synevi_types::{Executor, SyneviError};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tracing::instrument;
 use ulid::Ulid;
 
@@ -29,7 +29,7 @@ where
     pub info: NodeInfo,
     pub network: N,
     pub executor: E,
-    pub event_store: Mutex<S>,
+    pub event_store: Arc<S>,
     pub stats: Stats,
     pub wait_handler: RwLock<Option<Arc<WaitHandler<N, E, S>>>>,
     semaphore: Arc<tokio::sync::Semaphore>,
@@ -82,7 +82,7 @@ where
 
         let node = Arc::new(Node {
             info: node_name,
-            event_store: Mutex::new(store),
+            event_store: Arc::new(store),
             network,
             stats,
             semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
@@ -249,10 +249,10 @@ mod tests {
             .await
             .unwrap();
 
-        let coord = coordinator.event_store.lock().await.get_event_store();
+        let coord = coordinator.event_store.get_event_store().await;
         for node in nodes {
             assert_eq!(
-                node.event_store.lock().await.get_event_store(),
+                node.event_store.get_event_store().await,
                 coord,
                 "Node: {:?}",
                 node.get_info()
@@ -308,17 +308,15 @@ mod tests {
 
         let coordinator_store: BTreeMap<T0, T> = coordinator
             .event_store
-            .lock()
-            .await
             .get_event_store()
+            .await
             .into_values()
             .map(|e| (e.t_zero, e.t))
             .collect();
         assert!(coordinator
             .event_store
-            .lock()
-            .await
             .get_event_store()
+            .await
             .iter()
             .all(|(_, e)| e.state == State::Applied));
 
@@ -326,17 +324,15 @@ mod tests {
         for node in nodes {
             let node_store: BTreeMap<T0, T> = node
                 .event_store
-                .lock()
-                .await
                 .get_event_store()
+                .await
                 .into_values()
                 .map(|e| (e.t_zero, e.t))
                 .collect();
             assert!(node
                 .event_store
-                .lock()
-                .await
                 .get_event_store()
+                .await
                 .clone()
                 .iter()
                 .all(|(_, e)| e.state == State::Applied));

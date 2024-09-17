@@ -2,15 +2,17 @@ use ahash::RandomState;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
 use synevi_types::error::SyneviError;
-use synevi_types::traits::Store;
+use synevi_types::traits::{Dependencies, Store};
 use synevi_types::types::RecoverEvent;
 use synevi_types::types::{Event, Hashes, RecoverDependencies, UpsertEvent};
 use synevi_types::State;
 use synevi_types::{Ballot, T, T0};
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::Mutex;
 use tracing::instrument;
 
 #[derive(Debug)]
-pub struct MemStore {
+pub struct InternalStore {
     pub events: BTreeMap<T0, Event>,      // Key: t0, value: Event
     pub(crate) mappings: BTreeMap<T, T0>, // Key: t, value t0
     pub last_applied: T,                  // t of last applied entry
@@ -19,21 +21,94 @@ pub struct MemStore {
     latest_hash: [u8; 32],
 }
 
+#[derive(Debug)]
+pub struct MemStore {
+    pub store: Mutex<InternalStore>,
+}
+
 impl MemStore {
     #[instrument(level = "trace")]
     pub fn new(node_serial: u16) -> Result<Self, SyneviError> {
-        Ok(MemStore {
+        let store = Mutex::new(InternalStore {
             events: BTreeMap::default(),
             mappings: BTreeMap::default(),
             last_applied: T::default(),
             latest_t0: T0::default(),
             node_serial,
             latest_hash: [0; 32],
-        })
+        });
+        Ok(MemStore { store })
     }
 }
 
+#[async_trait::async_trait]
 impl Store for MemStore {
+    async fn init_t_zero(&self, node_serial: u16) -> T0 {
+        self.store.lock().await.init_t_zero(node_serial)
+    }
+
+    async fn pre_accept_tx(
+        &self,
+        id: u128,
+        t_zero: T0,
+        transaction: Vec<u8>,
+    ) -> Result<(T, Dependencies), SyneviError> {
+        self.store
+            .lock()
+            .await
+            .pre_accept_tx(id, t_zero, transaction)
+    }
+
+    async fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> Dependencies {
+        self.store.lock().await.get_tx_dependencies(t, t_zero)
+    }
+
+    async fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, SyneviError> {
+        self.store.lock().await.get_recover_deps(t_zero)
+    }
+
+    async fn recover_event(
+        &self,
+        t_zero_recover: &T0,
+        node_serial: u16,
+    ) -> Result<RecoverEvent, SyneviError> {
+        self.store
+            .lock()
+            .await
+            .recover_event(t_zero_recover, node_serial)
+    }
+
+    async fn accept_tx_ballot(&self, t_zero: &T0, ballot: Ballot) -> Option<Ballot> {
+        self.store.lock().await.accept_tx_ballot(t_zero, ballot)
+    }
+
+    async fn upsert_tx(&self, upsert_event: UpsertEvent) -> Result<Option<Hashes>, SyneviError> {
+        self.store.lock().await.upsert_tx(upsert_event)
+    }
+
+    async fn get_event_state(&self, t_zero: &T0) -> Option<State> {
+        self.store.lock().await.get_event_state(t_zero)
+    }
+
+    async fn get_event_store(&self) -> BTreeMap<T0, Event> {
+        self.store.lock().await.get_event_store()
+    }
+
+    async fn last_applied(&self) -> T {
+        self.store.lock().await.last_applied()
+    }
+
+    async fn get_events_until(&self, last_applied: T) -> Receiver<Result<Event, SyneviError>> {
+        let (sdx, rcv) = tokio::sync::mpsc::channel(100);
+        //TODO: Spawn in separate threads and remove the lock
+        if let Err(err) = self.store.lock().await.get_events_until(last_applied, sdx).await {
+            tracing::error!(?err);
+        };
+        rcv
+    }
+}
+
+impl InternalStore {
     #[instrument(level = "trace")]
     fn init_t_zero(&mut self, node_serial: u16) -> T0 {
         let t0 = T0(self.latest_t0.next_with_node(node_serial).into_time());
@@ -268,12 +343,12 @@ impl Store for MemStore {
         self.last_applied
     }
 
-    async fn get_all_events(&self, sdx: tokio::sync::mpsc::Sender<Event>) -> Result<(), SyneviError> {
-        // TODO: This is a problem because the event store is inside a mutex outside this scope and
-        // locks now for all events, besides sending them async
-        for (_, event) in self.events.iter() {
-            sdx.send(event.clone()).await.map_err(|e| SyneviError::SendError(e.to_string()));
+    async fn get_events_until(&self, _last_applied: T, sdx: Sender<Result<Event, SyneviError>>) -> Result<(), SyneviError> {
+
+        for (_,event) in &self.events {
+            sdx.send(Ok(event.clone())).await.map_err(|e| SyneviError::SendError(e.to_string()))?;
         }
         Ok(())
+
     }
 }

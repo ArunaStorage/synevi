@@ -52,10 +52,10 @@ service ReconfigurationService {
 // Is this really neccessary?
 // In theory the node executing the JoinElectorate transaction could collect in the same step all
 // last_applieds, calculate the newest and return that to the joining node.
-// As long as the joining node has started its ReplicaBuffer before joining, no event will be
-// skiped
+// - As long as the joining node has started its ReplicaBuffer before joining, no event will be
+//  skiped
 // service InitService {
-//     rpc GetLastApplied(GetLastAppliedRequest) returns (GetLastAppliedResponse) {}
+//     rpc ReportLastApplied(ReportLastAppliedRequest) returns (ReportLastAppliedResponse) {}
 // }
 
 message JoinElectorateRequest {

@@ -9,10 +9,10 @@ use crate::{
 };
 use bytes::{BufMut, BytesMut};
 use consensus_transport_server::ConsensusTransport;
-use std::{env::Args, process::Output, time};
+use std::time;
 use std::{str::FromStr, sync::Arc};
 use synevi_types::error::SyneviError;
-use tokio_stream::{adapters::Map, wrappers::ReceiverStream, StreamExt};
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 #[async_trait::async_trait]
@@ -189,7 +189,18 @@ impl<R: Replica + 'static + Reconfiguration> ReconfigurationService for ReplicaB
         &self,
         request: tonic::Request<GetEventRequest>,
     ) -> Result<tonic::Response<Self::GetEventsStream>, tonic::Status> {
-        Ok(Response::new(self.inner.get_events().await))
+        let mut receiver = self.inner.get_events().await;
+
+        let (sdx, rcv) = tokio::sync::mpsc::channel(100);
+        while let Some(event) = receiver.recv().await {
+            sdx.send(event.map_err(|e| tonic::Status::internal(e.to_string())))
+                .await
+                .map_err(|_e| tonic::Status::internal("Sender closed"))?;
+        }
+
+        let stream = ReceiverStream::new(rcv);
+
+        Ok(Response::new(stream))
     }
 
     async fn ready_electorate(

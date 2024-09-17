@@ -69,7 +69,7 @@ where
         id: u128,
     ) -> Self {
         trace!(?id, "Coordinator: New");
-        let t0 = node.event_store.lock().await.init_t_zero(node.info.serial);
+        let t0 = node.event_store.init_t_zero(node.info.serial).await;
         let network_interface = node.network.get_interface().await;
         Coordinator {
             node,
@@ -100,7 +100,7 @@ where
             .total_requests
             .fetch_add(1, Ordering::Relaxed);
 
-        let last_applied = self.node.event_store.lock().await.last_applied().into();
+        let last_applied = self.node.event_store.last_applied().await.into();
 
         // Create the PreAccepted msg
         let pre_accepted_request = PreAcceptRequest {
@@ -154,9 +154,7 @@ where
         // Upsert store
         self.node
             .event_store
-            .lock()
-            .await
-            .upsert_tx((&self.transaction).into())?;
+            .upsert_tx((&self.transaction).into()).await?;
 
         Ok(())
     }
@@ -173,7 +171,7 @@ where
                 .stats
                 .total_accepts
                 .fetch_add(1, Ordering::Relaxed);
-            let last_applied = self.node.event_store.lock().await.last_applied().into();
+            let last_applied = self.node.event_store.last_applied().await.into();
             let accepted_request = AcceptRequest {
                 id: self.transaction.id.to_be_bytes().into(),
                 ballot: self.transaction.ballot.into(),
@@ -218,9 +216,7 @@ where
         self.transaction.state = State::Accepted;
         self.node
             .event_store
-            .lock()
-            .await
-            .upsert_tx((&self.transaction).into())?;
+            .upsert_tx((&self.transaction).into()).await?;
         Ok(())
     }
 
@@ -347,9 +343,7 @@ where
             let node = node.clone();
             let recover_event = node
                 .event_store
-                .lock()
-                .await
-                .recover_event(&t0_recover, node.get_info().serial)?;
+                .recover_event(&t0_recover, node.get_info().serial).await?;
             let network_interface = node.network.get_interface().await;
 
             let recover_responses = network_interface
@@ -481,9 +475,7 @@ where
         if let Some(ballot) = highest_ballot {
             self.node
                 .event_store
-                .lock()
-                .await
-                .accept_tx_ballot(&self.transaction.t_zero, ballot);
+                .accept_tx_ballot(&self.transaction.t_zero, ballot).await;
             return Ok(RecoveryState::CompetingCoordinator);
         }
 
@@ -556,7 +548,7 @@ pub mod tests {
                 .total_requests
                 .fetch_add(1, Ordering::Relaxed);
 
-            let last_applied = self.node.event_store.lock().await.last_applied().into();
+            let last_applied = self.node.event_store.last_applied().await.into();
 
             // Create the PreAccepted msg
             let pre_accepted_request = PreAcceptRequest {

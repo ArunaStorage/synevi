@@ -6,7 +6,6 @@ use crate::{configure_transport::{GetEventResponse, JoinElectorateResponse, Read
 use std::sync::Arc;
 use synevi_types::SyneviError;
 use tokio::sync::Mutex;
-use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 pub struct ReplicaBuffer {
@@ -17,7 +16,7 @@ pub struct ReplicaBuffer {
 #[async_trait::async_trait]
 pub trait Reconfiguration {
     async fn join_electorate(&self) -> Result<JoinElectorateResponse, SyneviError>;
-    async fn get_events(&self) -> ReceiverStream<Result<GetEventResponse, tonic::Status>>;
+    async fn get_events(&self) -> tokio::sync::mpsc::Receiver<Result<GetEventResponse, SyneviError>>;
     async fn ready_electorate(&self) -> Result<ReadyElectorateResponse, SyneviError>;
 }
 

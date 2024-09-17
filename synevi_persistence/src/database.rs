@@ -11,14 +11,20 @@ use synevi_types::{
     types::{Event, Hashes, RecoverDependencies, RecoverEvent, UpsertEvent},
     Ballot, State, T, T0,
 };
+use tokio::sync::{mpsc::Receiver, Mutex};
 use tracing::instrument;
 
 const EVENT_DB_NAME: &str = "events";
 type EventDb = Database<U128<BigEndian>, SerdeBincode<Event>>;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PersistentStore {
     db: Env,
+    data: Mutex<MutableData>,
+}
+
+#[derive(Clone, Debug)]
+struct MutableData {
     pub(crate) mappings: BTreeMap<T, T0>, // Key: t, value t0
     pub last_applied: T,                  // t of last applied entry
     pub(crate) latest_t0: T0,             // last created or recognized t0
@@ -66,20 +72,24 @@ impl PersistentStore {
 
                 Ok(PersistentStore {
                     db: env_clone,
-                    mappings,
-                    last_applied,
-                    latest_t0,
-                    node_serial,
-                    latest_hash,
+                    data: Mutex::new(MutableData {
+                        mappings,
+                        last_applied,
+                        latest_t0,
+                        node_serial,
+                        latest_hash,
+                    }),
                 })
             }
             None => Ok(PersistentStore {
                 db: env_clone,
-                mappings: BTreeMap::default(),
-                last_applied: T::default(),
-                latest_t0: T0::default(),
-                node_serial,
-                latest_hash: [0; 32],
+                data: Mutex::new(MutableData {
+                    mappings: BTreeMap::default(),
+                    last_applied: T::default(),
+                    latest_t0: T0::default(),
+                    node_serial,
+                    latest_hash: [0; 32],
+                }),
             }),
         }
     }
@@ -113,26 +123,29 @@ impl PersistentStore {
     }
 }
 
+#[async_trait::async_trait]
 impl Store for PersistentStore {
     #[instrument(level = "trace")]
-    fn init_t_zero(&mut self, node_serial: u16) -> T0 {
-        let t0 = T0(self.latest_t0.next_with_node(node_serial).into_time());
-        self.latest_t0 = t0;
+    async fn init_t_zero(&self, node_serial: u16) -> T0 {
+        let mut data = self.data.lock().await;
+        let t0 = T0(data.latest_t0.next_with_node(node_serial).into_time());
+        data.latest_t0 = t0;
         t0
     }
 
     #[instrument(level = "trace")]
-    fn pre_accept_tx(
-        &mut self,
+    async fn pre_accept_tx(
+        &self,
         id: u128,
         t_zero: T0,
         transaction: Vec<u8>,
     ) -> Result<(T, HashSet<T0, RandomState>), SyneviError> {
+        let data = self.data.lock().await;
         let (t, deps) = {
-            let t = T(if let Some((last_t, _)) = self.mappings.last_key_value() {
+            let t = T(if let Some((last_t, _)) = data.mappings.last_key_value() {
                 if **last_t > *t_zero {
                     t_zero
-                        .next_with_guard_and_node(last_t, self.node_serial)
+                        .next_with_guard_and_node(last_t, data.node_serial)
                         .into_time()
                 } else {
                     *t_zero
@@ -142,9 +155,10 @@ impl Store for PersistentStore {
                 *t_zero
             });
             // This might not be necessary to re-use the write lock here
-            let deps = self.get_tx_dependencies(&t, &t_zero);
+            let deps = self.get_tx_dependencies(&t, &t_zero).await;
             (t, deps)
         };
+        drop(data); // Manually drop lock here because of self.upsert_tx
 
         let event = UpsertEvent {
             id,
@@ -155,16 +169,17 @@ impl Store for PersistentStore {
             dependencies: Some(deps.clone()),
             ..Default::default()
         };
-        self.upsert_tx(event)?;
+        self.upsert_tx(event).await?;
         Ok((t, deps))
     }
 
     #[instrument(level = "trace")]
-    fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> HashSet<T0, RandomState> {
-        if &self.last_applied == t {
+    async fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> HashSet<T0, RandomState> {
+        let data = self.data.lock().await;
+        if &data.last_applied == t {
             return HashSet::default();
         }
-        assert!(self.last_applied < *t);
+        assert!(data.last_applied < *t);
         // What about deps with dep_t0 < last_applied_t0 && dep_t > t?
         let mut deps = HashSet::default();
 
@@ -172,7 +187,7 @@ impl Store for PersistentStore {
         // - t_dep < t if not applied
         // - t0_dep < t0_last_applied, if t_dep > t0
         // - t_dep > t if t0_dep < t
-        for (_, t0_dep) in self.mappings.range(self.last_applied..) {
+        for (_, t0_dep) in data.mappings.range(data.last_applied..) {
             if t0_dep != t_zero && (t0_dep < &T0(**t)) {
                 deps.insert(*t0_dep);
             }
@@ -181,7 +196,7 @@ impl Store for PersistentStore {
     }
 
     #[instrument(level = "trace")]
-    fn accept_tx_ballot(&mut self, t_zero: &T0, ballot: Ballot) -> Option<Ballot> {
+    async fn accept_tx_ballot(&self, t_zero: &T0, ballot: Ballot) -> Option<Ballot> {
         let mut write_txn = self.db.write_txn().ok()?;
         let events_db: EventDb = self
             .db
@@ -197,24 +212,27 @@ impl Store for PersistentStore {
         Some(event.ballot)
     }
 
-    #[instrument(level = "trace")]
-    fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<Option<Hashes>, SyneviError> {
+    #[instrument(level = "trace", skip(self))]
+    async fn upsert_tx(&self, upsert_event: UpsertEvent) -> Result<Option<Hashes>, SyneviError> {
+        let mut data = self.data.lock().await;
+
         let mut write_txn = self.db.write_txn()?;
         let events_db: EventDb = self
             .db
             .open_database(&write_txn, Some(EVENT_DB_NAME))?
             .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
         let event = events_db.get(&write_txn, &upsert_event.t_zero.get_inner())?;
+
         let Some(mut event) = event else {
             let event = Event::from(upsert_event.clone());
             events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
-            self.mappings.insert(upsert_event.t, upsert_event.t_zero);
+            data.mappings.insert(upsert_event.t, upsert_event.t_zero);
             return Ok(None);
         };
 
         // Update the latest t0
-        if self.latest_t0 < event.t_zero {
-            self.latest_t0 = event.t_zero;
+        if data.latest_t0 < event.t_zero {
+            data.latest_t0 = event.t_zero;
         }
 
         // Do not update to a "lower" state
@@ -229,8 +247,8 @@ impl Store for PersistentStore {
 
         if event.is_update(&upsert_event) {
             if let Some(old_t) = event.update_t(upsert_event.t) {
-                self.mappings.remove(&old_t);
-                self.mappings.insert(event.t, event.t_zero);
+                data.mappings.remove(&old_t);
+                data.mappings.insert(event.t, event.t_zero);
             }
             if let Some(deps) = upsert_event.dependencies {
                 event.dependencies = deps;
@@ -248,14 +266,14 @@ impl Store for PersistentStore {
             }
 
             if event.state == State::Applied {
-                self.last_applied = event.t;
+                data.last_applied = event.t;
                 let hashes = event.hash_event(
                     upsert_event
                         .execution_hash
                         .ok_or_else(|| SyneviError::MissingExecutionHash)?,
-                    self.latest_hash,
+                    data.latest_hash,
                 );
-                self.latest_hash = hashes.transaction_hash;
+                data.latest_hash = hashes.transaction_hash;
                 event.hashes = Some(hashes);
             };
             events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
@@ -266,7 +284,9 @@ impl Store for PersistentStore {
     }
 
     #[instrument(level = "trace")]
-    fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, SyneviError> {
+    async fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, SyneviError> {
+        let data = self.data.lock().await;
+
         let read_txn = self.db.read_txn()?;
         let db: EventDb = self
             .db
@@ -280,7 +300,8 @@ impl Store for PersistentStore {
             timestamp,
             ..Default::default()
         };
-        for (t_dep, t_zero_dep) in self.mappings.range(self.last_applied..) {
+
+        for (t_dep, t_zero_dep) in data.mappings.range(data.last_applied..) {
             let dep_event = db
                 .get(&read_txn, &t_zero_dep.get_inner())?
                 .ok_or_else(|| SyneviError::DependencyNotFound(t_zero_dep.get_inner()))?;
@@ -323,7 +344,7 @@ impl Store for PersistentStore {
         Ok(recover_deps)
     }
 
-    fn get_event_state(&self, t_zero: &T0) -> Option<State> {
+    async fn get_event_state(&self, t_zero: &T0) -> Option<State> {
         let read_txn = self.db.read_txn().ok()?;
         let db: EventDb = self
             .db
@@ -338,12 +359,12 @@ impl Store for PersistentStore {
         )
     }
 
-    fn recover_event(
-        &mut self,
+    async fn recover_event(
+        &self,
         t_zero_recover: &T0,
         node_serial: u16,
     ) -> Result<RecoverEvent, SyneviError> {
-        let Some(state) = self.get_event_state(t_zero_recover) else {
+        let Some(state) = self.get_event_state(t_zero_recover).await else {
             return Err(SyneviError::EventNotFound(t_zero_recover.get_inner()));
         };
         if matches!(state, synevi_types::State::Undefined) {
@@ -355,8 +376,7 @@ impl Store for PersistentStore {
             .db
             .open_database(&write_txn, Some(EVENT_DB_NAME))?
             .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
-        let event = db
-            .get(&write_txn, &t_zero_recover.get_inner())?;
+        let event = db.get(&write_txn, &t_zero_recover.get_inner())?;
 
         if let Some(mut event) = event {
             event.ballot = Ballot(event.ballot.next_with_node(node_serial).into_time());
@@ -376,13 +396,38 @@ impl Store for PersistentStore {
         }
     }
 
-    fn get_event_store(&self) -> BTreeMap<T0, Event> {
-        //self.events.clone()
-        todo!()
+    async fn get_event_store(&self) -> BTreeMap<T0, Event> {
+        // TODO: Remove unwrap and change trait result
+        self.read_all()
+            .unwrap()
+            .into_iter()
+            .map(|event| (event.t_zero, event))
+            .collect()
     }
 
-    fn last_applied(&mut self) -> T {
-        self.last_applied
+    async fn last_applied(&self) -> T {
+        self.data.lock().await.last_applied
+    }
+
+    async fn get_events_until(&self, _last_applied: T) -> Receiver<Result<Event, SyneviError>> {
+        let (sdx, rcv) = tokio::sync::mpsc::channel(100);
+        let db = self.db.clone();
+        tokio::task::spawn_local(async move {
+            let read_txn = db.read_txn()?;
+            let events_db: EventDb = db
+                .open_database(&read_txn, Some(EVENT_DB_NAME))?
+                .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
+
+            for entry in events_db.iter(&read_txn)? {
+                let (_, event) = entry?;
+                sdx.send(Ok(event))
+                    .await
+                    .map_err(|e| SyneviError::SendError(e.to_string()))?;
+            }
+
+            Ok::<(), SyneviError>(())
+        });
+        rcv
     }
 }
 
