@@ -6,12 +6,13 @@ use std::fmt::Debug;
 use std::sync::atomic::AtomicBool;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::network::{Network, NodeInfo};
-use synevi_network::reconfiguration::{BufferedMessage, ReplicaBuffer};
+use synevi_network::reconfiguration::{BufferedMessage, ReplicaBuffer, Report};
 use synevi_network::replica::Replica;
 use synevi_persistence::mem_store::MemStore;
 use synevi_types::traits::Store;
 use synevi_types::types::{Event, SyneviResult, TransactionPayload};
 use synevi_types::{Executor, SyneviError, T, T0};
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::RwLock;
 use tracing::instrument;
 use ulid::Ulid;
@@ -109,7 +110,6 @@ where
             node.network.spawn_server(replica).await?;
         }
 
-
         // If no config / persistence -> default
         Ok(node)
     }
@@ -117,20 +117,95 @@ where
     #[instrument(level = "trace", skip(self, replica))]
     async fn reconfigure(&self, replica: ReplicaConfig<N, E, S>) -> Result<(), SyneviError> {
         // 1. Spawn ReplicaBuffer
-        let (sdx, mut rcv) = tokio::sync::mpsc::channel(1);
+        let (sdx, rcv) = tokio::sync::mpsc::channel(1);
         let replica_buffer = Arc::new(ReplicaBuffer::new(sdx));
-        let mut join_set = self.network
-            .spawn_init_server(replica_buffer.clone()).await?;
+        let mut join_set = self
+            .network
+            .spawn_init_server(replica_buffer.clone())
+            .await?;
 
         // 2. Broadcast self config to other member
         let all_members = self.network.broadcast_config().await?;
 
         // 3. wait for JoinElectorate responses with expected majority
-        // TODO: Move into separate function
+        self.join_electorate(rcv, all_members, &replica, replica_buffer)
+            .await;
+
+        // 4. Send ReadyJoinElectorate && kill ReplicaBuffer && spawn ReplicaServer
+        let spawn = self.network.spawn_server(replica);
+        let kill = join_set.shutdown();
+        let _ = tokio::join!(spawn, kill); // TODO: Not sure if this works or waits endlessly
+        self.network.ready_electorate().await?;
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    pub async fn add_member(&self, id: Ulid, serial: u16, host: String) -> Result<(), SyneviError> {
+        self.network.add_member(id, serial, host).await?;
+        self.has_members
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    pub async fn ready_member(&self, id: Ulid, serial: u16) -> Result<(), SyneviError> {
+        self.network.ready_member(id, serial).await?;
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip(self, transaction))]
+    pub async fn transaction(
+        self: Arc<Self>,
+        id: u128,
+        transaction: TransactionPayload<E::Tx>,
+    ) -> SyneviResult<E> {
+        if !self.has_members.load(std::sync::atomic::Ordering::Relaxed) {
+            tracing::warn!("Consensus omitted: No members in the network");
+        };
+        let _permit = self.semaphore.acquire().await?;
+        let mut coordinator = Coordinator::new(self.clone(), transaction, id).await;
+        coordinator.run().await
+    }
+
+    pub async fn get_wait_handler(&self) -> Result<Arc<WaitHandler<N, E, S>>, SyneviError> {
+        let lock = self.wait_handler.read().await;
+        let handler = lock
+            .as_ref()
+            .ok_or_else(|| SyneviError::MissingWaitHandler)?
+            .clone();
+        Ok(handler)
+    }
+
+    pub fn get_stats(&self) -> (u64, u64, u64) {
+        (
+            self.stats
+                .total_requests
+                .load(std::sync::atomic::Ordering::Relaxed),
+            self.stats
+                .total_accepts
+                .load(std::sync::atomic::Ordering::Relaxed),
+            self.stats
+                .total_recovers
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+
+    pub fn get_info(&self) -> NodeInfo {
+        self.info.clone()
+    }
+
+    async fn join_electorate(
+        &self,
+        mut receiver: Receiver<Report>,
+        all_members: u32,
+        replica: &ReplicaConfig<N, E, S>,
+        replica_buffer: Arc<ReplicaBuffer>,
+    ) -> Result<(), SyneviError> {
+
         let mut member_count = 0;
         let mut highest_applied = T::default();
         let mut execution_hash: [u8; 32] = [0; 32];
-        while let Some(report) = rcv.recv().await {
+        while let Some(report) = receiver.recv().await {
             self.add_member(report.node_id, report.node_serial, report.node_host)
                 .await;
             if report.last_applied > highest_applied {
@@ -183,66 +258,15 @@ where
             .map_err(|_| SyneviError::ReceiveError("Buffered message channel closed".to_string()))?
         {
             match request {
-                BufferedMessage::Commit(req) => {replica.commit(req).await?;},
-                BufferedMessage::Apply(req) => {replica.apply(req).await?;},
+                BufferedMessage::Commit(req) => {
+                    replica.commit(req).await?;
+                }
+                BufferedMessage::Apply(req) => {
+                    replica.apply(req).await?;
+                }
             }
         }
-
-        // 4. Send ReadyJoinElectorate && kill ReplicaBuffer && spawn ReplicaServer
-        let spawn = self.network.spawn_server(replica);
-        let kill = join_set.shutdown();
-        let _ = tokio::join!(spawn, kill);
-        self.network.ready_electorate().await?;
         Ok(())
-    }
-
-    #[instrument(level = "trace", skip(self))]
-    pub async fn add_member(&self, id: Ulid, serial: u16, host: String) -> Result<(), SyneviError> {
-        self.network.add_member(id, serial, host).await?;
-        self.has_members
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        Ok(())
-    }
-
-    #[instrument(level = "trace", skip(self, transaction))]
-    pub async fn transaction(
-        self: Arc<Self>,
-        id: u128,
-        transaction: TransactionPayload<E::Tx>,
-    ) -> SyneviResult<E> {
-        if !self.has_members.load(std::sync::atomic::Ordering::Relaxed) {
-            tracing::warn!("Consensus omitted: No members in the network");
-        };
-        let _permit = self.semaphore.acquire().await?;
-        let mut coordinator = Coordinator::new(self.clone(), transaction, id).await;
-        coordinator.run().await
-    }
-
-    pub async fn get_wait_handler(&self) -> Result<Arc<WaitHandler<N, E, S>>, SyneviError> {
-        let lock = self.wait_handler.read().await;
-        let handler = lock
-            .as_ref()
-            .ok_or_else(|| SyneviError::MissingWaitHandler)?
-            .clone();
-        Ok(handler)
-    }
-
-    pub fn get_stats(&self) -> (u64, u64, u64) {
-        (
-            self.stats
-                .total_requests
-                .load(std::sync::atomic::Ordering::Relaxed),
-            self.stats
-                .total_accepts
-                .load(std::sync::atomic::Ordering::Relaxed),
-            self.stats
-                .total_recovers
-                .load(std::sync::atomic::Ordering::Relaxed),
-        )
-    }
-
-    pub fn get_info(&self) -> NodeInfo {
-        self.info.clone()
     }
 }
 

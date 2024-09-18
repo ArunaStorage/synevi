@@ -15,7 +15,7 @@ use synevi_network::network::{BroadcastRequest, Network, NetworkInterface};
 use synevi_network::utils::IntoInner;
 use synevi_types::traits::Store;
 use synevi_types::types::{
-    ExecutorResult, Member, RecoveryState, SyneviResult, TransactionPayload,
+    ExecutorResult, InternalExecution, RecoveryState, SyneviResult, TransactionPayload,
 };
 use synevi_types::{Ballot, Executor, State, SyneviError, Transaction, T, T0};
 use tracing::{instrument, trace};
@@ -154,7 +154,8 @@ where
         // Upsert store
         self.node
             .event_store
-            .upsert_tx((&self.transaction).into()).await?;
+            .upsert_tx((&self.transaction).into())
+            .await?;
 
         Ok(())
     }
@@ -216,7 +217,8 @@ where
         self.transaction.state = State::Accepted;
         self.node
             .event_store
-            .upsert_tx((&self.transaction).into()).await?;
+            .upsert_tx((&self.transaction).into())
+            .await?;
         Ok(())
     }
 
@@ -320,22 +322,22 @@ where
         match &self.transaction.transaction {
             TransactionPayload::None => todo!(),
             TransactionPayload::External(tx) => self.node.executor.execute(tx.clone()).await,
-            TransactionPayload::Internal(res @ Member { id, serial, host }) => Ok(
-                // TODO: Create an internal executor
-                match self.node.add_member(*id, *serial, host.clone()).await {
-                    Ok(_) => ExecutorResult::Internal(Ok(res.clone())),
-                    Err(e) => ExecutorResult::Internal(Err(e)),
-                },
-            ),
+            TransactionPayload::Internal(request) => {
+                // TODO: Build special execution
+                let result = match request {
+                    InternalExecution::JoinElectorate { id, serial, host } => {
+                        self.node.add_member(*id, *serial, host.clone()).await
+                    }
+                    InternalExecution::ReadyElectorate { id, serial } => {
+                        self.node.ready_member(*id, *serial).await
+                    }
+                };
+                match result {
+                    Ok(_) => Ok(ExecutorResult::Internal(Ok(request.clone()))),
+                    Err(err) => Ok(ExecutorResult::Internal(Err(err))),
+                }
+            }
         }
-
-        // let transaction = self
-        //     .transaction
-        //     .transaction
-        //     .clone()
-        //     .ok_or_else(|| SyneviError::TransactionNotFound)?;
-
-        // self.node.executor.execute(transaction).await
     }
 
     #[instrument(level = "trace", skip(node))]
@@ -344,7 +346,8 @@ where
             let node = node.clone();
             let recover_event = node
                 .event_store
-                .recover_event(&t0_recover, node.get_info().serial).await?;
+                .recover_event(&t0_recover, node.get_info().serial)
+                .await?;
             let network_interface = node.network.get_interface().await;
 
             let recover_responses = network_interface
@@ -476,7 +479,8 @@ where
         if let Some(ballot) = highest_ballot {
             self.node
                 .event_store
-                .accept_tx_ballot(&self.transaction.t_zero, ballot).await;
+                .accept_tx_ballot(&self.transaction.t_zero, ballot)
+                .await;
             return Ok(RecoveryState::CompetingCoordinator);
         }
 

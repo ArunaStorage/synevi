@@ -15,7 +15,7 @@ use synevi_network::network::Network;
 use synevi_network::reconfiguration::Reconfiguration;
 use synevi_network::replica::Replica;
 use synevi_types::traits::Store;
-use synevi_types::types::{Member, TransactionPayload, UpsertEvent};
+use synevi_types::types::{InternalExecution, TransactionPayload, UpsertEvent};
 use synevi_types::{Ballot, Executor, State, T, T0};
 use synevi_types::{SyneviError, Transaction};
 use tokio::sync::mpsc::Receiver;
@@ -179,7 +179,8 @@ where
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Apply");
 
-        let transaction: TransactionPayload<<E as Executor>::Tx> = TransactionPayload::from_bytes(request.event)?;
+        let transaction: TransactionPayload<<E as Executor>::Tx> =
+            TransactionPayload::from_bytes(request.event)?;
         //let transaction = <E as Executor>::Tx::from_bytes(request.event)?;
 
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
@@ -205,13 +206,24 @@ where
         let _ = rx.await;
 
         match transaction {
-            TransactionPayload::None => {return Err(SyneviError::TransactionNotFound);},
-            TransactionPayload::External(tx) => {self.node.executor.execute(tx).await;},
-            TransactionPayload::Internal(Member { id, serial, host }) => {
+            TransactionPayload::None => {
+                return Err(SyneviError::TransactionNotFound);
+            }
+            TransactionPayload::External(tx) => {
+                self.node.executor.execute(tx).await;
+            }
+            TransactionPayload::Internal(request) => {
                 // TODO: Build special execution
-                todo!()
-            },
+                match request {
+                    InternalExecution::JoinElectorate { id, serial, host } => {
+                        self.node.add_member(id, serial, host).await;
+                    }
+                    InternalExecution::ReadyElectorate { id, serial } => {
 
+                        self.node.ready_member(id, serial).await;
+                    }
+                }
+            }
         }
         //let _ = self.node.executor.execute(transaction).await;
 
@@ -307,11 +319,13 @@ where
         let _res = node
             .transaction(
                 Ulid::new().0,
-                TransactionPayload::Internal(Member {
-                    id: Ulid::from_bytes(node_id.as_slice().try_into()?),
-                    serial: node_serial.try_into()?,
-                    host,
-                }),
+                TransactionPayload::Internal(
+                    InternalExecution::JoinElectorate {
+                        id: Ulid::from_bytes(node_id.as_slice().try_into()?),
+                        serial: node_serial.try_into()?,
+                        host,
+                    },
+                ),
             )
             .await?;
         Ok(JoinElectorateResponse { majority })
@@ -351,10 +365,26 @@ where
 
     async fn ready_electorate(
         &self,
-        _request: ReadyElectorateRequest,
+        request: ReadyElectorateRequest,
     ) -> Result<ReadyElectorateResponse, SyneviError> {
         // Start ready electorate transaction with NewMemberUlid
-        todo!()
+        let ReadyElectorateRequest {
+            node_id,
+            node_serial,
+        } = request;
+        let node = self.node.clone();
+        let _res = node
+            .transaction(
+                Ulid::new().0,
+                TransactionPayload::Internal(
+                    InternalExecution::ReadyElectorate {
+                        id: Ulid::from_bytes(node_id.as_slice().try_into()?),
+                        serial: node_serial.try_into()?,
+                    },
+                ),
+            )
+            .await?;
+        Ok(ReadyElectorateResponse {})
     }
 }
 

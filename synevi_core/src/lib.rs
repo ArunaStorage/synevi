@@ -19,6 +19,7 @@ pub mod tests {
     use synevi_types::T;
     use tokio::sync::mpsc::Receiver;
     use tokio::sync::Mutex;
+    use tokio::task::JoinSet;
     use ulid::Ulid;
 
     #[derive(Debug, Default)]
@@ -77,15 +78,25 @@ pub mod tests {
         async fn spawn_init_server(
             &self,
             _replica_buffer: Arc<ReplicaBuffer>,
-        ) -> Result<(), SyneviError> {
-            Ok(())
+        ) -> Result<JoinSet<Result<(), SyneviError>>, SyneviError> {
+            todo!()
         }
 
         async fn broadcast_config(&self) -> Result<u32, SyneviError> {
             Ok(0)
         }
-        async fn get_stream_events(&self, _last_applied: T) -> Result<Receiver<GetEventResponse>, SyneviError> {
+        async fn get_stream_events(
+            &self,
+            _last_applied: T,
+        ) -> Result<Receiver<GetEventResponse>, SyneviError> {
             todo!()
+        }
+        async fn ready_electorate(&self) -> Result<(), SyneviError> {
+            Ok(())
+        }
+
+        async fn ready_member(&self, _id: Ulid, _serial: u16) -> Result<(), SyneviError> {
+            Ok(())
         }
     }
 

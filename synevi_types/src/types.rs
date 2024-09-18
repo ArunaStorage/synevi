@@ -20,7 +20,7 @@ pub type SyneviResult<E> = Result<
 #[derive(Serialize)]
 pub enum ExecutorResult<T: Transaction> {
     External(Result<T::TxOk, T::TxErr>),
-    Internal(Result<Member, SyneviError>),
+    Internal(Result<InternalExecution, SyneviError>),
 }
 
 #[derive(Default, PartialEq, PartialOrd, Ord, Eq, Clone, Debug, Serialize)]
@@ -28,15 +28,16 @@ pub enum TransactionPayload<T: Transaction> {
     #[default]
     None,
     External(T),
-    Internal(Member),
+    Internal(InternalExecution),
 }
 
 #[derive(Debug, Clone, Serialize, Eq, PartialEq, PartialOrd, Ord)]
-pub struct Member {
-    pub id: Ulid,
-    pub serial: u16,
-    pub host: String,
+pub enum InternalExecution {
+    JoinElectorate { id: Ulid, serial: u16, host: String },
+    ReadyElectorate { id: Ulid, serial: u16 },
 }
+
+// #[derive(Debug, Clone, Serialize, Eq, PartialEq, PartialOrd, Ord)]
 
 impl<T: Transaction + Serialize> Transaction for TransactionPayload<T> {
     type TxErr = SyneviError;
@@ -66,7 +67,7 @@ impl<T: Transaction + Serialize> Transaction for TransactionPayload<T> {
         match first.first() {
             Some(0) => Ok(Self::None),
             Some(1) => Ok(Self::External(T::from_bytes(bytes)?)),
-            Some(2) => Ok(Self::Internal(Member::from_bytes(bytes)?)),
+            Some(2) => Ok(Self::Internal(InternalExecution::from_bytes(bytes)?)),
             _ => Err(SyneviError::InvalidConversionFromBytes(
                 "Invalid TransactionPayload variant".to_string(),
             )),
@@ -74,34 +75,60 @@ impl<T: Transaction + Serialize> Transaction for TransactionPayload<T> {
     }
 }
 
-impl Transaction for Member {
+impl Transaction for InternalExecution {
     type TxErr = SyneviError;
-    type TxOk = Member;
+    type TxOk = InternalExecution;
     fn as_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
-        bytes.extend_from_slice(&self.id.to_bytes());
-        bytes.extend_from_slice(&self.serial.to_be_bytes());
-        bytes.extend_from_slice(&self.host.as_bytes());
+        match self {
+            InternalExecution::JoinElectorate { id, serial, host } => {
+                bytes.push(0);
+                bytes.extend_from_slice(&id.to_bytes());
+                bytes.extend_from_slice(&serial.to_be_bytes());
+                bytes.extend_from_slice(&host.as_bytes());
+            }
+            InternalExecution::ReadyElectorate { id, serial } => {
+                bytes.push(1);
+                bytes.extend_from_slice(&id.to_bytes());
+                bytes.extend_from_slice(&serial.to_be_bytes());
+            }
+        }
 
         bytes
     }
 
     fn from_bytes(mut bytes: Vec<u8>) -> Result<Self, SyneviError> {
-        let id = bytes.split_off(128);
-        let id = Ulid::from_bytes(id.as_slice().try_into()?);
-        let serial = u16::from_be_bytes(
-            bytes
-                .split_off(16)
-                .try_into()
-                .map_err(|_| SyneviError::InvalidConversionFromBytes(String::new()))?,
-        );
-        let host = String::from_utf8(bytes).map_err(|e| SyneviError::InvalidConversionFromBytes(e.to_string()))?;
-        Ok(Member {
-            id,
-            serial,
-            host,
-        })
+        let first = bytes.split_off(1);
+        match first.first() {
+            Some(0) => {
+                let id = bytes.split_off(128);
+                let id = Ulid::from_bytes(id.as_slice().try_into()?);
+                let serial = u16::from_be_bytes(
+                    bytes
+                        .split_off(16)
+                        .try_into()
+                        .map_err(|_| SyneviError::InvalidConversionFromBytes(String::new()))?,
+                );
+                let host = String::from_utf8(bytes)
+                    .map_err(|e| SyneviError::InvalidConversionFromBytes(e.to_string()))?;
+                Ok(InternalExecution::JoinElectorate { id, serial, host })
+            }
+            Some(1) => {
+                let id = bytes.split_off(128);
+                let id = Ulid::from_bytes(id.as_slice().try_into()?);
+                let serial = u16::from_be_bytes(
+                    bytes
+                        .split_off(16)
+                        .try_into()
+                        .map_err(|_| SyneviError::InvalidConversionFromBytes(String::new()))?,
+                );
+                Ok(InternalExecution::ReadyElectorate { id, serial })
+            }
+            _ => Err(SyneviError::InvalidConversionFromBytes(
+                "Invalid InternalExecution variant".to_string(),
+            )),
+        }
     }
 }
 
