@@ -337,11 +337,10 @@ pub struct UpsertEvent {
     pub transaction: Option<Vec<u8>>,
     pub dependencies: Option<HashSet<T0, RandomState>>,
     pub ballot: Option<Ballot>,
-    pub execution_hash: Option<[u8; 32]>,
 }
 
 impl Event {
-    pub fn hash_event(&self, execution_hash: [u8; 32], previous_hash: [u8; 32]) -> Hashes {
+    pub fn hash_event(&self, previous_hash: [u8; 32]) -> Hashes {
         let mut hasher = Sha3_256::new();
         hasher.update(Vec::<u8>::from(self.id.to_be_bytes()).as_slice());
         hasher.update(Vec::<u8>::from(self.t_zero).as_slice());
@@ -354,7 +353,7 @@ impl Event {
         Hashes {
             previous_hash,
             transaction_hash: event_hash,
-            execution_hash,
+            execution_hash: [0; 32],
         }
     }
     pub fn is_update(&self, upsert_event: &UpsertEvent) -> bool {

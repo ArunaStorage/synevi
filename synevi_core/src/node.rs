@@ -234,7 +234,8 @@ where
                         transaction: Some(event.transaction),
                         dependencies: Some(from_dependency(event.dependencies)?),
                         ballot: Some(event.ballot.as_slice().try_into()?),
-                        execution_hash: Some(event.execution_hash.as_slice().try_into()?),
+                        execution_hash: Some(event.execution_hash.as_slice().try_into()?), 
+                        // TODO: Add execution hash for this case to upsert?
                     });
             }
             // 3.3 Check if execution hash == last applied execution hash

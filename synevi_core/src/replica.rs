@@ -3,6 +3,7 @@ use crate::utils::{from_dependency, into_dependency};
 use crate::wait_handler::WaitAction;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use sha3::{Digest, Sha3_256};
 use synevi_network::configure_transport::{
     Config, GetEventRequest, GetEventResponse, JoinElectorateRequest, JoinElectorateResponse,
     ReadyElectorateRequest, ReadyElectorateResponse,
@@ -15,7 +16,7 @@ use synevi_network::network::Network;
 use synevi_network::reconfiguration::Reconfiguration;
 use synevi_network::replica::Replica;
 use synevi_types::traits::Store;
-use synevi_types::types::{InternalExecution, TransactionPayload, UpsertEvent};
+use synevi_types::types::{ExecutorResult, InternalExecution, TransactionPayload, UpsertEvent};
 use synevi_types::{Ballot, Executor, State, T, T0};
 use synevi_types::{SyneviError, Transaction};
 use tokio::sync::mpsc::Receiver;
@@ -136,7 +137,6 @@ where
                     transaction: Some(request.event),
                     dependencies: Some(from_dependency(request.dependencies)?),
                     ballot: Some(request_ballot),
-                    execution_hash: None,
                 })
                 .await?;
 
@@ -203,29 +203,36 @@ where
                 request_id,
             )
             .await?;
-        let _ = rx.await;
+        rx.await.map_err(|_| SyneviError::ReceiveError("Wait receiver closed".to_string()))?;
 
-        match transaction {
+        let result = match transaction {
             TransactionPayload::None => {
                 return Err(SyneviError::TransactionNotFound);
             }
             TransactionPayload::External(tx) => {
-                self.node.executor.execute(tx).await;
+                self.node.executor.execute(tx).await
             }
             TransactionPayload::Internal(request) => {
                 // TODO: Build special execution
-                match request {
+                let result = match &request {
                     InternalExecution::JoinElectorate { id, serial, host } => {
-                        self.node.add_member(id, serial, host).await;
+                        self.node.add_member(*id, *serial, host.clone()).await
                     }
                     InternalExecution::ReadyElectorate { id, serial } => {
-
-                        self.node.ready_member(id, serial).await;
+                        self.node.ready_member(*id, *serial).await
                     }
+                };
+                match result {
+                    Ok(_) => Ok(ExecutorResult::Internal(Ok(request.clone()))),
+                    Err(err) => Ok(ExecutorResult::Internal(Err(err))),
                 }
             }
-        }
-        //let _ = self.node.executor.execute(transaction).await;
+        };
+
+        let mut hasher = Sha3_256::new();
+        postcard::to_io(&result, &mut hasher)?;
+        let hash = hasher.finalize();
+        let _hashes = self.node.event_store.get_and_update_hash(t_zero, hash.into()).await?;
 
         Ok(ApplyResponse {})
     }

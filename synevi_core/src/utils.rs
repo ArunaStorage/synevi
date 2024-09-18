@@ -36,7 +36,6 @@ where
             transaction: Some(value.transaction.as_bytes()),
             dependencies: Some(value.dependencies.clone()),
             ballot: Some(value.ballot),
-            execution_hash: None,
         }
     }
 }

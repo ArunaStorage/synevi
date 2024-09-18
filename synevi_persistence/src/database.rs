@@ -213,7 +213,7 @@ impl Store for PersistentStore {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn upsert_tx(&self, upsert_event: UpsertEvent) -> Result<Option<Hashes>, SyneviError> {
+    async fn upsert_tx(&self, upsert_event: UpsertEvent) -> Result<(), SyneviError> {
         let mut data = self.data.lock().await;
 
         let mut write_txn = self.db.write_txn()?;
@@ -227,7 +227,7 @@ impl Store for PersistentStore {
             let event = Event::from(upsert_event.clone());
             events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
             data.mappings.insert(upsert_event.t, upsert_event.t_zero);
-            return Ok(None);
+            return Ok(());
         };
 
         // Update the latest t0
@@ -237,12 +237,12 @@ impl Store for PersistentStore {
 
         // Do not update to a "lower" state
         if upsert_event.state < event.state {
-            return Ok(None);
+            return Ok(());
         }
 
         // Event is already applied
         if event.state == State::Applied {
-            return Ok(event.hashes.clone());
+            return Ok(());
         }
 
         if event.is_update(&upsert_event) {
@@ -268,18 +268,15 @@ impl Store for PersistentStore {
             if event.state == State::Applied {
                 data.last_applied = event.t;
                 let hashes = event.hash_event(
-                    upsert_event
-                        .execution_hash
-                        .ok_or_else(|| SyneviError::MissingExecutionHash)?,
                     data.latest_hash,
                 );
                 data.latest_hash = hashes.transaction_hash;
                 event.hashes = Some(hashes);
             };
             events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
-            Ok(event.hashes.clone())
+            Ok(())
         } else {
-            Ok(None)
+            Ok(())
         }
     }
 
@@ -437,6 +434,30 @@ impl Store for PersistentStore {
             .open_database(&read_txn, Some(EVENT_DB_NAME))?
             .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
         Ok(db.get(&read_txn, &t_zero.get_inner())?)
+    }
+
+    async fn get_and_update_hash(
+        &self,
+        t_zero: T0,
+        execution_hash: [u8; 32],
+    ) -> Result<Hashes, SyneviError> {
+        let t_zero = t_zero.get_inner();
+        let mut write_txn = self.db.write_txn()?;
+        let db: EventDb = self
+            .db
+            .open_database(&write_txn, Some(EVENT_DB_NAME))?
+            .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
+        let Some(mut event) = db.get(&write_txn, &t_zero)? else {
+            return Err(SyneviError::EventNotFound(t_zero));
+        };
+        let Some(mut hashes) = event.hashes else {
+            return Err(SyneviError::MissingTransactionHash);
+        };
+        hashes.execution_hash = execution_hash;
+        event.hashes = Some(hashes.clone());
+
+        db.put(&mut write_txn, &t_zero, &event)?;
+        Ok(hashes)
     }
 }
 

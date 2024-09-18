@@ -82,7 +82,7 @@ impl Store for MemStore {
         self.store.lock().await.accept_tx_ballot(t_zero, ballot)
     }
 
-    async fn upsert_tx(&self, upsert_event: UpsertEvent) -> Result<Option<Hashes>, SyneviError> {
+    async fn upsert_tx(&self, upsert_event: UpsertEvent) -> Result<(), SyneviError> {
         self.store.lock().await.upsert_tx(upsert_event)
     }
 
@@ -100,7 +100,7 @@ impl Store for MemStore {
 
     async fn get_events_until(&self, last_applied: T) -> Receiver<Result<Event, SyneviError>> {
         let (sdx, rcv) = tokio::sync::mpsc::channel(100);
-        //TODO: Spawn in separate threads and remove the lock
+        // TODO: Spawn in separate threads and remove the lock
         if let Err(err) = self.store.lock().await.get_events_until(last_applied, sdx).await {
             tracing::error!(?err);
         };
@@ -108,6 +108,10 @@ impl Store for MemStore {
     }
     async fn get_event(&self, t_zero: T0 ) -> Result<Option<Event>, SyneviError> {
         Ok(self.store.lock().await.events.get(&t_zero).cloned())
+    }
+
+    async fn get_and_update_hash(&self, t_zero: T0, execution_hash: [u8; 32]) -> Result<Hashes, SyneviError> {
+        todo!()
     }
 }
 
@@ -190,12 +194,12 @@ impl InternalStore {
     }
 
     #[instrument(level = "trace")]
-    fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<Option<Hashes>, SyneviError> {
+    fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<(), SyneviError> {
         let Some(event) = self.events.get_mut(&upsert_event.t_zero) else {
             let event = Event::from(upsert_event.clone());
             self.events.insert(upsert_event.t_zero, event);
             self.mappings.insert(upsert_event.t, upsert_event.t_zero);
-            return Ok(None);
+            return Ok(());
         };
 
         // Update the latest t0
@@ -205,12 +209,12 @@ impl InternalStore {
 
         // Do not update to a "lower" state
         if upsert_event.state < event.state {
-            return Ok(None);
+            return Ok(());
         }
 
         // Event is already applied
         if event.state == State::Applied {
-            return Ok(event.hashes.clone());
+            return Ok(());
         }
 
         if event.is_update(&upsert_event) {
@@ -236,18 +240,15 @@ impl InternalStore {
             if event.state == State::Applied {
                 self.last_applied = event.t;
                 let hashes = event.hash_event(
-                    upsert_event
-                        .execution_hash
-                        .ok_or_else(|| SyneviError::MissingExecutionHash)?,
                     self.latest_hash,
                 );
                 self.latest_hash = hashes.transaction_hash;
                 event.hashes = Some(hashes);
             };
 
-            Ok(event.hashes.clone())
+            Ok(())
         } else {
-            Ok(None)
+            Ok(())
         }
     }
 

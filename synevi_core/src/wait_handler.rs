@@ -10,7 +10,7 @@ use std::{
 };
 use synevi_network::network::Network;
 use synevi_types::traits::Store;
-use synevi_types::types::{Hashes, UpsertEvent};
+use synevi_types::types::UpsertEvent;
 use synevi_types::{Executor, State, SyneviError, T, T0};
 use tokio::{sync::oneshot, time::timeout};
 
@@ -28,8 +28,9 @@ pub struct WaitMessage {
     deps: HashSet<T0, RandomState>,
     transaction: Vec<u8>,
     action: WaitAction,
-    execution_hash: Option<[u8; 32]>,
-    notify: Option<oneshot::Sender<Option<Hashes>>>,
+    //execution_hash: Option<[u8; 32]>,
+    //notify: Option<oneshot::Sender<Option<Hashes>>>,
+    notify: Option<oneshot::Sender<()>>,
 }
 
 #[derive(Clone)]
@@ -81,7 +82,7 @@ where
         deps: HashSet<T0, RandomState>,
         transaction: Vec<u8>,
         action: WaitAction,
-        notify: oneshot::Sender<Option<Hashes>>,
+        notify: oneshot::Sender<()>,
         id: u128,
     ) -> Result<(), SyneviError> {
         self.sender
@@ -188,7 +189,7 @@ where
             WaitAction::CommitBefore => State::Commited,
             WaitAction::ApplyAfter => State::Applied,
         };
-        self.node.event_store.lock().await.upsert_tx(UpsertEvent {
+        self.node.event_store.upsert_tx(UpsertEvent {
             id: *id,
             t_zero: *t_zero,
             t: *t,
@@ -196,13 +197,12 @@ where
             transaction: Some(transaction.clone()),
             dependencies: Some(deps.clone()),
             ..Default::default()
-        })?;
+        }).await?;
 
         Ok(())
     }
 
-    async fn recover(self: Arc<Self>, t0_recover: T0, waiter_state: &mut WaiterState) {
-        if let Some(event) = waiter_state.events.get_mut(&t0_recover) {
+    async fn recover(self: Arc<Self>, t0_recover: T0, waiter_state: &mut WaiterState) { if let Some(event) = waiter_state.events.get_mut(&t0_recover) {
             event.started_at = Instant::now();
         }
         let node = self.node.clone();

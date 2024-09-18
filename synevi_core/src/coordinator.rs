@@ -15,7 +15,7 @@ use synevi_network::network::{BroadcastRequest, Network, NetworkInterface};
 use synevi_network::utils::IntoInner;
 use synevi_types::traits::Store;
 use synevi_types::types::{
-    ExecutorResult, InternalExecution, RecoveryState, SyneviResult, TransactionPayload,
+    ExecutorResult, Hashes, InternalExecution, RecoveryState, SyneviResult, TransactionPayload,
 };
 use synevi_types::{Ballot, Executor, State, SyneviError, Transaction, T, T0};
 use tracing::{instrument, trace};
@@ -241,7 +241,7 @@ where
         );
 
         committed_result.unwrap();
-        broadcast_result.unwrap(); // TODO Recovery
+        broadcast_result.unwrap(); // TODO: Recovery
 
         self.apply().await
     }
@@ -276,11 +276,11 @@ where
     async fn apply(&mut self) -> SyneviResult<E> {
         trace!(id = ?self.transaction.id, "Coordinator: Apply");
 
-        let result = self.execute_consensus().await;
+        let (synevi_result, hashes) = self.execute_consensus().await?;
 
-        let mut hasher = Sha3_256::new();
-        postcard::to_io(&result, &mut hasher)?;
-        let hash = hasher.finalize();
+        //let mut hasher = Sha3_256::new();
+        //postcard::to_io(&synevi_result, &mut hasher)?;
+        //let hash = hasher.finalize();
 
         let applied_request = ApplyRequest {
             id: self.transaction.id.to_be_bytes().into(),
@@ -288,21 +288,21 @@ where
             timestamp: (*self.transaction.t).into(),
             timestamp_zero: (*self.transaction.t_zero).into(),
             dependencies: into_dependency(&self.transaction.dependencies),
-            execution_hash: hash.to_vec(),
-            transaction_hash: [todo!()].to_vec(),
+            execution_hash: hashes.execution_hash.to_vec(),
+            transaction_hash: hashes.transaction_hash.to_vec(),
         };
 
         self.network_interface
             .broadcast(BroadcastRequest::Apply(applied_request))
             .await?; // This should not be awaited
 
-        result
+        synevi_result
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn execute_consensus(&mut self) -> SyneviResult<E> {
+    async fn execute_consensus(&mut self) -> Result<(SyneviResult<E>, Hashes), SyneviError> {
         self.transaction.state = State::Applied;
-        let (sx, _rx) = tokio::sync::oneshot::channel();
+        let (sx, rx) = tokio::sync::oneshot::channel();
         self.node
             .get_wait_handler()
             .await?
@@ -317,10 +317,12 @@ where
             )
             .await?;
 
-        let _ = _rx.await;
+        rx
+            .await
+            .map_err(|_| SyneviError::ReceiveError("Hash receiver closed".to_string()))?;
 
-        match &self.transaction.transaction {
-            TransactionPayload::None => todo!(),
+        let result = match &self.transaction.transaction {
+            TransactionPayload::None => Err(SyneviError::TransactionNotFound),
             TransactionPayload::External(tx) => self.node.executor.execute(tx.clone()).await,
             TransactionPayload::Internal(request) => {
                 // TODO: Build special execution
@@ -337,7 +339,14 @@ where
                     Err(err) => Ok(ExecutorResult::Internal(Err(err))),
                 }
             }
-        }
+        };
+
+        let mut hasher = Sha3_256::new();
+        postcard::to_io(&result, &mut hasher)?;
+        let hash = hasher.finalize();
+        let hashes = self.node.event_store.get_and_update_hash(self.transaction.t_zero, hash.into()).await?;
+
+        Ok((result, hashes))
     }
 
     #[instrument(level = "trace", skip(node))]

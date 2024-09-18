@@ -92,7 +92,7 @@ pub trait Store: Send + Sync + Sized + 'static {
     // Returns true if the ballot was accepted (current <= ballot)
     async fn accept_tx_ballot(&self, t_zero: &T0, ballot: Ballot) -> Option<Ballot>;
     // Update or insert a transaction, returns the hash of the transaction if applied
-    async fn upsert_tx(&self, upsert_event: UpsertEvent) -> Result<Option<Hashes>, SyneviError>;
+    async fn upsert_tx(&self, upsert_event: UpsertEvent) -> Result<(), SyneviError>;
 
     async fn get_event_state(&self, t_zero: &T0) -> Option<State>;
 
@@ -101,5 +101,7 @@ pub trait Store: Send + Sync + Sized + 'static {
 
     async fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError>;
     async fn get_events_until(&self, last_applied: T) -> Receiver<Result<Event, SyneviError>>;
+
+    async fn get_and_update_hash(&self, t_zero: T0, execution_hash: [u8; 32]) -> Result<Hashes, SyneviError>;
 }
 
