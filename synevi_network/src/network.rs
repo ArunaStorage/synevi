@@ -2,7 +2,7 @@ use crate::configure_transport::init_service_server::InitServiceServer;
 use crate::configure_transport::reconfiguration_service_client::ReconfigurationServiceClient;
 use crate::configure_transport::reconfiguration_service_server::ReconfigurationServiceServer;
 use crate::configure_transport::time_service_server::TimeServiceServer;
-use crate::configure_transport::{Config, GetEventRequest, GetEventResponse, JoinElectorateRequest};
+use crate::configure_transport::{Config, GetEventRequest, GetEventResponse, JoinElectorateRequest, ReadyElectorateRequest};
 use crate::consensus_transport::{RecoverRequest, RecoverResponse};
 use crate::latency_service::get_latency;
 use crate::reconfiguration::{Reconfiguration, ReplicaBuffer};
@@ -45,15 +45,13 @@ pub trait Network: Send + Sync + 'static {
     async fn spawn_init_server(
         &self,
         replica_buffer: Arc<ReplicaBuffer>,
-    ) -> Result<(), SyneviError>;
+    ) -> Result<JoinSet<Result<(), SyneviError>>, SyneviError>;
     async fn get_interface(&self) -> Arc<Self::Ni>;
     async fn get_waiting_time(&self, node_serial: u16) -> u64;
     async fn get_member_len(&self) -> u32;
     async fn broadcast_config(&self) -> Result<u32, SyneviError>; // All members
-                                                                  // TODO: Broadcast
-                                                                  // - GetStreamEvents
     async fn get_stream_events(&self, last_applied: T) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError>;
-    // - ReadyElectorate
+    async fn ready_electorate(&self) -> Result<(), SyneviError>;
 }
 
 // Blanket implementation for Arc<N> where N: Network
@@ -95,7 +93,7 @@ where
     async fn spawn_init_server(
         &self,
         replica_buffer: Arc<ReplicaBuffer>,
-    ) -> Result<(), SyneviError> {
+    ) -> Result<JoinSet<Result<(), SyneviError>>, SyneviError> {
         self.as_ref().spawn_init_server(replica_buffer).await
     }
     async fn broadcast_config(&self) -> Result<u32, SyneviError> {
@@ -104,6 +102,11 @@ where
     async fn get_stream_events(&self, last_applied: T) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError> {
         self.as_ref().get_stream_events(last_applied).await
     }
+
+    async fn ready_electorate(&self) -> Result<(), SyneviError> {
+        self.as_ref().ready_electorate().await
+    }
+
 }
 
 #[async_trait::async_trait]
@@ -245,9 +248,10 @@ impl Network for GrpcNetwork {
         Ok(())
     }
 
-    async fn spawn_init_server(&self, server: Arc<ReplicaBuffer>) -> Result<(), SyneviError> {
+    async fn spawn_init_server(&self, server: Arc<ReplicaBuffer>) -> Result<JoinSet<Result<(), SyneviError>>, SyneviError> {
         let addr = self.socket_addr;
-        self.join_set.lock().await.spawn(async move {
+        let mut join_set = JoinSet::new();
+        join_set.spawn(async move {
             let builder = Server::builder()
                 .add_service(ConsensusTransportServer::new(server.clone()))
                 .add_service(InitServiceServer::new(server));
@@ -256,8 +260,8 @@ impl Network for GrpcNetwork {
         });
 
         let members = self.members.clone();
-        self.join_set.lock().await.spawn(get_latency(members));
-        Ok(())
+        join_set.spawn(get_latency(members));
+        Ok(join_set)
     }
 
     async fn get_interface(&self) -> Arc<GrpcNetworkSet> {
@@ -331,6 +335,21 @@ impl Network for GrpcNetwork {
             }
         });
         Ok(rcv)
+    }
+
+    async fn ready_electorate(&self) -> Result<(), SyneviError> {
+        let members = self.members.read().await;
+        let Some(member) = members.first() else {
+            return Err(SyneviError::NoMembersFound);
+        };
+        let channel = member.member.channel.clone();
+        let request = tonic::Request::new(ReadyElectorateRequest {
+            node_id: self.self_info.0.id.to_bytes().to_vec(),
+            node_serial: self.self_info.0.serial as u32,
+        });
+        let mut client = ReconfigurationServiceClient::new(channel);
+        let _ = client.ready_electorate(request).await?.into_inner();
+        Ok(())
     }
 }
 

@@ -116,18 +116,17 @@ where
 
     #[instrument(level = "trace", skip(self, replica))]
     async fn reconfigure(&self, replica: ReplicaConfig<N, E, S>) -> Result<(), SyneviError> {
-        // TODO:
         // 1. Spawn ReplicaBuffer
         let (sdx, mut rcv) = tokio::sync::mpsc::channel(1);
         let replica_buffer = Arc::new(ReplicaBuffer::new(sdx));
-        self.network
-            .spawn_init_server(replica_buffer.clone())
-            .await?;
+        let mut join_set = self.network
+            .spawn_init_server(replica_buffer.clone()).await?;
 
         // 2. Broadcast self config to other member
         let all_members = self.network.broadcast_config().await?;
 
         // 3. wait for JoinElectorate responses with expected majority
+        // TODO: Move into separate function
         let mut member_count = 0;
         let mut highest_applied = T::default();
         let mut execution_hash: [u8; 32] = [0; 32];
@@ -188,10 +187,12 @@ where
                 BufferedMessage::Apply(req) => {replica.apply(req).await?;},
             }
         }
+
         // 4. Send ReadyJoinElectorate && kill ReplicaBuffer && spawn ReplicaServer
         let spawn = self.network.spawn_server(replica);
-        let kill = todo!();
-        let notify = todo!();
+        let kill = join_set.shutdown();
+        let _ = tokio::join!(spawn, kill);
+        self.network.ready_electorate().await?;
         Ok(())
     }
 
