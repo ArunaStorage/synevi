@@ -429,6 +429,15 @@ impl Store for PersistentStore {
         });
         rcv
     }
+
+    async fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError> {
+        let read_txn = self.db.read_txn()?;
+        let db: EventDb = self
+            .db
+            .open_database(&read_txn, Some(EVENT_DB_NAME))?
+            .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
+        Ok(db.get(&read_txn, &t_zero.get_inner())?)
+    }
 }
 
 #[cfg(test)]

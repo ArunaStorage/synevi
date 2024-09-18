@@ -10,23 +10,54 @@ use crate::{
         PreAcceptResponse, RecoverRequest, RecoverResponse,
     },
 };
-use std::sync::Arc;
-use synevi_types::{SyneviError, T};
-use tokio::sync::{mpsc::Sender, Mutex};
+use std::{collections::BTreeMap, sync::Arc};
+use synevi_types::{SyneviError, T, T0};
+use tokio::sync::{
+    mpsc::{channel, Receiver, Sender},
+    Mutex,
+};
 use tonic::{Request, Response, Status};
 use ulid::Ulid;
 
 pub struct ReplicaBuffer {
-    inner: Arc<Mutex<Vec<BufferedMessage>>>,
+    inner: Arc<Mutex<BTreeMap<T0, BufferedMessage>>>,
     notifier: Sender<Report>,
 }
 
 impl ReplicaBuffer {
     pub fn new(sdx: Sender<Report>) -> Self {
         ReplicaBuffer {
-            inner: Arc::new(Mutex::new(Vec::new())),
+            inner: Arc::new(Mutex::new(BTreeMap::new())),
             notifier: sdx,
         }
+    }
+
+    pub async fn send_buffered(
+        &self,
+    ) -> Result<Receiver<Option<(T0, BufferedMessage)>>, SyneviError> {
+        let (sdx, rcv) = channel(100);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            loop {
+                let mut lock = inner.lock().await;
+                if let Some(event) = lock.pop_first() {
+                    sdx.send(Some(event)).await.map_err(|_| {
+                        SyneviError::SendError(
+                            "Channel for receiving buffered messages closed".to_string(),
+                        )
+                    })?;
+                } else {
+                    sdx.send(None).await.map_err(|_| {
+                        SyneviError::SendError(
+                            "Channel for receiving buffered messages closed".to_string(),
+                        )
+                    })?;
+                    break;
+                }
+            }
+            Ok::<(), SyneviError>(())
+        });
+        Ok(rcv)
     }
 }
 
@@ -133,10 +164,16 @@ impl ConsensusTransport for ReplicaBuffer {
         &self,
         request: Request<CommitRequest>,
     ) -> Result<Response<CommitResponse>, Status> {
+        let request = request.into_inner();
+        let t0 = request
+            .timestamp_zero
+            .as_slice()
+            .try_into()
+            .map_err(|_| tonic::Status::invalid_argument("Timestamp zero invalid"))?;
         self.inner
             .lock()
             .await
-            .push(BufferedMessage::Commit(request.into_inner()));
+            .insert(t0, BufferedMessage::Commit(request));
         Ok(Response::new(CommitResponse {}))
     }
 
@@ -144,10 +181,16 @@ impl ConsensusTransport for ReplicaBuffer {
         &self,
         request: Request<ApplyRequest>,
     ) -> Result<Response<ApplyResponse>, Status> {
+        let request = request.into_inner();
+        let t0 = request
+            .timestamp_zero
+            .as_slice()
+            .try_into()
+            .map_err(|_| tonic::Status::invalid_argument("Timestamp zero invalid"))?;
         self.inner
             .lock()
             .await
-            .push(BufferedMessage::Apply(request.into_inner()));
+            .insert(t0, BufferedMessage::Apply(request));
         Ok(Response::new(ApplyResponse {}))
     }
 

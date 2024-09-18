@@ -106,6 +106,9 @@ impl Store for MemStore {
         };
         rcv
     }
+    async fn get_event(&self, t_zero: T0 ) -> Result<Option<Event>, SyneviError> {
+        Ok(self.store.lock().await.events.get(&t_zero).cloned())
+    }
 }
 
 impl InternalStore {

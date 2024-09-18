@@ -1,6 +1,7 @@
 syntax = "proto3";
 
 package configure_transport;
+import "consensus_transport.proto";
 
 service TimeService {
   rpc GetTime(GetTimeRequest) returns (GetTimeResponse) {}
@@ -71,7 +72,7 @@ message GetEventResponse {
     bytes id = 1;
     bytes t_zero = 2;
     bytes t = 3;
-    uint32 state = 4;
+    consensus_transport.State state = 4;
     bytes transaction = 5;
     bytes dependencies = 6;
     bytes ballot = 7;

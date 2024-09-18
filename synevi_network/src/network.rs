@@ -1,10 +1,8 @@
-use crate::configure_transport::init_service_server::{InitService, InitServiceServer};
+use crate::configure_transport::init_service_server::InitServiceServer;
 use crate::configure_transport::reconfiguration_service_client::ReconfigurationServiceClient;
-use crate::configure_transport::reconfiguration_service_server::{
-    ReconfigurationService, ReconfigurationServiceServer,
-};
+use crate::configure_transport::reconfiguration_service_server::ReconfigurationServiceServer;
 use crate::configure_transport::time_service_server::TimeServiceServer;
-use crate::configure_transport::{Config, JoinElectorateRequest};
+use crate::configure_transport::{Config, GetEventRequest, GetEventResponse, JoinElectorateRequest};
 use crate::consensus_transport::{RecoverRequest, RecoverResponse};
 use crate::latency_service::get_latency;
 use crate::reconfiguration::{Reconfiguration, ReplicaBuffer};
@@ -20,6 +18,7 @@ use crate::{
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::{net::SocketAddr, sync::Arc};
 use synevi_types::error::SyneviError;
+use synevi_types::T;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
 use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
@@ -50,7 +49,11 @@ pub trait Network: Send + Sync + 'static {
     async fn get_interface(&self) -> Arc<Self::Ni>;
     async fn get_waiting_time(&self, node_serial: u16) -> u64;
     async fn get_member_len(&self) -> u32;
-    async fn broadcast_config(&self) -> Result<u32, SyneviError>; // Majority
+    async fn broadcast_config(&self) -> Result<u32, SyneviError>; // All members
+                                                                  // TODO: Broadcast
+                                                                  // - GetStreamEvents
+    async fn get_stream_events(&self, last_applied: T) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError>;
+    // - ReadyElectorate
 }
 
 // Blanket implementation for Arc<N> where N: Network
@@ -97,6 +100,9 @@ where
     }
     async fn broadcast_config(&self) -> Result<u32, SyneviError> {
         self.as_ref().broadcast_config().await
+    }
+    async fn get_stream_events(&self, last_applied: T) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError> {
+        self.as_ref().get_stream_events(last_applied).await
     }
 }
 
@@ -298,6 +304,33 @@ impl Network for GrpcNetwork {
         let mut client = ReconfigurationServiceClient::new(channel);
         let response = client.join_electorate(request).await?;
         Ok(response.into_inner().majority)
+    }
+
+    async fn get_stream_events(&self, last_applied: T) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError> {
+        let members = self.members.read().await;
+        let Some(member) = members.first() else {
+            return Err(SyneviError::NoMembersFound);
+        };
+        let channel = member.member.channel.clone();
+        let request = tonic::Request::new(GetEventRequest {
+            last_applied: last_applied.into(),
+        });
+        let mut client = ReconfigurationServiceClient::new(channel);
+        let mut response = client.get_events(request).await?.into_inner();
+        let (sdx, rcv) = tokio::sync::mpsc::channel(100);
+        tokio::spawn(async move {
+            loop {
+                match response.message().await {
+                    Ok(Some(msg)) => sdx
+                        .send(msg)
+                        .await
+                        .map_err(|_| SyneviError::SendError("Error sending event".to_string()))?,
+                    Ok(None) => return Ok(()),
+                    Err(e) => return Err(SyneviError::TonicStatusError(e)),
+                }
+            }
+        });
+        Ok(rcv)
     }
 }
 

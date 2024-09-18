@@ -10,6 +10,8 @@ pub enum SyneviError {
     JoinError(#[from] JoinError),
     #[error("Send to channel error {0}")]
     SendError(String),
+    #[error("Receive from channel error {0}")]
+    ReceiveError(String),
     #[error("TonicStatusError")]
     TonicStatusError(#[from] tonic::Status),
     #[error("Tonic transport error {0}")]

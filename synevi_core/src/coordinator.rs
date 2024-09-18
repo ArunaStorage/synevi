@@ -321,6 +321,7 @@ where
             TransactionPayload::None => todo!(),
             TransactionPayload::External(tx) => self.node.executor.execute(tx.clone()).await,
             TransactionPayload::Internal(res @ Member { id, serial, host }) => Ok(
+                // TODO: Create an internal executor
                 match self.node.add_member(*id, *serial, host.clone()).await {
                     Ok(_) => ExecutorResult::Internal(Ok(res.clone())),
                     Err(e) => ExecutorResult::Internal(Err(e)),

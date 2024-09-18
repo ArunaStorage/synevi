@@ -179,7 +179,8 @@ where
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Apply");
 
-        let transaction = <E as Executor>::Tx::from_bytes(request.event)?;
+        let transaction: TransactionPayload<<E as Executor>::Tx> = TransactionPayload::from_bytes(request.event)?;
+        //let transaction = <E as Executor>::Tx::from_bytes(request.event)?;
 
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         let t = T::try_from(request.timestamp.as_slice())?;
@@ -203,7 +204,16 @@ where
             .await?;
         let _ = rx.await;
 
-        let _ = self.node.executor.execute(transaction).await;
+        match transaction {
+            TransactionPayload::None => {return Err(SyneviError::TransactionNotFound);},
+            TransactionPayload::External(tx) => {self.node.executor.execute(tx).await;},
+            TransactionPayload::Internal(Member { id, serial, host }) => {
+                // TODO: Build special execution
+                todo!()
+            },
+
+        }
+        //let _ = self.node.executor.execute(transaction).await;
 
         Ok(ApplyResponse {})
     }
@@ -320,7 +330,7 @@ where
                         id: event.id.to_be_bytes().to_vec(),
                         t_zero: event.t_zero.into(),
                         t: event.t.into(),
-                        state: event.state as u32,
+                        state: event.state.into(),
                         transaction: event.transaction,
                         dependencies: into_dependency(&event.dependencies),
                         ballot: event.ballot.into(),

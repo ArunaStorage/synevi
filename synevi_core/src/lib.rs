@@ -7,6 +7,7 @@ mod wait_handler;
 
 pub mod tests {
     use std::sync::Arc;
+    use synevi_network::configure_transport::GetEventResponse;
     use synevi_network::network::BroadcastResponse;
     use synevi_network::network::NetworkInterface;
     use synevi_network::network::{BroadcastRequest, Network};
@@ -15,6 +16,8 @@ pub mod tests {
     use synevi_types::types::SyneviResult;
     use synevi_types::Executor;
     use synevi_types::SyneviError;
+    use synevi_types::T;
+    use tokio::sync::mpsc::Receiver;
     use tokio::sync::Mutex;
     use ulid::Ulid;
 
@@ -80,6 +83,9 @@ pub mod tests {
 
         async fn broadcast_config(&self) -> Result<u32, SyneviError> {
             Ok(0)
+        }
+        async fn get_stream_events(&self, _last_applied: T) -> Result<Receiver<GetEventResponse>, SyneviError> {
+            todo!()
         }
     }
 

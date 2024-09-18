@@ -99,6 +99,7 @@ pub trait Store: Send + Sync + Sized + 'static {
     async fn get_event_store(&self) -> BTreeMap<T0, Event>;
     async fn last_applied(&self) -> T;
 
+    async fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError>;
     async fn get_events_until(&self, last_applied: T) -> Receiver<Result<Event, SyneviError>>;
 }
 
