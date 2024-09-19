@@ -15,7 +15,12 @@ async fn prepare() -> (
 
     for (i, m) in node_names.iter().enumerate() {
         let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
-        let network = synevi_network::network::GrpcNetwork::new(socket_addr);
+        let network = synevi_network::network::GrpcNetwork::new(
+            socket_addr,
+            format!("http://localhost:{}", 10000 + i),
+            *m,
+            i as u16,
+        );
         //let path = format!("../tests/database/{}_test_db", i);
         let node = Node::new_with_network_and_executor(*m, i as u16, network, DummyExecutor)
             .await
@@ -42,18 +47,28 @@ async fn parallel_execution(coordinator: Arc<Node<GrpcNetwork, DummyExecutor, Me
         let coordinator = coordinator.clone();
         joinset.spawn(async move {
             coordinator
-                .transaction(i, Vec::from("This is a transaction"))
+                .transaction(
+                    i,
+                    synevi_types::types::TransactionPayload::External(Vec::from(
+                        "This is a transaction",
+                    )),
+                )
                 .await
         });
     }
     while let Some(res) = joinset.join_next().await {
-        res.unwrap().unwrap().unwrap();
+        match res.unwrap().unwrap() {
+            synevi_types::types::ExecutorResult::External(res) => {
+                res.unwrap();
+            }
+            synevi_types::types::ExecutorResult::Internal(res) => {
+                res.unwrap();
+            }
+        }
     }
 }
 
-async fn contention_execution(
-    coordinators: Vec<Arc<Node<GrpcNetwork, DummyExecutor, MemStore>>>,
-) {
+async fn contention_execution(coordinators: Vec<Arc<Node<GrpcNetwork, DummyExecutor, MemStore>>>) {
     let mut joinset = tokio::task::JoinSet::new();
 
     for i in 0..200 {
@@ -61,13 +76,25 @@ async fn contention_execution(
             let coordinator = coordinator.clone();
             joinset.spawn(async move {
                 coordinator
-                    .transaction(i, Vec::from("This is a transaction"))
+                    .transaction(
+                        i,
+                        synevi_types::types::TransactionPayload::External(Vec::from(
+                            "This is a transaction",
+                        )),
+                    )
                     .await
             });
         }
     }
     while let Some(res) = joinset.join_next().await {
-        res.unwrap().unwrap().unwrap();
+        match res.unwrap().unwrap() {
+            synevi_types::types::ExecutorResult::External(res) => {
+                res.unwrap();
+            }
+            synevi_types::types::ExecutorResult::Internal(res) => {
+                res.unwrap();
+            }
+        }
     }
 }
 
@@ -80,10 +107,24 @@ async fn _bigger_payloads_execution(
     for i in 0..10 {
         let coordinator = coordinator.clone();
         let payload = payload.clone();
-        joinset.spawn(async move { coordinator.transaction(i, payload).await });
+        joinset.spawn(async move {
+            coordinator
+                .transaction(
+                    i,
+                    synevi_types::types::TransactionPayload::External(payload),
+                )
+                .await
+        });
     }
     while let Some(res) = joinset.join_next().await {
-        res.unwrap().unwrap().unwrap();
+        match res.unwrap().unwrap() {
+            synevi_types::types::ExecutorResult::External(res) => {
+                res.unwrap();
+            }
+            synevi_types::types::ExecutorResult::Internal(res) => {
+                res.unwrap();
+            }
+        };
     }
 }
 

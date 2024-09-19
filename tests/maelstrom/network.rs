@@ -1,5 +1,7 @@
 use crate::messages::{Body, Message, MessageType};
 use async_trait::async_trait;
+use synevi_network::configure_transport::GetEventResponse;
+use synevi_network::reconfiguration::ReplicaBuffer;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -9,7 +11,7 @@ use synevi::network::requests::{
     RecoverRequest, RecoverResponse,
 };
 use synevi::network::{Network, NetworkInterface, Replica};
-use synevi::{State, SyneviError, T0};
+use synevi::{State, SyneviError, T, T0};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -160,6 +162,30 @@ impl Network for MaelstromNetwork {
     async fn get_waiting_time(&self, _node_serial: u16) -> u64 {
         todo!()
     }
+
+    async fn ready_member(&self, _id: Ulid, _serial: u16) -> Result<(), SyneviError> {
+        todo!()
+    }
+
+    async fn ready_electorate(&self) -> Result<(), SyneviError> {
+        todo!()
+    }
+
+    async fn get_stream_events(&self, _last_applied: T) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError> {
+        todo!()
+    }
+
+    async fn broadcast_config(&self) -> Result<u32, SyneviError> {
+        todo!()
+    }
+
+    async fn get_member_len(&self) -> u32 {
+        todo!()
+    }
+
+    async fn spawn_init_server(&self, _replica_buffer: Arc<ReplicaBuffer>) -> Result<JoinSet<Result<(), SyneviError>>, SyneviError> {
+        todo!()
+    }
 }
 
 #[async_trait]
@@ -191,6 +217,7 @@ impl NetworkInterface for MaelstromNetwork {
                                     id: req.id.clone(),
                                     event: req.event.clone(),
                                     t0: req.timestamp_zero.clone(),
+                                    last_applied: req.last_applied.clone(),
                                 },
                                 ..Default::default()
                             },
@@ -224,6 +251,7 @@ impl NetworkInterface for MaelstromNetwork {
                                     t0: req.timestamp_zero.clone(),
                                     t: req.timestamp.clone(),
                                     deps: req.dependencies.clone(),
+                                    last_applied: req.last_applied.clone(),
                                 },
                                 ..Default::default()
                             },
@@ -388,6 +416,7 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
             ref id,
             ref event,
             ref t0,
+            ref last_applied,
         } => {
             let node: u32 = msg.dest.chars().last().unwrap().into();
             let response = replica
@@ -396,6 +425,7 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
                         id: id.clone(),
                         event: event.clone(),
                         timestamp_zero: t0.clone(),
+                        last_applied: last_applied.clone(),
                     },
                     node as u16,
                 )
@@ -422,6 +452,7 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
             ref t0,
             ref t,
             ref deps,
+            ref last_applied,
         } => {
             let response = replica
                 .accept(AcceptRequest {
@@ -431,6 +462,7 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
                     timestamp_zero: t0.clone(),
                     timestamp: t.clone(),
                     dependencies: deps.clone(),
+                    last_applied: last_applied.clone(),
                 })
                 .await?;
 

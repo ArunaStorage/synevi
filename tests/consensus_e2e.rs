@@ -19,7 +19,12 @@ mod tests {
 
         for (i, m) in node_names.iter().enumerate() {
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
-            let network = synevi_network::network::GrpcNetwork::new(socket_addr);
+            let network = synevi_network::network::GrpcNetwork::new(
+                socket_addr,
+                format!("http://localhost:{}", 10000 + i),
+                *m,
+                i as u16,
+            );
             let node = Node::new_with_network_and_executor(*m, i as u16, network, DummyExecutor)
                 .await
                 .unwrap();
@@ -43,12 +48,22 @@ mod tests {
             let coordinator = coordinator.clone();
             joinset.spawn(async move {
                 coordinator
-                    .transaction(i, Vec::from("This is a transaction"))
+                    .transaction(
+                        i,
+                        synevi::TransactionPayload::External(Vec::from("This is a transaction")),
+                    )
                     .await
             });
         }
         while let Some(res) = joinset.join_next().await {
-            res.unwrap().unwrap().unwrap();
+            match res.unwrap().unwrap() {
+                synevi::ExecutorResult::External(res) => {
+                    res.unwrap();
+                }
+                synevi::ExecutorResult::Internal(res) => {
+                    res.unwrap();
+                }
+            };
         }
 
         let (total, accepts, recovers) = coordinator.get_stats();
@@ -64,18 +79,16 @@ mod tests {
 
         let coordinator_store: BTreeMap<T0, (T, Option<[u8; 32]>)> = coordinator
             .event_store
-            .lock()
-            .await
             .get_event_store()
+            .await
             .into_values()
             .map(|e| (e.t_zero, (e.t, e.get_latest_hash())))
             .collect();
 
         assert!(coordinator
             .event_store
-            .lock()
-            .await
             .get_event_store()
+            .await
             .iter()
             .all(|(_, e)| e.state == State::Applied));
 
@@ -83,17 +96,15 @@ mod tests {
         for node in nodes {
             let node_store: BTreeMap<T0, (T, Option<[u8; 32]>)> = node
                 .event_store
-                .lock()
-                .await
                 .get_event_store()
+                .await
                 .into_values()
                 .map(|e| (e.t_zero, (e.t, e.get_latest_hash())))
                 .collect();
             assert!(
                 node.event_store
-                    .lock()
-                    .await
                     .get_event_store()
+                    .await
                     .iter()
                     .all(|(_, e)| e.state == State::Applied),
                 "Not all applied @ {:?}",
@@ -129,7 +140,12 @@ mod tests {
 
             for (i, m) in node_names.iter().enumerate() {
                 let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 11000 + i)).unwrap();
-                let network = synevi_network::network::GrpcNetwork::new(socket_addr);
+                let network = synevi_network::network::GrpcNetwork::new(
+                    socket_addr,
+                    format!("http://localhost:{}", 10000 + i),
+                    *m,
+                    i as u16,
+                );
                 let node =
                     Node::new_with_network_and_executor(*m, i as u16, network, DummyExecutor)
                         .await
@@ -164,32 +180,54 @@ mod tests {
                 let coordinator5 = coordinator5.clone();
                 joinset.spawn(async move {
                     coordinator1
-                        .transaction(u128::from_be_bytes(Ulid::new().to_bytes()), Vec::from("C1"))
+                        .transaction(
+                            u128::from_be_bytes(Ulid::new().to_bytes()),
+                            synevi::TransactionPayload::External(Vec::from("C1")),
+                        )
                         .await
                 });
                 joinset.spawn(async move {
                     coordinator2
-                        .transaction(u128::from_be_bytes(Ulid::new().to_bytes()), Vec::from("C2"))
+                        .transaction(
+                            u128::from_be_bytes(Ulid::new().to_bytes()),
+                            synevi::TransactionPayload::External(Vec::from("C2")),
+                        )
                         .await
                 });
                 joinset.spawn(async move {
                     coordinator3
-                        .transaction(u128::from_be_bytes(Ulid::new().to_bytes()), Vec::from("C3"))
+                        .transaction(
+                            u128::from_be_bytes(Ulid::new().to_bytes()),
+                            synevi::TransactionPayload::External(Vec::from("C3")),
+                        )
                         .await
                 });
                 joinset.spawn(async move {
                     coordinator4
-                        .transaction(u128::from_be_bytes(Ulid::new().to_bytes()), Vec::from("C4"))
+                        .transaction(
+                            u128::from_be_bytes(Ulid::new().to_bytes()),
+                            synevi::TransactionPayload::External(Vec::from("C4")),
+                        )
                         .await
                 });
                 joinset.spawn(async move {
                     coordinator5
-                        .transaction(u128::from_be_bytes(Ulid::new().to_bytes()), Vec::from("C5"))
+                        .transaction(
+                            u128::from_be_bytes(Ulid::new().to_bytes()),
+                            synevi::TransactionPayload::External(Vec::from("C5")),
+                        )
                         .await
                 });
             }
             while let Some(res) = joinset.join_next().await {
-                res.unwrap().unwrap().unwrap();
+                match res.unwrap().unwrap() {
+                    synevi::ExecutorResult::External(res) => {
+                        res.unwrap();
+                    }
+                    synevi::ExecutorResult::Internal(res) => {
+                        res.unwrap();
+                    }
+                };
             }
 
             println!("Time: {:?}", start.elapsed());
@@ -242,9 +280,8 @@ mod tests {
 
             let coordinator_store: BTreeMap<T0, (T, Option<[u8; 32]>)> = coordinator1
                 .event_store
-                .lock()
-                .await
                 .get_event_store()
+                .await
                 .into_values()
                 .map(|e| (e.t_zero, (e.t, e.get_latest_hash())))
                 .collect();
@@ -258,17 +295,15 @@ mod tests {
             for node in nodes {
                 let node_store: BTreeMap<T0, (T, Option<[u8; 32]>)> = node
                     .event_store
-                    .lock()
-                    .await
                     .get_event_store()
+                    .await
                     .into_values()
                     .map(|e| (e.t_zero, (e.t, e.get_latest_hash())))
                     .collect();
                 assert!(node
                     .event_store
-                    .lock()
-                    .await
                     .get_event_store()
+                    .await
                     .iter()
                     .all(|(_, e)| e.state == State::Applied));
                 assert_eq!(coordinator_store.len(), node_store.len());
@@ -308,7 +343,12 @@ mod tests {
             for (i, m) in node_names.iter().enumerate() {
                 let _path = format!("../tests/database/{}_test_db", i);
                 let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 12000 + i)).unwrap();
-                let network = synevi_network::network::GrpcNetwork::new(socket_addr);
+                let network = synevi_network::network::GrpcNetwork::new(
+                    socket_addr,
+                    format!("http://localhost:{}", 10000 + i),
+                    *m,
+                    i as u16,
+                );
                 let node =
                     Node::new_with_network_and_executor(*m, i as u16, network, DummyExecutor)
                         .await
@@ -327,12 +367,22 @@ mod tests {
             }
 
             for i in 0..1000 {
-                coordinator
+                match coordinator
                     .clone()
-                    .transaction(i, Vec::from("This is a transaction"))
+                    .transaction(
+                        i,
+                        synevi::TransactionPayload::External(Vec::from("This is a transaction")),
+                    )
                     .await
                     .unwrap()
-                    .unwrap();
+                {
+                    synevi::ExecutorResult::Internal(res) => {
+                        res.unwrap();
+                    }
+                    synevi::ExecutorResult::External(res) => {
+                        res.unwrap();
+                    }
+                };
             }
 
             runtime.shutdown_background();
