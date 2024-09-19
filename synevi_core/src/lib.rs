@@ -79,7 +79,7 @@ pub mod tests {
             &self,
             _replica_buffer: Arc<ReplicaBuffer>,
         ) -> Result<JoinSet<Result<(), SyneviError>>, SyneviError> {
-            todo!()
+            Ok(JoinSet::new())
         }
 
         async fn broadcast_config(&self) -> Result<u32, SyneviError> {
@@ -89,7 +89,8 @@ pub mod tests {
             &self,
             _last_applied: T,
         ) -> Result<Receiver<GetEventResponse>, SyneviError> {
-            todo!()
+            let (_, rcv) = tokio::sync::mpsc::channel(1);
+            Ok(rcv)
         }
         async fn ready_electorate(&self) -> Result<(), SyneviError> {
             Ok(())

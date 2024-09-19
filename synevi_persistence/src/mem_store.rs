@@ -101,17 +101,37 @@ impl Store for MemStore {
     async fn get_events_until(&self, last_applied: T) -> Receiver<Result<Event, SyneviError>> {
         let (sdx, rcv) = tokio::sync::mpsc::channel(100);
         // TODO: Spawn in separate threads and remove the lock
-        if let Err(err) = self.store.lock().await.get_events_until(last_applied, sdx).await {
+        if let Err(err) = self
+            .store
+            .lock()
+            .await
+            .get_events_until(last_applied, sdx)
+            .await
+        {
             tracing::error!(?err);
         };
         rcv
     }
-    async fn get_event(&self, t_zero: T0 ) -> Result<Option<Event>, SyneviError> {
+    async fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError> {
         Ok(self.store.lock().await.events.get(&t_zero).cloned())
     }
 
-    async fn get_and_update_hash(&self, t_zero: T0, execution_hash: [u8; 32]) -> Result<Hashes, SyneviError> {
-        todo!()
+    async fn get_and_update_hash(
+        &self,
+        t_zero: T0,
+        execution_hash: [u8; 32],
+    ) -> Result<Hashes, SyneviError> {
+        let mut lock = self.store.lock().await;
+        if let Some(event) = lock.events.get_mut(&t_zero) {
+            let hashes = event
+                .hashes
+                .as_mut()
+                .ok_or_else(|| SyneviError::MissingTransactionHash)?;
+            hashes.execution_hash = execution_hash;
+            Ok(hashes.clone())
+        } else {
+            Err(SyneviError::EventNotFound(t_zero.get_inner()))
+        }
     }
 }
 
@@ -239,9 +259,7 @@ impl InternalStore {
 
             if event.state == State::Applied {
                 self.last_applied = event.t;
-                let hashes = event.hash_event(
-                    self.latest_hash,
-                );
+                let hashes = event.hash_event(self.latest_hash);
                 self.latest_hash = hashes.transaction_hash;
                 event.hashes = Some(hashes);
             };
@@ -347,12 +365,16 @@ impl InternalStore {
         self.last_applied
     }
 
-    async fn get_events_until(&self, _last_applied: T, sdx: Sender<Result<Event, SyneviError>>) -> Result<(), SyneviError> {
-
-        for (_,event) in &self.events {
-            sdx.send(Ok(event.clone())).await.map_err(|e| SyneviError::SendError(e.to_string()))?;
+    async fn get_events_until(
+        &self,
+        _last_applied: T,
+        sdx: Sender<Result<Event, SyneviError>>,
+    ) -> Result<(), SyneviError> {
+        for (_, event) in &self.events {
+            sdx.send(Ok(event.clone()))
+                .await
+                .map_err(|e| SyneviError::SendError(e.to_string()))?;
         }
         Ok(())
-
     }
 }

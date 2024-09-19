@@ -337,6 +337,7 @@ pub struct UpsertEvent {
     pub transaction: Option<Vec<u8>>,
     pub dependencies: Option<HashSet<T0, RandomState>>,
     pub ballot: Option<Ballot>,
+    pub execution_hash: Option<[u8; 32]>
 }
 
 impl Event {

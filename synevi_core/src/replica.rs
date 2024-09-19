@@ -137,6 +137,7 @@ where
                     transaction: Some(request.event),
                     dependencies: Some(from_dependency(request.dependencies)?),
                     ballot: Some(request_ballot),
+                    execution_hash: None
                 })
                 .await?;
 

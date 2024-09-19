@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use synevi_core::node::Node;
 use synevi_network::network::Network;
-use synevi_types::types::SyneviResult;
+use synevi_types::types::{ExecutorResult, SyneviResult};
 use synevi_types::{error::SyneviError, Executor};
 use ulid::Ulid;
 
@@ -62,29 +62,29 @@ impl Executor for KVExecutor {
         Ok(match transaction {
             Transaction::Read { key } => {
                 let Some(key) = self.store.lock().unwrap().get(&key).cloned() else {
-                    return Ok(Err(KVError::KeyNotFound));
+                    return Ok(ExecutorResult::External(Err(KVError::KeyNotFound)));
                 };
-                Ok(key)
+                ExecutorResult::External(Ok(key))
             }
             Transaction::Write { key, value } => {
                 self.store
                     .lock()
                     .unwrap()
                     .insert(key.clone(), value.clone());
-                Ok(value)
+                ExecutorResult::External(Ok(value))
             }
             Transaction::Cas { key, from, to } => {
                 let mut store = self.store.lock().unwrap();
 
                 let Some(entry) = store.get_mut(&key) else {
-                    return Ok(Err(KVError::KeyNotFound));
+                    return Ok(ExecutorResult::External(Err(KVError::KeyNotFound)));
                 };
 
                 if entry == &from {
                     *entry = to.clone();
-                    Ok(to)
+                    ExecutorResult::External(Ok(to))
                 } else {
-                    return Ok(Err(KVError::MismatchError));
+                    return Ok(ExecutorResult::External(Err(KVError::MismatchError)));
                 }
             }
         })
@@ -116,8 +116,14 @@ where
 
     async fn transaction(&self, id: Ulid, transaction: Transaction) -> Result<String, KVError> {
         let node = self.node.clone();
-        node.transaction(u128::from_be_bytes(id.to_bytes()), transaction)
-            .await?
+        match node.transaction(
+            u128::from_be_bytes(id.to_bytes()),
+            synevi_types::types::TransactionPayload::External(transaction),
+        )
+        .await? {
+            ExecutorResult::External(result) => result,
+            _ => Err(KVError::MismatchError) // TODO: Make a new error for this case
+        }
     }
 
     pub async fn read(&self, key: String) -> Result<String, KVError> {

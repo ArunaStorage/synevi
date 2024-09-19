@@ -129,7 +129,7 @@ where
 
         // 3. wait for JoinElectorate responses with expected majority
         self.join_electorate(rcv, all_members, &replica, replica_buffer)
-            .await;
+            .await?;
 
         // 4. Send ReadyJoinElectorate && kill ReplicaBuffer && spawn ReplicaServer
         let spawn = self.network.spawn_server(replica);
@@ -207,7 +207,7 @@ where
         let mut execution_hash: [u8; 32] = [0; 32];
         while let Some(report) = receiver.recv().await {
             self.add_member(report.node_id, report.node_serial, report.node_host)
-                .await;
+                .await?;
             if report.last_applied > highest_applied {
                 highest_applied = report.last_applied;
                 execution_hash = report.last_applied_hash;
@@ -223,7 +223,7 @@ where
         if highest_applied != T::default() {
             // 3.2 else Request stream with events until last_applied (highest t of JoinElectorate)
             let mut rcv = self.network.get_stream_events(highest_applied).await?;
-            for event in rcv.recv().await {
+            if let Some(event) = rcv.recv().await {
                 last_applied_t_zero = event.t_zero.as_slice().try_into()?;
                 self.event_store
                     .upsert_tx(synevi_types::types::UpsertEvent {
@@ -235,8 +235,7 @@ where
                         dependencies: Some(from_dependency(event.dependencies)?),
                         ballot: Some(event.ballot.as_slice().try_into()?),
                         execution_hash: Some(event.execution_hash.as_slice().try_into()?), 
-                        // TODO: Add execution hash for this case to upsert?
-                    });
+                    }).await?;
             }
             // 3.3 Check if execution hash == last applied execution hash
             if let Some(Event { hashes, .. }) =
