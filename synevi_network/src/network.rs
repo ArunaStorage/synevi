@@ -234,7 +234,7 @@ impl Network for GrpcNetwork {
                 info: NodeInfo { id, serial },
                 host,
                 channel,
-                ready_electorate: false,
+                ready_electorate: true, // TODO: Change this
             })),
             latency: AtomicU64::new(500),
             skew: AtomicI64::new(0),

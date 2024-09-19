@@ -63,11 +63,11 @@ impl<T: Transaction + Serialize> Transaction for TransactionPayload<T> {
     where
         Self: Sized,
     {
-        let first = bytes.split_off(1);
-        match first.first() {
+        let chunk = bytes.split_off(1);
+        match bytes.first() {
             Some(0) => Ok(Self::None),
-            Some(1) => Ok(Self::External(T::from_bytes(bytes)?)),
-            Some(2) => Ok(Self::Internal(InternalExecution::from_bytes(bytes)?)),
+            Some(1) => Ok(Self::External(T::from_bytes(chunk)?)),
+            Some(2) => Ok(Self::Internal(InternalExecution::from_bytes(chunk)?)),
             _ => Err(SyneviError::InvalidConversionFromBytes(
                 "Invalid TransactionPayload variant".to_string(),
             )),
@@ -98,28 +98,27 @@ impl Transaction for InternalExecution {
         bytes
     }
 
-    fn from_bytes(mut bytes: Vec<u8>) -> Result<Self, SyneviError> {
-        let first = bytes.split_off(1);
+    fn from_bytes(bytes: Vec<u8>) -> Result<Self, SyneviError> {
+        let (first, rest) = bytes.split_at(1);
         match first.first() {
             Some(0) => {
-                let id = bytes.split_off(128);
-                let id = Ulid::from_bytes(id.as_slice().try_into()?);
+                let (id, rest) = rest.split_at(128);
+                let id = Ulid::from_bytes(id.try_into()?);
+                let (serial, host) = rest.split_at(16);
                 let serial = u16::from_be_bytes(
-                    bytes
-                        .split_off(16)
+                   serial 
                         .try_into()
                         .map_err(|_| SyneviError::InvalidConversionFromBytes(String::new()))?,
                 );
-                let host = String::from_utf8(bytes)
+                let host = String::from_utf8(host.to_owned())
                     .map_err(|e| SyneviError::InvalidConversionFromBytes(e.to_string()))?;
                 Ok(InternalExecution::JoinElectorate { id, serial, host })
             }
             Some(1) => {
-                let id = bytes.split_off(128);
-                let id = Ulid::from_bytes(id.as_slice().try_into()?);
+                let (id, serial) = bytes.split_at(128);
+                let id = Ulid::from_bytes(id.try_into()?);
                 let serial = u16::from_be_bytes(
-                    bytes
-                        .split_off(16)
+                    serial
                         .try_into()
                         .map_err(|_| SyneviError::InvalidConversionFromBytes(String::new()))?,
                 );
@@ -419,5 +418,20 @@ impl From<UpsertEvent> for Event {
                 .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
                 .as_nanos(),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{types::TransactionPayload, Transaction};
+
+    #[tokio::test]
+    async fn test_conversion() {
+
+        let transaction = TransactionPayload::External(b"abc".to_vec());
+        let bytes = transaction.as_bytes();
+
+        assert_eq!(TransactionPayload::from_bytes(bytes).unwrap(), transaction)
+
     }
 }

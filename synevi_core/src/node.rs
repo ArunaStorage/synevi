@@ -104,8 +104,10 @@ where
 
         let replica = ReplicaConfig::new(node.clone());
         if node.has_members.load(std::sync::atomic::Ordering::Relaxed) {
+            println!("Reconfig");
             node.reconfigure(replica).await?;
         } else {
+            println!("New spawn");
             // Spawn tonic server
             node.network.spawn_server(replica).await?;
         }
