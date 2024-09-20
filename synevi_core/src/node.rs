@@ -5,6 +5,7 @@ use crate::wait_handler::WaitHandler;
 use std::fmt::Debug;
 use std::sync::atomic::AtomicBool;
 use std::sync::{atomic::AtomicU64, Arc};
+use std::time::Duration;
 use synevi_network::network::{Network, NodeInfo};
 use synevi_network::reconfiguration::{BufferedMessage, ReplicaBuffer, Report};
 use synevi_network::replica::Replica;
@@ -56,6 +57,7 @@ where
         Self::new(id, serial, network, executor, store).await
     }
 }
+
 impl<N, E, S> Node<N, E, S>
 where
     N: Network,
@@ -103,41 +105,94 @@ where
         *node.wait_handler.write().await = Some(wait_handler);
 
         let replica = ReplicaConfig::new(node.clone());
-        if node.has_members.load(std::sync::atomic::Ordering::Relaxed) {
-            println!("Reconfig");
-            node.reconfigure(replica).await?;
-        } else {
-            println!("New spawn");
-            // Spawn tonic server
-            node.network.spawn_server(replica).await?;
-        }
+        node.network.spawn_server(replica).await?;
 
         // If no config / persistence -> default
         Ok(node)
     }
 
+    #[instrument(level = "trace", skip(network, executor, store))]
+    pub async fn new_with_member(
+        id: Ulid,
+        serial: u16,
+        network: N,
+        executor: E,
+        store: S,
+        member_host: String,
+    ) -> Result<Arc<Self>, SyneviError> {
+        let node_name = NodeInfo { id, serial };
+
+        let stats = Stats {
+            total_requests: AtomicU64::new(0),
+            total_accepts: AtomicU64::new(0),
+            total_recovers: AtomicU64::new(0),
+        };
+
+        let node = Arc::new(Node {
+            info: node_name,
+            event_store: Arc::new(store),
+            network,
+            stats,
+            semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
+            executor,
+            wait_handler: RwLock::new(None),
+            has_members: AtomicBool::new(false),
+        });
+
+        let wait_handler = WaitHandler::new(node.clone());
+        let wait_handler_clone = wait_handler.clone();
+        tokio::spawn(async move {
+            wait_handler_clone.run().await.unwrap();
+        });
+        *node.wait_handler.write().await = Some(wait_handler);
+        //node.add_member(member_id, member_serial, member_host).await?;
+
+        let replica = ReplicaConfig::new(node.clone());
+        //if node.has_members.load(std::sync::atomic::Ordering::Relaxed) {
+            dbg!("Reconfig");
+            node.reconfigure(replica, member_host)
+                .await?;
+        //} else {
+        //    dbg!("no members spawn");
+        //    node.network.spawn_server(replica).await?;
+        //}
+
+        Ok(node)
+    }
+
     #[instrument(level = "trace", skip(self, replica))]
-    async fn reconfigure(&self, replica: ReplicaConfig<N, E, S>) -> Result<(), SyneviError> {
+    async fn reconfigure(
+        &self,
+        replica: ReplicaConfig<N, E, S>,
+        member_host: String,
+    ) -> Result<(), SyneviError> {
         // 1. Spawn ReplicaBuffer
+        dbg!("spawn replica buffer");
         let (sdx, rcv) = tokio::sync::mpsc::channel(1);
         let replica_buffer = Arc::new(ReplicaBuffer::new(sdx));
-        let mut join_set = self
+        let (_join_set, kill) = self
             .network
             .spawn_init_server(replica_buffer.clone())
             .await?;
 
         // 2. Broadcast self config to other member
-        let all_members = self.network.broadcast_config().await?;
+        dbg!("broadcast config");
+        let all_members = self.network.broadcast_config(member_host).await?;
 
         // 3. wait for JoinElectorate responses with expected majority
+        dbg!("join electorate");
         self.join_electorate(rcv, all_members, &replica, replica_buffer)
             .await?;
 
         // 4. Send ReadyJoinElectorate && kill ReplicaBuffer && spawn ReplicaServer
-        let spawn = self.network.spawn_server(replica);
-        let kill = join_set.shutdown();
-        let _ = tokio::join!(spawn, kill); // TODO: Not sure if this works or waits endlessly
+        dbg!("ready electorate");
+
+        kill.send(()).map_err(|_| SyneviError::SendError("Shutdown replica buffer failed".to_string()))?;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        self.network.spawn_server(replica).await?;
+        //let _ = tokio::join!(spawn, kill); // TODO: Not sure if this works or waits endlessly
         self.network.ready_electorate().await?;
+        dbg!("finished reconfiguration");
         Ok(())
     }
 
@@ -203,11 +258,12 @@ where
         replica: &ReplicaConfig<N, E, S>,
         replica_buffer: Arc<ReplicaBuffer>,
     ) -> Result<(), SyneviError> {
-
         let mut member_count = 0;
         let mut highest_applied = T::default();
         let mut execution_hash: [u8; 32] = [0; 32];
+        dbg!("Rcv");
         while let Some(report) = receiver.recv().await {
+            dbg!(&report);
             self.add_member(report.node_id, report.node_serial, report.node_host)
                 .await?;
             if report.last_applied > highest_applied {
@@ -222,6 +278,7 @@ where
 
         // 3.1 if majority replies with 0 events -> skip to 4.
         let mut last_applied_t_zero = T0::default();
+        dbg!("Stream");
         if highest_applied != T::default() {
             // 3.2 else Request stream with events until last_applied (highest t of JoinElectorate)
             let mut rcv = self.network.get_stream_events(highest_applied).await?;
@@ -236,16 +293,21 @@ where
                         transaction: Some(event.transaction),
                         dependencies: Some(from_dependency(event.dependencies)?),
                         ballot: Some(event.ballot.as_slice().try_into()?),
-                        execution_hash: Some(event.execution_hash.as_slice().try_into()?), 
-                    }).await?;
+                        execution_hash: Some(event.execution_hash.as_slice().try_into()?),
+                    })
+                    .await?;
             }
             // 3.3 Check if execution hash == last applied execution hash
             if let Some(Event { hashes, .. }) =
                 self.event_store.get_event(last_applied_t_zero).await?
             {
-                // This should panic when None
-                if hashes.unwrap().execution_hash != execution_hash {
-                    // This panics because sync was not successfull
+                if let Some(hashes) = hashes {
+                    if hashes.execution_hash != execution_hash {
+                        panic!()
+                    }
+                } else if execution_hash == [0; 32] {
+                    ()
+                } else {
                     panic!()
                 }
             } else {
@@ -254,10 +316,13 @@ where
             }
         }
         // 3.4 Apply buffered commits & applies
+        dbg!("Apply");
         let mut rcv = replica_buffer.send_buffered().await?;
         while let Some((_, request)) = rcv
-            .try_recv()
-            .map_err(|_| SyneviError::ReceiveError("Buffered message channel closed".to_string()))?
+            .recv()
+            .await
+            .ok_or_else(|| SyneviError::ReceiveError("Channel closed".to_string()))?
+        //.map_err(|e| SyneviError::ReceiveError(e.to_string()))?
         {
             match request {
                 BufferedMessage::Commit(req) => {

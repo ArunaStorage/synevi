@@ -78,11 +78,11 @@ pub mod tests {
         async fn spawn_init_server(
             &self,
             _replica_buffer: Arc<ReplicaBuffer>,
-        ) -> Result<JoinSet<Result<(), SyneviError>>, SyneviError> {
-            Ok(JoinSet::new())
+        ) -> Result<(JoinSet<Result<(), SyneviError>>, tokio::sync::oneshot::Sender<()>), SyneviError> {
+            todo!()
         }
 
-        async fn broadcast_config(&self) -> Result<u32, SyneviError> {
+        async fn broadcast_config(&self, _host: String) -> Result<u32, SyneviError> {
             Ok(0)
         }
         async fn get_stream_events(
@@ -97,6 +97,10 @@ pub mod tests {
         }
 
         async fn ready_member(&self, _id: Ulid, _serial: u16) -> Result<(), SyneviError> {
+            Ok(())
+        }
+
+        async fn report_config(&self, _last_applied: T, _last_applied_hash: [u8;32], _host: String) -> Result<(), SyneviError> {
             Ok(())
         }
     }

@@ -34,14 +34,14 @@ struct MutableData {
 
 impl PersistentStore {
     pub fn new(path: String, node_serial: u16) -> Result<PersistentStore, SyneviError> {
-        let env = unsafe { EnvOpenOptions::new().open(path)? };
+        let env = unsafe { EnvOpenOptions::new().max_dbs(16).open(path)? };
         let env_clone = env.clone();
-        let read_txn = env.read_txn()?;
-        let events_db: Option<EventDb> = env.open_database(&read_txn, Some(EVENT_DB_NAME))?;
+        let mut write_txn = env.write_txn()?;
+        let events_db: Option<EventDb> = env.open_database(&write_txn, Some(EVENT_DB_NAME))?;
         match events_db {
             Some(db) => {
                 let result = db
-                    .iter(&read_txn)?
+                    .iter(&write_txn)?
                     .filter_map(|e| {
                         if let Ok((_, event)) = e {
                             Some(event)
@@ -69,7 +69,7 @@ impl PersistentStore {
                         latest_t0 = event.t_zero;
                     }
                 }
-
+                write_txn.commit()?;
                 Ok(PersistentStore {
                     db: env_clone,
                     data: Mutex::new(MutableData {
@@ -81,27 +81,31 @@ impl PersistentStore {
                     }),
                 })
             }
-            None => Ok(PersistentStore {
-                db: env_clone,
-                data: Mutex::new(MutableData {
-                    mappings: BTreeMap::default(),
-                    last_applied: T::default(),
-                    latest_t0: T0::default(),
-                    node_serial,
-                    latest_hash: [0; 32],
-                }),
-            }),
+            None => {
+                let _: EventDb = env.create_database(&mut write_txn, Some(EVENT_DB_NAME))?;
+                write_txn.commit()?;
+                Ok(PersistentStore {
+                    db: env_clone,
+                    data: Mutex::new(MutableData {
+                        mappings: BTreeMap::default(),
+                        last_applied: T::default(),
+                        latest_t0: T0::default(),
+                        node_serial,
+                        latest_hash: [0; 32],
+                    }),
+                })
+            }
         }
     }
 
     pub fn read_all(&self) -> Result<Vec<Event>, SyneviError> {
-        let wtxn = self.db.read_txn()?;
+        let read_txn = self.db.read_txn()?;
         let events_db: Database<U128<BigEndian>, SerdeBincode<Event>> = self
             .db
-            .open_database(&wtxn, Some(EVENT_DB_NAME))?
+            .open_database(&read_txn, Some(EVENT_DB_NAME))?
             .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
         let result = events_db
-            .iter(&wtxn)?
+            .iter(&read_txn)?
             .filter_map(|e| {
                 if let Ok((_, event)) = e {
                     Some(event)
@@ -110,6 +114,7 @@ impl PersistentStore {
                 }
             })
             .collect::<Vec<_>>();
+        read_txn.commit()?;
         Ok(result)
     }
 
@@ -208,6 +213,7 @@ impl Store for PersistentStore {
             event.ballot = ballot;
             let _ = events_db.put(&mut write_txn, &t_zero.get_inner(), &event);
         }
+        write_txn.commit().ok()?;
 
         Some(event.ballot)
     }
@@ -227,6 +233,7 @@ impl Store for PersistentStore {
             let event = Event::from(upsert_event.clone());
             events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
             data.mappings.insert(upsert_event.t, upsert_event.t_zero);
+            write_txn.commit()?;
             return Ok(());
         };
 
@@ -237,11 +244,13 @@ impl Store for PersistentStore {
 
         // Do not update to a "lower" state
         if upsert_event.state < event.state {
+            write_txn.commit()?;
             return Ok(());
         }
 
         // Event is already applied
         if event.state == State::Applied {
+            write_txn.commit()?;
             return Ok(());
         }
 
@@ -267,15 +276,15 @@ impl Store for PersistentStore {
 
             if event.state == State::Applied {
                 data.last_applied = event.t;
-                let hashes = event.hash_event(
-                    data.latest_hash,
-                );
+                let hashes = event.hash_event(data.latest_hash);
                 data.latest_hash = hashes.transaction_hash;
                 event.hashes = Some(hashes);
             };
             events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
+            write_txn.commit()?;
             Ok(())
         } else {
+            write_txn.commit()?;
             Ok(())
         }
     }
@@ -338,6 +347,7 @@ impl Store for PersistentStore {
                 recover_deps.dependencies.insert(*t_zero_dep);
             }
         }
+        read_txn.commit()?;
         Ok(recover_deps)
     }
 
@@ -347,13 +357,14 @@ impl Store for PersistentStore {
             .db
             .open_database(&read_txn, Some(EVENT_DB_NAME))
             .ok()??;
-        Some(
-            db.get(&read_txn, &t_zero.get_inner())
-                .ok()?
-                .ok_or_else(|| SyneviError::EventNotFound(t_zero.get_inner()))
-                .ok()?
-                .state,
-        )
+        let state = db
+            .get(&read_txn, &t_zero.get_inner())
+            .ok()?
+            .ok_or_else(|| SyneviError::EventNotFound(t_zero.get_inner()))
+            .ok()?
+            .state;
+        read_txn.commit().ok()?;
+        Some(state)
     }
 
     async fn recover_event(
@@ -378,6 +389,7 @@ impl Store for PersistentStore {
         if let Some(mut event) = event {
             event.ballot = Ballot(event.ballot.next_with_node(node_serial).into_time());
             db.put(&mut write_txn, &t_zero_recover.get_inner(), &event)?;
+            write_txn.commit()?;
 
             Ok(RecoverEvent {
                 id: event.id,
@@ -389,6 +401,7 @@ impl Store for PersistentStore {
                 ballot: event.ballot,
             })
         } else {
+            write_txn.commit()?;
             Err(SyneviError::EventNotFound(t_zero_recover.get_inner()))
         }
     }
@@ -409,7 +422,7 @@ impl Store for PersistentStore {
     async fn get_events_until(&self, _last_applied: T) -> Receiver<Result<Event, SyneviError>> {
         let (sdx, rcv) = tokio::sync::mpsc::channel(100);
         let db = self.db.clone();
-        tokio::task::spawn_local(async move {
+        tokio::task::spawn_blocking(move || {
             let read_txn = db.read_txn()?;
             let events_db: EventDb = db
                 .open_database(&read_txn, Some(EVENT_DB_NAME))?
@@ -417,11 +430,10 @@ impl Store for PersistentStore {
 
             for entry in events_db.iter(&read_txn)? {
                 let (_, event) = entry?;
-                sdx.send(Ok(event))
-                    .await
+                sdx.blocking_send(Ok(event))
                     .map_err(|e| SyneviError::SendError(e.to_string()))?;
             }
-
+            read_txn.commit()?;
             Ok::<(), SyneviError>(())
         });
         rcv
@@ -433,7 +445,9 @@ impl Store for PersistentStore {
             .db
             .open_database(&read_txn, Some(EVENT_DB_NAME))?
             .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
-        Ok(db.get(&read_txn, &t_zero.get_inner())?)
+        let event = db.get(&read_txn, &t_zero.get_inner())?;
+        read_txn.commit()?;
+        Ok(event)
     }
 
     async fn get_and_update_hash(
@@ -457,7 +471,28 @@ impl Store for PersistentStore {
         event.hashes = Some(hashes.clone());
 
         db.put(&mut write_txn, &t_zero, &event)?;
+        write_txn.commit()?;
         Ok(hashes)
+    }
+
+    async fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError> {
+        let lock = self.data.lock().await;
+        let last = lock.last_applied;
+        let last_t0 = lock
+            .mappings
+            .get(&last)
+            .ok_or_else(|| SyneviError::EventNotFound(last.get_inner()))?;
+        let read_txn = self.db.read_txn()?;
+        let db: EventDb = self
+            .db
+            .open_database(&read_txn, Some(EVENT_DB_NAME))?
+            .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
+        let event = db
+            .get(&read_txn, &last_t0.get_inner())?
+            .ok_or_else(|| SyneviError::EventNotFound(last_t0.get_inner()))?
+            .hashes
+            .ok_or_else(|| SyneviError::MissingExecutionHash)?;
+        Ok((last, event.execution_hash))
     }
 }
 

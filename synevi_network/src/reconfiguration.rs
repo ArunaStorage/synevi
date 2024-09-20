@@ -41,12 +41,14 @@ impl ReplicaBuffer {
             loop {
                 let mut lock = inner.lock().await;
                 if let Some(event) = lock.pop_first() {
+                    dbg!("Send some");
                     sdx.send(Some(event)).await.map_err(|_| {
                         SyneviError::SendError(
                             "Channel for receiving buffered messages closed".to_string(),
                         )
                     })?;
                 } else {
+                    dbg!("Send none");
                     sdx.send(None).await.map_err(|_| {
                         SyneviError::SendError(
                             "Channel for receiving buffered messages closed".to_string(),
@@ -82,6 +84,7 @@ pub enum BufferedMessage {
     Apply(ApplyRequest),
 }
 
+#[derive(Debug)]
 pub struct Report {
     pub node_id: Ulid,
     pub node_serial: u16,
@@ -144,20 +147,23 @@ impl ConsensusTransport for ReplicaBuffer {
         &self,
         _request: Request<PreAcceptRequest>,
     ) -> Result<Response<PreAcceptResponse>, Status> {
-        Ok(Response::new(PreAcceptResponse {
-            nack: true,
-            ..Default::default()
-        }))
+        Err(tonic::Status::unimplemented("PreAccept"))
+        //Ok(Response::new(PreAcceptResponse {
+        //    nack: true,
+        //    ..Default::default()
+        //}))
     }
 
     async fn accept(
         &self,
         _request: Request<AcceptRequest>,
     ) -> Result<Response<AcceptResponse>, Status> {
-        Ok(Response::new(AcceptResponse {
-            nack: true,
-            ..Default::default()
-        }))
+
+        Err(tonic::Status::unimplemented("Accept"))
+        //Ok(Response::new(AcceptResponse {
+        //    nack: true,
+        //    ..Default::default()
+        //}))
     }
 
     async fn commit(
@@ -210,6 +216,7 @@ impl InitService for ReplicaBuffer {
         &self,
         request: tonic::Request<ReportLastAppliedRequest>,
     ) -> Result<tonic::Response<ReportLastAppliedResponse>, tonic::Status> {
+        dbg!("Got report");
         let request = request.into_inner();
         let Some(Config {
             node_serial,

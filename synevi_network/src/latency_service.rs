@@ -19,7 +19,7 @@ const LATENCY_INTERVAL: u64 = 10;
 pub async fn get_latency(members: Arc<RwLock<Vec<MemberWithLatency>>>) -> Result<(), SyneviError> {
     loop {
         for member in members.read().await.iter() {
-            let mut client = TimeServiceClient::new(member.member.read().await.channel.clone());
+            let mut client = TimeServiceClient::new(member.member.channel.clone());
             let time = time::SystemTime::now()
                 .duration_since(time::UNIX_EPOCH)
                 .unwrap()

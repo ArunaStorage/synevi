@@ -133,6 +133,23 @@ impl Store for MemStore {
             Err(SyneviError::EventNotFound(t_zero.get_inner()))
         }
     }
+
+    async fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError> {
+        let lock = self.store.lock().await;
+        let last = lock.last_applied;
+        let last_t0 = lock
+            .mappings
+            .get(&last)
+            .ok_or_else(|| SyneviError::EventNotFound(last.get_inner()))?;
+        let hash = lock
+            .events
+            .get(last_t0)
+            .cloned()
+            .ok_or_else(|| SyneviError::EventNotFound(last.get_inner()))?
+            .hashes
+            .ok_or_else(|| SyneviError::MissingExecutionHash)?;
+        Ok((last, hash.execution_hash))
+    }
 }
 
 impl InternalStore {

@@ -102,11 +102,11 @@ impl Transaction for InternalExecution {
         let (first, rest) = bytes.split_at(1);
         match first.first() {
             Some(0) => {
-                let (id, rest) = rest.split_at(128);
+                let (id, rest) = rest.split_at(16);
                 let id = Ulid::from_bytes(id.try_into()?);
-                let (serial, host) = rest.split_at(16);
+                let (serial, host) = rest.split_at(2);
                 let serial = u16::from_be_bytes(
-                   serial 
+                    serial
                         .try_into()
                         .map_err(|_| SyneviError::InvalidConversionFromBytes(String::new()))?,
                 );
@@ -115,7 +115,7 @@ impl Transaction for InternalExecution {
                 Ok(InternalExecution::JoinElectorate { id, serial, host })
             }
             Some(1) => {
-                let (id, serial) = bytes.split_at(128);
+                let (id, serial) = rest.split_at(16);
                 let id = Ulid::from_bytes(id.try_into()?);
                 let serial = u16::from_be_bytes(
                     serial
@@ -336,7 +336,7 @@ pub struct UpsertEvent {
     pub transaction: Option<Vec<u8>>,
     pub dependencies: Option<HashSet<T0, RandomState>>,
     pub ballot: Option<Ballot>,
-    pub execution_hash: Option<[u8; 32]>
+    pub execution_hash: Option<[u8; 32]>,
 }
 
 impl Event {
@@ -427,11 +427,26 @@ mod test {
 
     #[tokio::test]
     async fn test_conversion() {
-
         let transaction = TransactionPayload::External(b"abc".to_vec());
         let bytes = transaction.as_bytes();
 
-        assert_eq!(TransactionPayload::from_bytes(bytes).unwrap(), transaction)
+        assert_eq!(TransactionPayload::from_bytes(bytes).unwrap(), transaction);
 
+        let internal_join: TransactionPayload<Vec<u8>> =
+            TransactionPayload::Internal(crate::types::InternalExecution::JoinElectorate {
+                id: ulid::Ulid::new(),
+                serial: 1,
+                host: "http://test.org:1234".to_string(),
+            });
+        let bytes = internal_join.as_bytes();
+        assert_eq!(TransactionPayload::from_bytes(bytes).unwrap(), internal_join);
+
+        let internal_ready: TransactionPayload<Vec<u8>> =
+            TransactionPayload::Internal(crate::types::InternalExecution::ReadyElectorate {
+                id: ulid::Ulid::new(),
+                serial: 1,
+            }); 
+        let bytes = internal_ready.as_bytes();
+        assert_eq!(TransactionPayload::from_bytes(bytes).unwrap(), internal_ready)
     }
 }

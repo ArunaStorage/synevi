@@ -1,7 +1,5 @@
 use crate::messages::{Body, Message, MessageType};
 use async_trait::async_trait;
-use synevi_network::configure_transport::GetEventResponse;
-use synevi_network::reconfiguration::ReplicaBuffer;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -12,6 +10,8 @@ use synevi::network::requests::{
 };
 use synevi::network::{Network, NetworkInterface, Replica};
 use synevi::{State, SyneviError, T, T0};
+use synevi_network::configure_transport::GetEventResponse;
+use synevi_network::reconfiguration::ReplicaBuffer;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -171,11 +171,14 @@ impl Network for MaelstromNetwork {
         todo!()
     }
 
-    async fn get_stream_events(&self, _last_applied: T) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError> {
+    async fn get_stream_events(
+        &self,
+        _last_applied: T,
+    ) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError> {
         todo!()
     }
 
-    async fn broadcast_config(&self) -> Result<u32, SyneviError> {
+    async fn broadcast_config(&self, _host: String) -> Result<u32, SyneviError> {
         todo!()
     }
 
@@ -183,7 +186,25 @@ impl Network for MaelstromNetwork {
         todo!()
     }
 
-    async fn spawn_init_server(&self, _replica_buffer: Arc<ReplicaBuffer>) -> Result<JoinSet<Result<(), SyneviError>>, SyneviError> {
+    async fn spawn_init_server(
+        &self,
+        _replica_buffer: Arc<ReplicaBuffer>,
+    ) -> Result<
+        (
+            JoinSet<Result<(), SyneviError>>,
+            tokio::sync::oneshot::Sender<()>,
+        ),
+        SyneviError,
+    > {
+        todo!()
+    }
+
+    async fn report_config(
+        &self,
+        _last_applied: T,
+        _last_applied_hash: [u8; 32],
+        _host: String,
+    ) -> Result<(), SyneviError> {
         todo!()
     }
 }

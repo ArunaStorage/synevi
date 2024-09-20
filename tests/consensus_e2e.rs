@@ -8,7 +8,9 @@ mod tests {
     use synevi_core::node::Node;
     use synevi_core::tests::DummyExecutor;
     use synevi_network::network::GrpcNetwork;
+    use synevi_persistence::database::PersistentStore;
     use synevi_persistence::mem_store::MemStore;
+    use tokio::fs;
     use tokio::runtime::Builder;
     use ulid::Ulid;
 
@@ -387,5 +389,146 @@ mod tests {
 
             runtime.shutdown_background();
         });
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reconfiguration() {
+        let node_names: Vec<_> = (0..5).map(|_| Ulid::new()).collect();
+        let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, PersistentStore>>> = vec![];
+
+        for (i, m) in node_names.iter().enumerate() {
+            let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13000 + i)).unwrap();
+            if i == 0 {
+                let network = synevi_network::network::GrpcNetwork::new(
+                    socket_addr,
+                    format!("http://0.0.0.0:{}", 13000 + i),
+                    *m,
+                    i as u16,
+                );
+
+                // Copy & create db
+                let test_path = format!("/dev/shm/{m}/");
+                fs::create_dir(&test_path).await.unwrap();
+                dbg!(&test_path);
+                let store = PersistentStore::new(test_path, i as u16).unwrap();
+                let node = Node::new(*m, i as u16, network, DummyExecutor, store)
+                    .await
+                    .unwrap();
+
+                nodes.push(node);
+            } else {
+                let network = synevi_network::network::GrpcNetwork::new(
+                    socket_addr,
+                    format!("http://0.0.0.0:{}", 13000 + i),
+                    *m,
+                    i as u16,
+                );
+
+                // Copy & create db
+                let test_path = format!("/dev/shm/{m}/");
+                fs::create_dir(&test_path).await.unwrap();
+                dbg!(&test_path);
+                let store = PersistentStore::new(test_path, i as u16).unwrap();
+                let node = Node::new_with_member(
+                    *m,
+                    i as u16,
+                    network,
+                    DummyExecutor,
+                    store,
+                    "http://0.0.0.0:13000".to_string(),
+                )
+                .await
+                .unwrap();
+                nodes.push(node);
+            }
+        }
+
+        let coordinator = nodes.pop().unwrap();
+
+        let mut joinset = tokio::task::JoinSet::new();
+
+        for i in 0..10000 {
+            let coordinator = coordinator.clone();
+            joinset.spawn(async move {
+                coordinator
+                    .transaction(
+                        i,
+                        synevi::TransactionPayload::External(Vec::from("This is a transaction")),
+                    )
+                    .await
+            });
+        }
+        while let Some(res) = joinset.join_next().await {
+            match res.unwrap().unwrap() {
+                synevi::ExecutorResult::External(res) => {
+                    res.unwrap();
+                }
+                synevi::ExecutorResult::Internal(res) => {
+                    res.unwrap();
+                }
+            };
+        }
+
+        let (total, accepts, recovers) = coordinator.get_stats();
+        println!(
+            "Fast: {:?}, Slow: {:?} Paths / {:?} Total / {:?} Recovers",
+            total - accepts,
+            accepts,
+            total,
+            recovers
+        );
+
+        //assert_eq!(recovers, 0);
+
+        let coordinator_store: BTreeMap<T0, (T, Option<[u8; 32]>)> = coordinator
+            .event_store
+            .get_event_store()
+            .await
+            .into_values()
+            .map(|e| (e.t_zero, (e.t, e.get_latest_hash())))
+            .collect();
+
+        assert!(coordinator
+            .event_store
+            .get_event_store()
+            .await
+            .iter()
+            .all(|(_, e)| e.state == State::Applied));
+
+        let mut got_mismatch = false;
+        for node in nodes {
+            let node_store: BTreeMap<T0, (T, Option<[u8; 32]>)> = node
+                .event_store
+                .get_event_store()
+                .await
+                .into_values()
+                .map(|e| (e.t_zero, (e.t, e.get_latest_hash())))
+                .collect();
+            assert!(
+                node.event_store
+                    .get_event_store()
+                    .await
+                    .iter()
+                    .all(|(_, e)| e.state == State::Applied),
+                "Not all applied @ {:?}",
+                node.get_info()
+            );
+            assert_eq!(coordinator_store.len(), node_store.len());
+            if coordinator_store != node_store {
+                println!("Node: {:?}", node.get_info());
+                let mut node_store_iter = node_store.iter();
+                for (k, v) in coordinator_store.iter() {
+                    if let Some(next) = node_store_iter.next() {
+                        if next != (k, v) {
+                            println!("Diff: Got {:?}, Expected: {:?}", next, (k, v));
+                            println!("Nanos: {:?} | {:?}", next.1 .0.get_nanos(), v.0.get_nanos());
+                        }
+                    }
+                }
+                got_mismatch = true;
+            }
+
+            assert!(!got_mismatch);
+        }
     }
 }

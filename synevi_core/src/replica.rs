@@ -217,7 +217,10 @@ where
                 // TODO: Build special execution
                 let result = match &request {
                     InternalExecution::JoinElectorate { id, serial, host } => {
-                        self.node.add_member(*id, *serial, host.clone()).await
+                        let res = self.node.add_member(*id, *serial, host.clone()).await;
+                        let (t, hash) = self.node.event_store.last_applied_hash().await?;
+                        self.node.network.report_config(t, hash, host.clone()).await?;
+                        res
                     }
                     InternalExecution::ReadyElectorate { id, serial } => {
                         self.node.ready_member(*id, *serial).await
@@ -322,6 +325,8 @@ where
                 tonic::Status::invalid_argument("No config provided"),
             ));
         };
+
+        dbg!("Rcvd config");
         let node = self.node.clone();
         let majority = self.node.network.get_member_len().await;
         let _res = node
@@ -336,6 +341,14 @@ where
                 ),
             )
             .await?;
+        match _res {
+            ExecutorResult::External(_) => {dbg!("External");},
+            ExecutorResult::Internal(internal_execution) =>  {
+                dbg!(&internal_execution);
+            }
+        }
+        dbg!("Joined electorate");
+
         Ok(JoinElectorateResponse { majority })
     }
 
@@ -375,6 +388,7 @@ where
         &self,
         request: ReadyElectorateRequest,
     ) -> Result<ReadyElectorateResponse, SyneviError> {
+        dbg!("Rcvd ready electorate");
         // Start ready electorate transaction with NewMemberUlid
         let ReadyElectorateRequest {
             node_id,
@@ -392,6 +406,7 @@ where
                 ),
             )
             .await?;
+        dbg!("Finished rcv ready electorate");
         Ok(ReadyElectorateResponse {})
     }
 }

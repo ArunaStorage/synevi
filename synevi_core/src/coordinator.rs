@@ -128,6 +128,8 @@ where
             .any(|PreAcceptResponse { nack, .. }| *nack)
         {
             return Err(SyneviError::CompetingCoordinator);
+            // TODO: Catch this error for reconfiguration
+            //return Ok(ExecutorResult::Internal(Ok(InternalExecution::ReadyElectorate { id: ulid::Ulid::default(), serial: 0  }) ))
         }
 
         self.pre_accept_consensus(&pa_responses).await?;
@@ -328,7 +330,10 @@ where
                 // TODO: Build special execution
                 let result = match request {
                     InternalExecution::JoinElectorate { id, serial, host } => {
-                        self.node.add_member(*id, *serial, host.clone()).await
+                        let res = self.node.add_member(*id, *serial, host.clone()).await;
+                        let (t, hash) = self.node.event_store.last_applied_hash().await?;
+                        self.node.network.report_config(t, hash, host.clone()).await?;
+                        res
                     }
                     InternalExecution::ReadyElectorate { id, serial } => {
                         self.node.ready_member(*id, *serial).await
