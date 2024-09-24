@@ -11,7 +11,6 @@ use synevi::network::requests::{
 use synevi::network::{Network, NetworkInterface, Replica};
 use synevi::{State, SyneviError, T, T0};
 use synevi_network::configure_transport::GetEventResponse;
-use synevi_network::reconfiguration::ReplicaBuffer;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;

@@ -296,7 +296,7 @@ impl Network for GrpcNetwork {
                 .add_service(ReconfigurationServiceServer::new(new_replica_box.clone()))
                 .add_service(InitServiceServer::new(new_replica_box));
             if let Err(err) = builder.serve(addr).await {
-                dbg!(err);
+                return Err(SyneviError::TonicTransportError(err));
             };
             Ok(())
         });
@@ -363,7 +363,6 @@ impl Network for GrpcNetwork {
         //let Some(member) = members.first() else {
         //    return Err(SyneviError::NoMembersFound);
         //};
-        dbg!(format!("Broadcast to {}", &host));
         let channel = Channel::from_shared(host)?.connect().await?;
         let request = tonic::Request::new(JoinElectorateRequest {
             config: Some(config),
@@ -384,7 +383,6 @@ impl Network for GrpcNetwork {
             node_id: self.self_info.0.id.to_bytes().to_vec(),
             host: self.self_info.1.clone(),
         };
-        dbg!("Report config", &self.self_info, last_applied);
         let channel = Channel::from_shared(host)?.connect().await?;
         let request = tonic::Request::new(ReportLastAppliedRequest {
             config: Some(config),
@@ -415,7 +413,6 @@ impl Network for GrpcNetwork {
         tokio::spawn(async move {
             loop {
                 let msg = response.message().await;
-                dbg!(&msg);
                 match msg {
                     Ok(Some(msg)) => {
                         sdx.send(msg).await.map_err(|_| {
@@ -461,7 +458,7 @@ impl Network for GrpcNetwork {
             };
             member.member = Arc::new(new_member);
         } else {
-            dbg!("Member not found");
+            return Err(SyneviError::NoMembersFound);
         }
         Ok(())
     }
@@ -563,14 +560,11 @@ impl NetworkInterface for GrpcNetworkSet {
             }
         }
 
-        //let majority = (self.members.len() / 2) + 1;
-        let mut all = 0;
-        for member in self.members.iter() {
-            //dbg!(&member);
-            if member.ready_electorate {
-                all += 1;
-            }
-        }
+        let all = self
+            .members
+            .iter()
+            .filter(|member| member.ready_electorate)
+            .count();
         let majority = if all == 0 { 0 } else { (all / 2) + 1 };
         let mut counter = 0_usize;
 
@@ -630,7 +624,6 @@ impl NetworkInterface for GrpcNetworkSet {
             println!("Majority not reached: {:?}/{}", result, majority);
             return Err(SyneviError::MajorityNotReached);
         }
-        dbg!(&result);
         Ok(result)
     }
 }

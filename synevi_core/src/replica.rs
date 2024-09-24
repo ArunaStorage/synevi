@@ -217,7 +217,6 @@ where
         let t = T::try_from(request.timestamp.as_slice())?;
         let deps = from_dependency(request.dependencies)?;
         let (sx, rx) = tokio::sync::oneshot::channel();
-        dbg!("REPLICA: COMMIT", &self.node.info);
         self.node
             .get_wait_handler()
             .await?
@@ -232,13 +231,11 @@ where
             )
             .await?;
         let _ = rx.await;
-        dbg!("REPLICA: COMMITED", &self.node.info);
         Ok(CommitResponse {})
     }
 
     #[instrument(level = "trace", skip(self, request))]
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse, SyneviError> {
-        dbg!("GOT APPLY");
         if !self.ready.load(Ordering::Relaxed) {
             let t0 = request.timestamp_zero.as_slice().try_into()?;
             self.buffer
@@ -261,7 +258,6 @@ where
 
         let (sx, rx) = tokio::sync::oneshot::channel();
 
-        dbg!("APPLY WAIT");
         self.node
             .get_wait_handler()
             .await?
@@ -277,7 +273,6 @@ where
             .await?;
         rx.await
             .map_err(|_| SyneviError::ReceiveError("Wait receiver closed".to_string()))?;
-        dbg!("APPLY WAITED");
 
         let result = match transaction {
             TransactionPayload::None => {
@@ -288,8 +283,6 @@ where
                 // TODO: Build special execution
                 let result = match &request {
                     InternalExecution::JoinElectorate { id, serial, host } => {
-                        dbg!(&serial);
-                        dbg!(&self.node.info);
                         let res = self.node.add_member(*id, *serial, host.clone(), false).await;
                         let (t, hash) = self.node.event_store.last_applied_hash().await?;
                         self.node
@@ -324,7 +317,6 @@ where
             .get_and_update_hash(t_zero, hash.into())
             .await?;
 
-        dbg!("READY APPLY");
         Ok(ApplyResponse {})
     }
 
@@ -332,13 +324,11 @@ where
     async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse, SyneviError> {
         if !self.ready.load(Ordering::Relaxed) {
 
-            dbg!("REPLICA RECOVERY NOT ALLOWD");
             return Ok(RecoverResponse::default());
         }
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Recover");
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
-        dbg!("REPLICA RECOVER BEFORE", t_zero);
 
         // TODO/WARNING: This was initially in one Mutex lock
         //let mut event_store = self.node.event_store.lock().await;
@@ -386,7 +376,6 @@ where
             .get_event_state(&t_zero)
             .await
             .ok_or_else(|| SyneviError::EventNotFound(t_zero.get_inner()))?;
-        dbg!("RECOVER REPLICA",&t_zero,&local_state);
         Ok(RecoverResponse {
             local_state: local_state.into(),
             wait: into_dependency(&recover_deps.wait),
@@ -409,7 +398,6 @@ where
         &self,
         request: JoinElectorateRequest,
     ) -> Result<JoinElectorateResponse, SyneviError> {
-        dbg!(&request);
         if !self.ready.load(Ordering::Relaxed) {
             return Ok(JoinElectorateResponse::default());
         }
@@ -426,7 +414,6 @@ where
 
         let node = self.node.clone();
         let majority = self.node.network.get_member_len().await;
-        dbg!("Starting transaction for join electorate");
         let _res = node
             .transaction(
                 Ulid::new().0,
@@ -443,7 +430,6 @@ where
             ExecutorResult::Internal(_internal_execution) => {
             }
         }
-        dbg!("Finished join electorate");
 
         Ok(JoinElectorateResponse { majority })
     }

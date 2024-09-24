@@ -465,7 +465,6 @@ impl Store for PersistentStore {
 
             for entry in events_db.iter(&read_txn)? {
                 let (_, event) = entry?;
-                dbg!(&event);
                 sdx.blocking_send(Ok(event))
                     .map_err(|e| SyneviError::SendError(e.to_string()))?;
             }

@@ -330,7 +330,6 @@ where
                 let result = match request {
                     InternalExecution::JoinElectorate { id, serial, host } => {
                         let res = self.node.add_member(*id, *serial, host.clone(), false).await;
-                        dbg!("Added member");
                         let (t, hash) = self.node.event_store.last_applied_hash().await?;
                         self.node
                             .network
@@ -364,13 +363,11 @@ where
     #[instrument(level = "trace", skip(node))]
     pub async fn recover(node: Arc<Node<N, E, S>>, t0_recover: T0) -> SyneviResult<E> {
         loop {
-            dbg!("Start recovery loop");
             let node = node.clone();
             let recover_event = node
                 .event_store
                 .recover_event(&t0_recover, node.get_info().serial)
                 .await;
-            dbg!(&recover_event);
             let recover_event = recover_event?;
             let network_interface = node.network.get_interface().await;
 
@@ -382,7 +379,6 @@ where
                     timestamp_zero: t0_recover.into(),
                 }))
                 .await?;
-            dbg!(&recover_responses);
 
             let mut recover_coordinator = Coordinator::<N, E, S> {
                 node,
