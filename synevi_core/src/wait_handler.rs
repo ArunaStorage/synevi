@@ -189,23 +189,30 @@ where
             WaitAction::CommitBefore => State::Commited,
             WaitAction::ApplyAfter => State::Applied,
         };
-        self.node.event_store.upsert_tx(UpsertEvent {
-            id: *id,
-            t_zero: *t_zero,
-            t: *t,
-            state,
-            transaction: Some(transaction.clone()),
-            dependencies: Some(deps.clone()),
-            ..Default::default()
-        }).await?;
+        self.node
+            .event_store
+            .upsert_tx(UpsertEvent {
+                id: *id,
+                t_zero: *t_zero,
+                t: *t,
+                state,
+                transaction: Some(transaction.clone()),
+                dependencies: Some(deps.clone()),
+                ..Default::default()
+            })
+            .await?;
 
         Ok(())
     }
 
-    async fn recover(self: Arc<Self>, t0_recover: T0, waiter_state: &mut WaiterState) { if let Some(event) = waiter_state.events.get_mut(&t0_recover) {
+    async fn recover(self: Arc<Self>, t0_recover: T0, waiter_state: &mut WaiterState) {
+        if let Some(event) = waiter_state.events.get_mut(&t0_recover) {
             event.started_at = Instant::now();
+            dbg!("RECOVER EVENT", &event);
         }
         let node = self.node.clone();
+        dbg!("RECOVERY BY:", &node.info);
+        dbg!("RECOVERY OF:", t0_recover);
         tokio::spawn(async move { Coordinator::recover(node, t0_recover).await });
     }
 

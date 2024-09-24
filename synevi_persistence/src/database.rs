@@ -34,7 +34,12 @@ struct MutableData {
 
 impl PersistentStore {
     pub fn new(path: String, node_serial: u16) -> Result<PersistentStore, SyneviError> {
-        let env = unsafe { EnvOpenOptions::new().max_dbs(16).open(path)? };
+        let env = unsafe {
+            EnvOpenOptions::new()
+                .map_size(1024 * 1024 * 1024)
+                .max_dbs(16)
+                .open(path)?
+        };
         let env_clone = env.clone();
         let mut write_txn = env.write_txn()?;
         let events_db: Option<EventDb> = env.open_database(&write_txn, Some(EVENT_DB_NAME))?;
@@ -159,11 +164,11 @@ impl Store for PersistentStore {
                 // No entries in the map -> insert the new event
                 *t_zero
             });
+            drop(data);
             // This might not be necessary to re-use the write lock here
             let deps = self.get_tx_dependencies(&t, &t_zero).await;
             (t, deps)
         };
-        drop(data); // Manually drop lock here because of self.upsert_tx
 
         let event = UpsertEvent {
             id,
@@ -230,9 +235,39 @@ impl Store for PersistentStore {
         let event = events_db.get(&write_txn, &upsert_event.t_zero.get_inner())?;
 
         let Some(mut event) = event else {
-            let event = Event::from(upsert_event.clone());
-            events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
-            data.mappings.insert(upsert_event.t, upsert_event.t_zero);
+            let mut event = Event::from(upsert_event.clone());
+
+            if matches!(event.state, State::Applied) {
+                if let Some(old_t) = event.update_t(upsert_event.t) {
+                    data.mappings.remove(&old_t);
+                    data.mappings.insert(event.t, event.t_zero);
+                }
+                if let Some(deps) = upsert_event.dependencies {
+                    event.dependencies = deps;
+                }
+                if let Some(transaction) = upsert_event.transaction {
+                    if event.transaction.is_empty() && !transaction.is_empty() {
+                        event.transaction = transaction;
+                    }
+                }
+                event.state = upsert_event.state;
+                if let Some(ballot) = upsert_event.ballot {
+                    if event.ballot < ballot {
+                        event.ballot = ballot;
+                    }
+                }
+
+                if event.state == State::Applied {
+                    data.last_applied = event.t;
+                    let hashes = event.hash_event(data.latest_hash);
+                    data.latest_hash = hashes.transaction_hash;
+                    event.hashes = Some(hashes);
+                };
+                events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
+            } else {
+                events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
+                data.mappings.insert(upsert_event.t, upsert_event.t_zero);
+            }
             write_txn.commit()?;
             return Ok(());
         };
@@ -430,6 +465,7 @@ impl Store for PersistentStore {
 
             for entry in events_db.iter(&read_txn)? {
                 let (_, event) = entry?;
+                dbg!(&event);
                 sdx.blocking_send(Ok(event))
                     .map_err(|e| SyneviError::SendError(e.to_string()))?;
             }

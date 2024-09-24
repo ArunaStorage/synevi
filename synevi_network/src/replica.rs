@@ -1,8 +1,9 @@
 use crate::{
     configure_transport::{
-        reconfiguration_service_server::ReconfigurationService, time_service_server::TimeService,
-        GetEventRequest, GetEventResponse, GetTimeRequest, GetTimeResponse, JoinElectorateRequest,
-        JoinElectorateResponse, ReadyElectorateRequest, ReadyElectorateResponse,
+        init_service_server::InitService, reconfiguration_service_server::ReconfigurationService,
+        time_service_server::TimeService, GetEventRequest, GetEventResponse, GetTimeRequest,
+        GetTimeResponse, JoinElectorateRequest, JoinElectorateResponse, ReadyElectorateRequest,
+        ReadyElectorateResponse, ReportLastAppliedRequest, ReportLastAppliedResponse,
     },
     consensus_transport::*,
     reconfiguration::Reconfiguration,
@@ -180,7 +181,12 @@ impl<R: Replica + 'static + Reconfiguration> ReconfigurationService for ReplicaB
         &self,
         request: tonic::Request<JoinElectorateRequest>,
     ) -> Result<tonic::Response<JoinElectorateResponse>, tonic::Status> {
-        Ok(Response::new(self.inner.join_electorate(request.into_inner()).await.unwrap())) // TODO: Replace unwrap
+        Ok(Response::new(
+            self.inner
+                .join_electorate(request.into_inner())
+                .await
+                .map_err(|e| tonic::Status::internal(e.to_string()))?,
+        )) // TODO: Replace unwrap
     }
 
     type GetEventsStream = ReceiverStream<Result<GetEventResponse, tonic::Status>>;
@@ -207,6 +213,25 @@ impl<R: Replica + 'static + Reconfiguration> ReconfigurationService for ReplicaB
         &self,
         request: tonic::Request<ReadyElectorateRequest>,
     ) -> Result<tonic::Response<ReadyElectorateResponse>, tonic::Status> {
-        Ok(Response::new(self.inner.ready_electorate(request.into_inner()).await.unwrap())) // TODO: Replace unwrap
+        Ok(Response::new(
+            self.inner
+                .ready_electorate(request.into_inner())
+                .await
+                .map_err(|e| tonic::Status::internal(e.to_string()))?,
+        )) 
+    }
+}
+#[async_trait::async_trait]
+impl<R: Replica + 'static + Reconfiguration> InitService for ReplicaBox<R> {
+    async fn report_last_applied(
+        &self,
+        request: tonic::Request<ReportLastAppliedRequest>,
+    ) -> Result<tonic::Response<ReportLastAppliedResponse>, tonic::Status> {
+        Ok(Response::new(
+            self.inner
+                .report_last_applied(request.into_inner())
+                .await
+                .map_err(|e| tonic::Status::internal(e.to_string()))?,
+        ))
     }
 }

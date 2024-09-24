@@ -35,7 +35,7 @@ mod tests {
         for (i, name) in node_names.iter().enumerate() {
             for (i2, node) in nodes.iter_mut().enumerate() {
                 if i != i2 {
-                    node.add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i))
+                    node.add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i), true)
                         .await
                         .unwrap();
                 }
@@ -157,7 +157,7 @@ mod tests {
             for (i, name) in node_names.iter().enumerate() {
                 for (i2, node) in nodes.iter_mut().enumerate() {
                     if i != i2 {
-                        node.add_member(*name, i as u16, format!("http://localhost:{}", 11000 + i))
+                        node.add_member(*name, i as u16, format!("http://localhost:{}", 11000 + i), true)
                             .await
                             .unwrap();
                     }
@@ -363,7 +363,7 @@ mod tests {
             for (i, name) in node_names.iter().enumerate() {
                 coordinator
                     .clone()
-                    .add_member(*name, i as u16, format!("http://localhost:{}", 12000 + i))
+                    .add_member(*name, i as u16, format!("http://localhost:{}", 12000 + i),true)
                     .await
                     .unwrap();
             }
@@ -442,6 +442,7 @@ mod tests {
                 nodes.push(node);
             }
         }
+        dbg!("Finished config");
 
         let coordinator = nodes.pop().unwrap();
 

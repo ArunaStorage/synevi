@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use bytes::{BufMut, BytesMut};
+use ulid::Ulid;
 use std::{
     sync::Arc,
     time::{self, Duration, Instant},
@@ -16,9 +18,9 @@ use crate::{
 
 const LATENCY_INTERVAL: u64 = 10;
 
-pub async fn get_latency(members: Arc<RwLock<Vec<MemberWithLatency>>>) -> Result<(), SyneviError> {
+pub async fn get_latency(members: Arc<RwLock<HashMap<Ulid, MemberWithLatency, ahash::RandomState>>>) -> Result<(), SyneviError> {
     loop {
-        for member in members.read().await.iter() {
+        for (_ ,member) in members.read().await.iter() {
             let mut client = TimeServiceClient::new(member.member.channel.clone());
             let time = time::SystemTime::now()
                 .duration_since(time::UNIX_EPOCH)

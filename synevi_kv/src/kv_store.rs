@@ -108,7 +108,7 @@ where
         let node =
             Node::new_with_network_and_executor(id, serial, network, executor.clone()).await?;
         for (ulid, id, host) in members {
-            node.add_member(ulid, id, host).await?;
+            node.add_member(ulid, id, host, true).await?;
         }
 
         Ok(KVStore { node })
@@ -116,13 +116,15 @@ where
 
     async fn transaction(&self, id: Ulid, transaction: Transaction) -> Result<String, KVError> {
         let node = self.node.clone();
-        match node.transaction(
-            u128::from_be_bytes(id.to_bytes()),
-            synevi_types::types::TransactionPayload::External(transaction),
-        )
-        .await? {
+        match node
+            .transaction(
+                u128::from_be_bytes(id.to_bytes()),
+                synevi_types::types::TransactionPayload::External(transaction),
+            )
+            .await?
+        {
             ExecutorResult::External(result) => result,
-            _ => Err(KVError::MismatchError) // TODO: Make a new error for this case
+            _ => Err(KVError::MismatchError), // TODO: Make a new error for this case
         }
     }
 

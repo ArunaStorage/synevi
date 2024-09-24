@@ -20,6 +20,7 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 bytes = { workspace = true}
 synevi_types = { path = "../synevi_types", version = "0.1.0"}
+ahash = {workspace = true}
 
 [build-dependencies]
 tonic-build = "0.12.0"

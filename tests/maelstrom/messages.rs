@@ -86,7 +86,7 @@ pub enum MessageType {
         t0: Vec<u8>,
         t: Vec<u8>,
         deps: Vec<u8>,
-        last_applied: Vec<u8>
+        last_applied: Vec<u8>,
     },
     AcceptOk {
         t0: Vec<u8>,
@@ -217,7 +217,6 @@ mod tests {
                     last_applied: vec![
                         1, 144, 198, 75, 86, 76, 47, 9, 101, 85, 107, 197, 203, 4, 251, 45,
                     ],
-
                 },
             },
         };

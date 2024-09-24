@@ -1,25 +1,28 @@
 use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
 use crate::wait_handler::WaitAction;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use sha3::{Digest, Sha3_256};
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use synevi_network::configure_transport::{
     Config, GetEventRequest, GetEventResponse, JoinElectorateRequest, JoinElectorateResponse,
-    ReadyElectorateRequest, ReadyElectorateResponse,
+    ReadyElectorateRequest, ReadyElectorateResponse, ReportLastAppliedRequest,
+    ReportLastAppliedResponse,
 };
 use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
     PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse,
 };
 use synevi_network::network::Network;
-use synevi_network::reconfiguration::Reconfiguration;
+use synevi_network::reconfiguration::{BufferedMessage, Reconfiguration, Report};
 use synevi_network::replica::Replica;
 use synevi_types::traits::Store;
 use synevi_types::types::{ExecutorResult, InternalExecution, TransactionPayload, UpsertEvent};
 use synevi_types::{Ballot, Executor, State, T, T0};
 use synevi_types::{SyneviError, Transaction};
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::Mutex;
 use tracing::{instrument, trace};
 use ulid::Ulid;
 
@@ -30,6 +33,9 @@ where
     S: Store,
 {
     node: Arc<Node<N, E, S>>,
+    buffer: Arc<Mutex<BTreeMap<T0, BufferedMessage>>>,
+    notifier: Sender<Report>,
+    ready: Arc<AtomicBool>,
 }
 
 impl<N, E, S> ReplicaConfig<N, E, S>
@@ -38,9 +44,47 @@ where
     E: Executor,
     S: Store,
 {
-    pub fn new(node: Arc<Node<N, E, S>>) -> Self {
-        Self { node }
+    pub fn new(node: Arc<Node<N, E, S>>, ready: Arc<AtomicBool>) -> (Self, Receiver<Report>) {
+        let (notifier, receiver) = channel(10);
+        (
+            Self {
+                node,
+                buffer: Arc::new(Mutex::new(BTreeMap::default())),
+                notifier,
+                ready,
+            },
+            receiver,
+        )
     }
+
+    pub async fn send_buffered(
+        &self,
+    ) -> Result<Receiver<Option<(T0, BufferedMessage)>>, SyneviError> {
+        let (sdx, rcv) = channel(100);
+        let inner = self.buffer.clone();
+        tokio::spawn(async move {
+            loop {
+                let mut lock = inner.lock().await;
+                if let Some(event) = lock.pop_first() {
+                    sdx.send(Some(event)).await.map_err(|_| {
+                        SyneviError::SendError(
+                            "Channel for receiving buffered messages closed".to_string(),
+                        )
+                    })?;
+                } else {
+                    sdx.send(None).await.map_err(|_| {
+                        SyneviError::SendError(
+                            "Channel for receiving buffered messages closed".to_string(),
+                        )
+                    })?;
+                    break;
+                }
+            }
+            Ok::<(), SyneviError>(())
+        });
+        Ok(rcv)
+    }
+    
 }
 
 #[async_trait::async_trait]
@@ -56,6 +100,10 @@ where
         request: PreAcceptRequest,
         _node_serial: u16,
     ) -> Result<PreAcceptResponse, SyneviError> {
+        if !self.ready.load(Ordering::Relaxed) {
+            return Ok(PreAcceptResponse::default());
+        }
+
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: PreAccept");
 
@@ -102,6 +150,9 @@ where
 
     #[instrument(level = "trace", skip(self, request))]
     async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse, SyneviError> {
+        if !self.ready.load(Ordering::Relaxed) {
+            return Ok(AcceptResponse::default());
+        }
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Accept");
 
@@ -137,7 +188,7 @@ where
                     transaction: Some(request.event),
                     dependencies: Some(from_dependency(request.dependencies)?),
                     ballot: Some(request_ballot),
-                    execution_hash: None
+                    execution_hash: None,
                 })
                 .await?;
 
@@ -151,6 +202,14 @@ where
 
     #[instrument(level = "trace", skip(self, request))]
     async fn commit(&self, request: CommitRequest) -> Result<CommitResponse, SyneviError> {
+        if !self.ready.load(Ordering::Relaxed) {
+            let t0 = request.timestamp_zero.as_slice().try_into()?;
+            self.buffer
+                .lock()
+                .await
+                .insert(t0, BufferedMessage::Commit(request));
+            return Ok(CommitResponse {});
+        }
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Commit");
 
@@ -158,6 +217,7 @@ where
         let t = T::try_from(request.timestamp.as_slice())?;
         let deps = from_dependency(request.dependencies)?;
         let (sx, rx) = tokio::sync::oneshot::channel();
+        dbg!("REPLICA: COMMIT", &self.node.info);
         self.node
             .get_wait_handler()
             .await?
@@ -172,11 +232,21 @@ where
             )
             .await?;
         let _ = rx.await;
+        dbg!("REPLICA: COMMITED", &self.node.info);
         Ok(CommitResponse {})
     }
 
     #[instrument(level = "trace", skip(self, request))]
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse, SyneviError> {
+        dbg!("GOT APPLY");
+        if !self.ready.load(Ordering::Relaxed) {
+            let t0 = request.timestamp_zero.as_slice().try_into()?;
+            self.buffer
+                .lock()
+                .await
+                .insert(t0, BufferedMessage::Apply(request));
+            return Ok(ApplyResponse {});
+        }
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Apply");
 
@@ -191,6 +261,7 @@ where
 
         let (sx, rx) = tokio::sync::oneshot::channel();
 
+        dbg!("APPLY WAIT");
         self.node
             .get_wait_handler()
             .await?
@@ -204,26 +275,37 @@ where
                 request_id,
             )
             .await?;
-        rx.await.map_err(|_| SyneviError::ReceiveError("Wait receiver closed".to_string()))?;
+        rx.await
+            .map_err(|_| SyneviError::ReceiveError("Wait receiver closed".to_string()))?;
+        dbg!("APPLY WAITED");
 
         let result = match transaction {
             TransactionPayload::None => {
                 return Err(SyneviError::TransactionNotFound);
             }
-            TransactionPayload::External(tx) => {
-                self.node.executor.execute(tx).await
-            }
+            TransactionPayload::External(tx) => self.node.executor.execute(tx).await,
             TransactionPayload::Internal(request) => {
                 // TODO: Build special execution
                 let result = match &request {
                     InternalExecution::JoinElectorate { id, serial, host } => {
-                        let res = self.node.add_member(*id, *serial, host.clone()).await;
+                        dbg!(&serial);
+                        dbg!(&self.node.info);
+                        let res = self.node.add_member(*id, *serial, host.clone(), false).await;
                         let (t, hash) = self.node.event_store.last_applied_hash().await?;
-                        self.node.network.report_config(t, hash, host.clone()).await?;
+                        self.node
+                            .network
+                            .report_config(t, hash, host.clone())
+                            .await?;
                         res
                     }
                     InternalExecution::ReadyElectorate { id, serial } => {
-                        self.node.ready_member(*id, *serial).await
+                        if id != &self.node.info.id {
+                            self.node.ready_member(*id, *serial).await
+                        } else {
+                            // TODO: Maybe set self.node.is_ready = true here instead of inside
+                            // reconfiguration loop
+                            Ok(())
+                        }
                     }
                 };
                 match result {
@@ -236,16 +318,27 @@ where
         let mut hasher = Sha3_256::new();
         postcard::to_io(&result, &mut hasher)?;
         let hash = hasher.finalize();
-        let _hashes = self.node.event_store.get_and_update_hash(t_zero, hash.into()).await?;
+        let _hashes = self
+            .node
+            .event_store
+            .get_and_update_hash(t_zero, hash.into())
+            .await?;
 
+        dbg!("READY APPLY");
         Ok(ApplyResponse {})
     }
 
     #[instrument(level = "trace", skip(self))]
     async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse, SyneviError> {
+        if !self.ready.load(Ordering::Relaxed) {
+
+            dbg!("REPLICA RECOVERY NOT ALLOWD");
+            return Ok(RecoverResponse::default());
+        }
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Recover");
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
+        dbg!("REPLICA RECOVER BEFORE", t_zero);
 
         // TODO/WARNING: This was initially in one Mutex lock
         //let mut event_store = self.node.event_store.lock().await;
@@ -293,6 +386,7 @@ where
             .get_event_state(&t_zero)
             .await
             .ok_or_else(|| SyneviError::EventNotFound(t_zero.get_inner()))?;
+        dbg!("RECOVER REPLICA",&t_zero,&local_state);
         Ok(RecoverResponse {
             local_state: local_state.into(),
             wait: into_dependency(&recover_deps.wait),
@@ -315,6 +409,10 @@ where
         &self,
         request: JoinElectorateRequest,
     ) -> Result<JoinElectorateResponse, SyneviError> {
+        dbg!(&request);
+        if !self.ready.load(Ordering::Relaxed) {
+            return Ok(JoinElectorateResponse::default());
+        }
         let Some(Config {
             node_id,
             node_serial,
@@ -326,28 +424,26 @@ where
             ));
         };
 
-        dbg!("Rcvd config");
         let node = self.node.clone();
         let majority = self.node.network.get_member_len().await;
+        dbg!("Starting transaction for join electorate");
         let _res = node
             .transaction(
                 Ulid::new().0,
-                TransactionPayload::Internal(
-                    InternalExecution::JoinElectorate {
-                        id: Ulid::from_bytes(node_id.as_slice().try_into()?),
-                        serial: node_serial.try_into()?,
-                        host,
-                    },
-                ),
+                TransactionPayload::Internal(InternalExecution::JoinElectorate {
+                    id: Ulid::from_bytes(node_id.as_slice().try_into()?),
+                    serial: node_serial.try_into()?,
+                    host,
+                }),
             )
             .await?;
         match _res {
-            ExecutorResult::External(_) => {dbg!("External");},
-            ExecutorResult::Internal(internal_execution) =>  {
-                dbg!(&internal_execution);
+            ExecutorResult::External(_) => {
+            }
+            ExecutorResult::Internal(_internal_execution) => {
             }
         }
-        dbg!("Joined electorate");
+        dbg!("Finished join electorate");
 
         Ok(JoinElectorateResponse { majority })
     }
@@ -356,6 +452,9 @@ where
         &self,
         _request: GetEventRequest,
     ) -> Receiver<Result<GetEventResponse, SyneviError>> {
+        if !self.ready.load(Ordering::Relaxed) {
+            todo!()
+        }
         let (sdx, rcv) = tokio::sync::mpsc::channel(100);
         let mut store_rcv = self.node.event_store.get_events_until(T::default()).await;
         while let Some(Ok(event)) = store_rcv.recv().await {
@@ -388,26 +487,74 @@ where
         &self,
         request: ReadyElectorateRequest,
     ) -> Result<ReadyElectorateResponse, SyneviError> {
-        dbg!("Rcvd ready electorate");
+        if !self.ready.load(Ordering::Relaxed) {
+            return Ok(ReadyElectorateResponse::default());
+        }
         // Start ready electorate transaction with NewMemberUlid
         let ReadyElectorateRequest {
             node_id,
             node_serial,
         } = request;
         let node = self.node.clone();
-        let _res = node
-            .transaction(
-                Ulid::new().0,
-                TransactionPayload::Internal(
-                    InternalExecution::ReadyElectorate {
-                        id: Ulid::from_bytes(node_id.as_slice().try_into()?),
-                        serial: node_serial.try_into()?,
-                    },
-                ),
-            )
-            .await?;
-        dbg!("Finished rcv ready electorate");
+        node.transaction(
+            Ulid::new().0,
+            TransactionPayload::Internal(InternalExecution::ReadyElectorate {
+                id: Ulid::from_bytes(node_id.as_slice().try_into()?),
+                serial: node_serial.try_into()?,
+            }),
+        )
+        .await?;
         Ok(ReadyElectorateResponse {})
+    }
+
+    async fn report_last_applied(
+        &self,
+        request: ReportLastAppliedRequest,
+    ) -> Result<ReportLastAppliedResponse, SyneviError> {
+        if self.ready.load(Ordering::Relaxed) {
+            return Ok(ReportLastAppliedResponse::default());
+        }
+        let Some(Config {
+            node_serial,
+            node_id,
+            host,
+        }) = request.config
+        else {
+            return Err(SyneviError::InvalidConversionRequest(
+                "Invalid config".to_string(),
+            ));
+        };
+        let report = Report {
+            node_id: Ulid::from_bytes(node_id.try_into().map_err(|_| {
+                SyneviError::InvalidConversionFromBytes("Invalid Ulid conversion".to_string())
+            })?),
+            node_serial: node_serial.try_into()?,
+            node_host: host,
+            last_applied: request.last_applied.as_slice().try_into()?,
+            last_applied_hash: request.last_applied_hash.try_into().map_err(|_| {
+                SyneviError::InvalidConversionFromBytes("Invalid hash conversion".to_string())
+            })?,
+        };
+        self.notifier.send(report).await.map_err(|_| {
+            SyneviError::SendError("Sender for reporting last applied closed".to_string())
+        })?;
+        Ok(ReportLastAppliedResponse {})
+    }
+}
+
+impl<N,E,S> Clone for ReplicaConfig<N, E, S>
+where
+    N: Network,
+    E: Executor,
+    S: Store,
+{
+    fn clone(&self) -> Self {
+        Self {
+            node: self.node.clone(),
+            buffer: self.buffer.clone(),
+            notifier: self.notifier.clone(),
+            ready: self.ready.clone(),
+        }
     }
 }
 

@@ -319,8 +319,7 @@ where
             )
             .await?;
 
-        rx
-            .await
+        rx.await
             .map_err(|_| SyneviError::ReceiveError("Hash receiver closed".to_string()))?;
 
         let result = match &self.transaction.transaction {
@@ -330,9 +329,13 @@ where
                 // TODO: Build special execution
                 let result = match request {
                     InternalExecution::JoinElectorate { id, serial, host } => {
-                        let res = self.node.add_member(*id, *serial, host.clone()).await;
+                        let res = self.node.add_member(*id, *serial, host.clone(), false).await;
+                        dbg!("Added member");
                         let (t, hash) = self.node.event_store.last_applied_hash().await?;
-                        self.node.network.report_config(t, hash, host.clone()).await?;
+                        self.node
+                            .network
+                            .report_config(t, hash, host.clone())
+                            .await?;
                         res
                     }
                     InternalExecution::ReadyElectorate { id, serial } => {
@@ -349,7 +352,11 @@ where
         let mut hasher = Sha3_256::new();
         postcard::to_io(&result, &mut hasher)?;
         let hash = hasher.finalize();
-        let hashes = self.node.event_store.get_and_update_hash(self.transaction.t_zero, hash.into()).await?;
+        let hashes = self
+            .node
+            .event_store
+            .get_and_update_hash(self.transaction.t_zero, hash.into())
+            .await?;
 
         Ok((result, hashes))
     }
@@ -357,11 +364,14 @@ where
     #[instrument(level = "trace", skip(node))]
     pub async fn recover(node: Arc<Node<N, E, S>>, t0_recover: T0) -> SyneviResult<E> {
         loop {
+            dbg!("Start recovery loop");
             let node = node.clone();
             let recover_event = node
                 .event_store
                 .recover_event(&t0_recover, node.get_info().serial)
-                .await?;
+                .await;
+            dbg!(&recover_event);
+            let recover_event = recover_event?;
             let network_interface = node.network.get_interface().await;
 
             let recover_responses = network_interface
@@ -372,6 +382,7 @@ where
                     timestamp_zero: t0_recover.into(),
                 }))
                 .await?;
+            dbg!(&recover_responses);
 
             let mut recover_coordinator = Coordinator::<N, E, S> {
                 node,

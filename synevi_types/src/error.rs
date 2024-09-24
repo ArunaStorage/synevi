@@ -41,6 +41,8 @@ pub enum SyneviError {
     InvalidConversionSerdePostcard(#[from] postcard::Error),
     #[error("Invalid serialization for monotime {0}")]
     InvalidMonotime(#[from] monotime::error::MonotimeError),
+    #[error("Invalid conversion from request: {0}")]
+    InvalidConversionRequest(String),
 
     #[error("Database error {0}")]
     DatabaseError(#[from] heed::Error),
@@ -62,6 +64,8 @@ pub enum SyneviError {
     UndefinedRecovery,
     #[error("No members found")]
     NoMembersFound,
+    #[error("Not ready for transactions")]
+    NotReady,
 }
 
 impl Serialize for SyneviError {

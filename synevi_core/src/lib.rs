@@ -11,7 +11,6 @@ pub mod tests {
     use synevi_network::network::BroadcastResponse;
     use synevi_network::network::NetworkInterface;
     use synevi_network::network::{BroadcastRequest, Network};
-    use synevi_network::reconfiguration::ReplicaBuffer;
     use synevi_network::replica::Replica;
     use synevi_types::types::SyneviResult;
     use synevi_types::Executor;
@@ -19,7 +18,6 @@ pub mod tests {
     use synevi_types::T;
     use tokio::sync::mpsc::Receiver;
     use tokio::sync::Mutex;
-    use tokio::task::JoinSet;
     use ulid::Ulid;
 
     #[derive(Debug, Default)]
@@ -54,6 +52,7 @@ pub mod tests {
             _id: Ulid,
             _serial: u16,
             _host: String,
+            _ready: bool,
         ) -> Result<(), SyneviError> {
             Ok(())
         }
@@ -75,13 +74,6 @@ pub mod tests {
             0
         }
 
-        async fn spawn_init_server(
-            &self,
-            _replica_buffer: Arc<ReplicaBuffer>,
-        ) -> Result<(JoinSet<Result<(), SyneviError>>, tokio::sync::oneshot::Sender<()>), SyneviError> {
-            todo!()
-        }
-
         async fn broadcast_config(&self, _host: String) -> Result<u32, SyneviError> {
             Ok(0)
         }
@@ -100,7 +92,12 @@ pub mod tests {
             Ok(())
         }
 
-        async fn report_config(&self, _last_applied: T, _last_applied_hash: [u8;32], _host: String) -> Result<(), SyneviError> {
+        async fn report_config(
+            &self,
+            _last_applied: T,
+            _last_applied_hash: [u8; 32],
+            _host: String,
+        ) -> Result<(), SyneviError> {
             Ok(())
         }
     }

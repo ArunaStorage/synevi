@@ -1,9 +1,10 @@
 use ahash::RandomState;
 use serde::Serialize;
-use tokio::sync::mpsc::Receiver;
 use std::{
-    collections::{BTreeMap, HashSet}, sync::{Arc, Weak}
+    collections::{BTreeMap, HashSet},
+    sync::{Arc, Weak},
 };
+use tokio::sync::mpsc::Receiver;
 
 use crate::{
     types::{Event, Hashes, RecoverDependencies, RecoverEvent, SyneviResult, UpsertEvent},
@@ -42,7 +43,8 @@ pub trait Executor: Send + Sync + 'static {
 impl<E> Executor for Arc<E>
 where
     E: Executor,
-{ type Tx = E::Tx;
+{
+    type Tx = E::Tx;
     async fn execute(&self, transaction: Self::Tx) -> SyneviResult<Self> {
         self.as_ref().execute(transaction).await
     }
@@ -98,11 +100,14 @@ pub trait Store: Send + Sync + Sized + 'static {
 
     async fn get_event_store(&self) -> BTreeMap<T0, Event>;
     async fn last_applied(&self) -> T;
-    async fn last_applied_hash(&self) -> Result<(T, [u8;32]), SyneviError>;
+    async fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError>;
 
     async fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError>;
     async fn get_events_until(&self, last_applied: T) -> Receiver<Result<Event, SyneviError>>;
 
-    async fn get_and_update_hash(&self, t_zero: T0, execution_hash: [u8; 32]) -> Result<Hashes, SyneviError>;
+    async fn get_and_update_hash(
+        &self,
+        t_zero: T0,
+        execution_hash: [u8; 32],
+    ) -> Result<Hashes, SyneviError>;
 }
-

@@ -1,18 +1,18 @@
 use crate::coordinator::Coordinator;
 use crate::replica::ReplicaConfig;
 use crate::utils::from_dependency;
-use crate::wait_handler::WaitHandler;
+use crate::wait_handler::{WaitAction, WaitHandler};
 use std::fmt::Debug;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{atomic::AtomicU64, Arc};
-use std::time::Duration;
+use synevi_network::consensus_transport::{ApplyRequest, CommitRequest};
 use synevi_network::network::{Network, NodeInfo};
-use synevi_network::reconfiguration::{BufferedMessage, ReplicaBuffer, Report};
+use synevi_network::reconfiguration::{BufferedMessage, Report};
 use synevi_network::replica::Replica;
 use synevi_persistence::mem_store::MemStore;
 use synevi_types::traits::Store;
 use synevi_types::types::{Event, SyneviResult, TransactionPayload};
-use synevi_types::{Executor, SyneviError, T, T0};
+use synevi_types::{Executor, State, SyneviError, T, T0};
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::RwLock;
 use tracing::instrument;
@@ -39,6 +39,7 @@ where
     pub wait_handler: RwLock<Option<Arc<WaitHandler<N, E, S>>>>,
     semaphore: Arc<tokio::sync::Semaphore>,
     has_members: AtomicBool,
+    is_ready: Arc<AtomicBool>,
 }
 
 impl<N, E> Node<N, E, MemStore>
@@ -95,6 +96,7 @@ where
             executor,
             wait_handler: RwLock::new(None),
             has_members: AtomicBool::new(false),
+            is_ready: Arc::new(AtomicBool::new(true)),
         });
 
         let wait_handler = WaitHandler::new(node.clone());
@@ -104,7 +106,8 @@ where
         });
         *node.wait_handler.write().await = Some(wait_handler);
 
-        let replica = ReplicaConfig::new(node.clone());
+        let ready = Arc::new(AtomicBool::new(true));
+        let (replica, _) = ReplicaConfig::new(node.clone(), ready);
         node.network.spawn_server(replica).await?;
 
         // If no config / persistence -> default
@@ -128,6 +131,7 @@ where
             total_recovers: AtomicU64::new(0),
         };
 
+        let ready = Arc::new(AtomicBool::new(false));
         let node = Arc::new(Node {
             info: node_name,
             event_store: Arc::new(store),
@@ -137,6 +141,7 @@ where
             executor,
             wait_handler: RwLock::new(None),
             has_members: AtomicBool::new(false),
+            is_ready: ready.clone(),
         });
 
         let wait_handler = WaitHandler::new(node.clone());
@@ -147,11 +152,12 @@ where
         *node.wait_handler.write().await = Some(wait_handler);
         //node.add_member(member_id, member_serial, member_host).await?;
 
-        let replica = ReplicaConfig::new(node.clone());
+        let (replica, config_receiver) = ReplicaConfig::new(node.clone(), ready.clone());
         //if node.has_members.load(std::sync::atomic::Ordering::Relaxed) {
-            dbg!("Reconfig");
-            node.reconfigure(replica, member_host)
-                .await?;
+        node.network.spawn_server(replica.clone()).await?;
+        dbg!("Reconfig");
+        node.reconfigure(replica, member_host, config_receiver, ready)
+            .await?;
         //} else {
         //    dbg!("no members spawn");
         //    node.network.spawn_server(replica).await?;
@@ -165,15 +171,15 @@ where
         &self,
         replica: ReplicaConfig<N, E, S>,
         member_host: String,
+        config_receiver: Receiver<Report>,
+        ready: Arc<AtomicBool>,
     ) -> Result<(), SyneviError> {
         // 1. Spawn ReplicaBuffer
-        dbg!("spawn replica buffer");
-        let (sdx, rcv) = tokio::sync::mpsc::channel(1);
-        let replica_buffer = Arc::new(ReplicaBuffer::new(sdx));
-        let (_join_set, kill) = self
-            .network
-            .spawn_init_server(replica_buffer.clone())
-            .await?;
+        //let replica_buffer = Arc::new(ReplicaBuffer::new(sdx));
+        // let (mut join_set, kill) = self
+        //     .network
+        //     .spawn_init_server(replica_buffer.clone())
+        //     .await?;
 
         // 2. Broadcast self config to other member
         dbg!("broadcast config");
@@ -181,24 +187,27 @@ where
 
         // 3. wait for JoinElectorate responses with expected majority
         dbg!("join electorate");
-        self.join_electorate(rcv, all_members, &replica, replica_buffer)
+        self.join_electorate(config_receiver, all_members, &replica)
             .await?;
 
         // 4. Send ReadyJoinElectorate && kill ReplicaBuffer && spawn ReplicaServer
         dbg!("ready electorate");
+        ready.store(true, Ordering::Relaxed);
 
-        kill.send(()).map_err(|_| SyneviError::SendError("Shutdown replica buffer failed".to_string()))?;
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        self.network.spawn_server(replica).await?;
-        //let _ = tokio::join!(spawn, kill); // TODO: Not sure if this works or waits endlessly
         self.network.ready_electorate().await?;
         dbg!("finished reconfiguration");
         Ok(())
     }
 
     #[instrument(level = "trace", skip(self))]
-    pub async fn add_member(&self, id: Ulid, serial: u16, host: String) -> Result<(), SyneviError> {
-        self.network.add_member(id, serial, host).await?;
+    pub async fn add_member(
+        &self,
+        id: Ulid,
+        serial: u16,
+        host: String,
+        ready: bool,
+    ) -> Result<(), SyneviError> {
+        self.network.add_member(id, serial, host, ready).await?;
         self.has_members
             .store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(())
@@ -218,6 +227,8 @@ where
     ) -> SyneviResult<E> {
         if !self.has_members.load(std::sync::atomic::Ordering::Relaxed) {
             tracing::warn!("Consensus omitted: No members in the network");
+        } else if !self.is_ready.load(Ordering::Relaxed) {
+            return Err(SyneviError::NotReady);
         };
         let _permit = self.semaphore.acquire().await?;
         let mut coordinator = Coordinator::new(self.clone(), transaction, id).await;
@@ -256,15 +267,14 @@ where
         mut receiver: Receiver<Report>,
         all_members: u32,
         replica: &ReplicaConfig<N, E, S>,
-        replica_buffer: Arc<ReplicaBuffer>,
     ) -> Result<(), SyneviError> {
         let mut member_count = 0;
         let mut highest_applied = T::default();
         let mut execution_hash: [u8; 32] = [0; 32];
         dbg!("Rcv");
         while let Some(report) = receiver.recv().await {
-            dbg!(&report);
-            self.add_member(report.node_id, report.node_serial, report.node_host)
+            dbg!(&report, all_members);
+            self.add_member(report.node_id, report.node_serial, report.node_host, true)
                 .await?;
             if report.last_applied > highest_applied {
                 highest_applied = report.last_applied;
@@ -282,20 +292,60 @@ where
         if highest_applied != T::default() {
             // 3.2 else Request stream with events until last_applied (highest t of JoinElectorate)
             let mut rcv = self.network.get_stream_events(highest_applied).await?;
-            if let Some(event) = rcv.recv().await {
+            while let Some(event) = rcv.recv().await {
                 last_applied_t_zero = event.t_zero.as_slice().try_into()?;
-                self.event_store
-                    .upsert_tx(synevi_types::types::UpsertEvent {
-                        id: u128::from_be_bytes(event.id.as_slice().try_into()?),
-                        t_zero: last_applied_t_zero.clone(),
-                        t: event.t.as_slice().try_into()?,
-                        state: event.state.into(),
-                        transaction: Some(event.transaction),
-                        dependencies: Some(from_dependency(event.dependencies)?),
-                        ballot: Some(event.ballot.as_slice().try_into()?),
-                        execution_hash: Some(event.execution_hash.as_slice().try_into()?),
-                    })
-                    .await?;
+                let state: State = event.state.into();
+                match state {
+                    State::Commited => {
+                        let (sx, rx) = tokio::sync::oneshot::channel();
+                        self
+                            .get_wait_handler()
+                            .await?
+                            .send_msg(
+                                last_applied_t_zero,
+                                event.t.as_slice().try_into()?,
+                                from_dependency(event.dependencies)?,
+                                event.transaction,
+                                WaitAction::CommitBefore,
+                                sx,
+                                u128::from_be_bytes(event.id.as_slice().try_into()?),
+                            )
+                            .await?;
+                        let _ = rx.await;
+                    }
+                    State::Applied => {
+                        let (sx, rx) = tokio::sync::oneshot::channel();
+                        self
+                            .get_wait_handler()
+                            .await?
+                            .send_msg(
+                                last_applied_t_zero,
+                                event.t.as_slice().try_into()?,
+                                from_dependency(event.dependencies)?,
+                                event.transaction,
+                                WaitAction::ApplyAfter,
+                                sx,
+                                u128::from_be_bytes(event.id.as_slice().try_into()?),
+                            )
+                            .await?;
+                        let _ = rx.await;
+                    }
+
+                    _ => panic!("Unexpected message state"),
+                }
+                dbg!("STREAM EVENT:", &last_applied_t_zero);
+                //self.event_store
+                //    .upsert_tx(synevi_types::types::UpsertEvent {
+                //        id: u128::from_be_bytes(event.id.as_slice().try_into()?),
+                //        t_zero: last_applied_t_zero.clone(),
+                //        t: event.t.as_slice().try_into()?,
+                //        state: event.state.into(),
+                //        transaction: Some(event.transaction),
+                //        dependencies: Some(from_dependency(event.dependencies)?),
+                //        ballot: Some(event.ballot.as_slice().try_into()?),
+                //        execution_hash: Some(event.execution_hash.as_slice().try_into()?),
+                //    })
+                //    .await?;
             }
             // 3.3 Check if execution hash == last applied execution hash
             if let Some(Event { hashes, .. }) =
@@ -303,7 +353,7 @@ where
             {
                 if let Some(hashes) = hashes {
                     if hashes.execution_hash != execution_hash {
-                        panic!()
+                        panic!("Mismatched execution hashes")
                     }
                 } else if execution_hash == [0; 32] {
                     ()
@@ -312,12 +362,15 @@ where
                 }
             } else {
                 // Not sure if we should panic here
-                panic!()
+                if last_applied_t_zero != T0::default() {
+                    dbg!("No last applied t_zero found ", last_applied_t_zero);
+                    panic!()
+                }
             }
         }
         // 3.4 Apply buffered commits & applies
         dbg!("Apply");
-        let mut rcv = replica_buffer.send_buffered().await?;
+        let mut rcv = replica.send_buffered().await?;
         while let Some((_, request)) = rcv
             .recv()
             .await
@@ -395,9 +448,14 @@ mod tests {
         for (i, name) in node_names.iter().enumerate() {
             for (i2, node) in nodes.iter_mut().enumerate() {
                 if i != i2 {
-                    node.add_member(*name, i as u16, format!("http://0.0.0.0:{}", 13200 + i))
-                        .await
-                        .unwrap();
+                    node.add_member(
+                        *name,
+                        i as u16,
+                        format!("http://0.0.0.0:{}", 13200 + i),
+                        true,
+                    )
+                    .await
+                    .unwrap();
                 }
             }
         }
@@ -449,9 +507,14 @@ mod tests {
         for (i, name) in node_names.iter().enumerate() {
             for (i2, node) in nodes.iter_mut().enumerate() {
                 if i != i2 {
-                    node.add_member(*name, i as u16, format!("http://0.0.0.0:{}", 13100 + i))
-                        .await
-                        .unwrap();
+                    node.add_member(
+                        *name,
+                        i as u16,
+                        format!("http://0.0.0.0:{}", 13100 + i),
+                        true,
+                    )
+                    .await
+                    .unwrap();
                 }
             }
         }

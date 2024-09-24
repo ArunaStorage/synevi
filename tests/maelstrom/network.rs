@@ -67,11 +67,11 @@ impl Network for MaelstromNetwork {
 
     async fn add_members(&self, members: Vec<(Ulid, u16, String)>) {
         for (id, serial, host) in members {
-            self.add_member(id, serial, host).await.unwrap()
+            self.add_member(id, serial, host, true).await.unwrap()
         }
     }
 
-    async fn add_member(&self, _id: Ulid, _serial: u16, host: String) -> Result<(), SyneviError> {
+    async fn add_member(&self, _id: Ulid, _serial: u16, host: String, _ready: bool) -> Result<(), SyneviError> {
         self.members.write().unwrap().push(host);
         Ok(())
     }
@@ -186,18 +186,6 @@ impl Network for MaelstromNetwork {
         todo!()
     }
 
-    async fn spawn_init_server(
-        &self,
-        _replica_buffer: Arc<ReplicaBuffer>,
-    ) -> Result<
-        (
-            JoinSet<Result<(), SyneviError>>,
-            tokio::sync::oneshot::Sender<()>,
-        ),
-        SyneviError,
-    > {
-        todo!()
-    }
 
     async fn report_config(
         &self,

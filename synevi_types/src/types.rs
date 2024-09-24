@@ -412,7 +412,11 @@ impl From<UpsertEvent> for Event {
             transaction: value.transaction.unwrap_or_default(),
             dependencies: value.dependencies.unwrap_or_default(),
             ballot: value.ballot.unwrap_or_default(),
-            hashes: None,
+            hashes: value.execution_hash.map(|hash| Hashes {
+                previous_hash: [0; 32],
+                transaction_hash:[0;32],
+                execution_hash: hash,
+            }),
             last_updated: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap() // This must fail if the system clock is before the UNIX_EPOCH
@@ -439,14 +443,20 @@ mod test {
                 host: "http://test.org:1234".to_string(),
             });
         let bytes = internal_join.as_bytes();
-        assert_eq!(TransactionPayload::from_bytes(bytes).unwrap(), internal_join);
+        assert_eq!(
+            TransactionPayload::from_bytes(bytes).unwrap(),
+            internal_join
+        );
 
         let internal_ready: TransactionPayload<Vec<u8>> =
             TransactionPayload::Internal(crate::types::InternalExecution::ReadyElectorate {
                 id: ulid::Ulid::new(),
                 serial: 1,
-            }); 
+            });
         let bytes = internal_ready.as_bytes();
-        assert_eq!(TransactionPayload::from_bytes(bytes).unwrap(), internal_ready)
+        assert_eq!(
+            TransactionPayload::from_bytes(bytes).unwrap(),
+            internal_ready
+        )
     }
 }
