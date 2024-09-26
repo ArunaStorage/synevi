@@ -409,10 +409,11 @@ impl Network for GrpcNetwork {
         });
         let mut client = ReconfigurationServiceClient::new(channel);
         let mut response = client.get_events(request).await?.into_inner();
-        let (sdx, rcv) = tokio::sync::mpsc::channel(100);
+        let (sdx, rcv) = tokio::sync::mpsc::channel(200);
         tokio::spawn(async move {
             loop {
                 let msg = response.message().await;
+                //dbg!(&msg);
                 match msg {
                     Ok(Some(msg)) => {
                         sdx.send(msg).await.map_err(|_| {
@@ -447,13 +448,10 @@ impl Network for GrpcNetwork {
     async fn ready_member(&self, id: Ulid, _serial: u16) -> Result<(), SyneviError> {
         let mut lock = self.members.write().await;
         if let Some(member) = lock.get_mut(&id) {
-            let channel = Channel::from_shared(member.member.host.clone())?
-                .connect()
-                .await?;
             let new_member = Member {
                 info: member.member.info.clone(),
                 host: member.member.host.clone(),
-                channel,
+                channel: member.member.channel.clone(),
                 ready_electorate: true,
             };
             member.member = Arc::new(new_member);

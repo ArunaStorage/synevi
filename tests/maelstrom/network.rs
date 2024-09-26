@@ -70,7 +70,13 @@ impl Network for MaelstromNetwork {
         }
     }
 
-    async fn add_member(&self, _id: Ulid, _serial: u16, host: String, _ready: bool) -> Result<(), SyneviError> {
+    async fn add_member(
+        &self,
+        _id: Ulid,
+        _serial: u16,
+        host: String,
+        _ready: bool,
+    ) -> Result<(), SyneviError> {
         self.members.write().unwrap().push(host);
         Ok(())
     }
@@ -184,7 +190,6 @@ impl Network for MaelstromNetwork {
     async fn get_member_len(&self) -> u32 {
         todo!()
     }
-
 
     async fn report_config(
         &self,
@@ -436,6 +441,7 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
                         last_applied: last_applied.clone(),
                     },
                     node as u16,
+                    true,
                 )
                 .await
                 .unwrap();
@@ -463,15 +469,18 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
             ref last_applied,
         } => {
             let response = replica
-                .accept(AcceptRequest {
-                    id: id.clone(),
-                    ballot: ballot.clone(),
-                    event: event.clone(),
-                    timestamp_zero: t0.clone(),
-                    timestamp: t.clone(),
-                    dependencies: deps.clone(),
-                    last_applied: last_applied.clone(),
-                })
+                .accept(
+                    AcceptRequest {
+                        id: id.clone(),
+                        ballot: ballot.clone(),
+                        event: event.clone(),
+                        timestamp_zero: t0.clone(),
+                        timestamp: t.clone(),
+                        dependencies: deps.clone(),
+                        last_applied: last_applied.clone(),
+                    },
+                    true,
+                )
                 .await?;
 
             let reply = msg.reply(Body {
@@ -494,13 +503,16 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
             ref deps,
         } => {
             replica
-                .commit(CommitRequest {
-                    id: id.clone(),
-                    event: event.clone(),
-                    timestamp_zero: t0.clone(),
-                    timestamp: t.clone(),
-                    dependencies: deps.clone(),
-                })
+                .commit(
+                    CommitRequest {
+                        id: id.clone(),
+                        event: event.clone(),
+                        timestamp_zero: t0.clone(),
+                        timestamp: t.clone(),
+                        dependencies: deps.clone(),
+                    },
+                    true,
+                )
                 .await?;
 
             let reply = msg.reply(Body {
@@ -522,15 +534,18 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
         } => {
             eprintln!("Replica dispatch apply {:?}", t0);
             replica
-                .apply(ApplyRequest {
-                    id: id.clone(),
-                    event: event.clone(),
-                    timestamp_zero: t0.clone(),
-                    timestamp: t.clone(),
-                    dependencies: deps.clone(),
-                    transaction_hash: transaction_hash.clone(),
-                    execution_hash: execution_hash.clone(),
-                })
+                .apply(
+                    ApplyRequest {
+                        id: id.clone(),
+                        event: event.clone(),
+                        timestamp_zero: t0.clone(),
+                        timestamp: t.clone(),
+                        dependencies: deps.clone(),
+                        transaction_hash: transaction_hash.clone(),
+                        execution_hash: execution_hash.clone(),
+                    },
+                    true,
+                )
                 .await?;
 
             let reply = msg.reply(Body {
@@ -548,12 +563,15 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
             ref t0,
         } => {
             let result = replica
-                .recover(RecoverRequest {
-                    id: id.clone(),
-                    ballot: ballot.clone(),
-                    event: event.clone(),
-                    timestamp_zero: t0.clone(),
-                })
+                .recover(
+                    RecoverRequest {
+                        id: id.clone(),
+                        ballot: ballot.clone(),
+                        event: event.clone(),
+                        timestamp_zero: t0.clone(),
+                    },
+                    true,
+                )
                 .await?;
 
             let reply = msg.reply(Body {

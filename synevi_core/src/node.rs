@@ -1,16 +1,17 @@
 use crate::coordinator::Coordinator;
 use crate::replica::ReplicaConfig;
 use crate::utils::from_dependency;
-use crate::wait_handler::{WaitAction, WaitHandler};
+use crate::wait_handler::WaitHandler;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{atomic::AtomicU64, Arc};
+use synevi_network::consensus_transport::{ApplyRequest, CommitRequest};
 use synevi_network::network::{Network, NodeInfo};
 use synevi_network::reconfiguration::{BufferedMessage, Report};
 use synevi_network::replica::Replica;
 use synevi_persistence::mem_store::MemStore;
 use synevi_types::traits::Store;
-use synevi_types::types::{Event, SyneviResult, TransactionPayload};
+use synevi_types::types::{SyneviResult, TransactionPayload, UpsertEvent};
 use synevi_types::{Executor, State, SyneviError, T, T0};
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::RwLock;
@@ -158,27 +159,6 @@ where
         Ok(node)
     }
 
-    #[instrument(level = "trace", skip(self, replica))]
-    async fn reconfigure(
-        &self,
-        replica: ReplicaConfig<N, E, S>,
-        member_host: String,
-        config_receiver: Receiver<Report>,
-        ready: Arc<AtomicBool>,
-    ) -> Result<(), SyneviError> {
-        // 1. Broadcast self_config to other member
-        let all_members = self.network.broadcast_config(member_host).await?;
-
-        // 2. wait for JoinElectorate responses with expected majority and config from others
-        self.join_electorate(config_receiver, all_members, &replica)
-            .await?;
-
-        // 3. Send ReadyJoinElectorate && set myself to ready
-        ready.store(true, Ordering::Relaxed);
-        self.network.ready_electorate().await?;
-        Ok(())
-    }
-
     #[instrument(level = "trace", skip(self))]
     pub async fn add_member(
         &self,
@@ -242,6 +222,30 @@ where
         self.info.clone()
     }
 
+    #[instrument(level = "trace", skip(self, replica))]
+    async fn reconfigure(
+        &self,
+        replica: ReplicaConfig<N, E, S>,
+        member_host: String,
+        config_receiver: Receiver<Report>,
+        ready: Arc<AtomicBool>,
+    ) -> Result<(), SyneviError> {
+        // 1. Broadcast self_config to other member
+        dbg!("Broadcast");
+        let all_members = self.network.broadcast_config(member_host).await?;
+
+        // 2. wait for JoinElectorate responses with expected majority and config from others
+        dbg!("Join");
+        self.join_electorate(config_receiver, all_members, &replica)
+            .await?;
+
+        // 3. Send ReadyJoinElectorate && set myself to ready
+        dbg!("Ready");
+        ready.store(true, Ordering::Relaxed);
+        self.network.ready_electorate().await?;
+        Ok(())
+    }
+
     async fn join_electorate(
         &self,
         mut receiver: Receiver<Report>,
@@ -250,13 +254,13 @@ where
     ) -> Result<(), SyneviError> {
         let mut member_count = 0;
         let mut highest_applied = T::default();
-        let mut execution_hash: [u8; 32] = [0; 32];
+        let mut last_applied: [u8; 32] = [0; 32];
         while let Some(report) = receiver.recv().await {
             self.add_member(report.node_id, report.node_serial, report.node_host, true)
                 .await?;
             if report.last_applied > highest_applied {
                 highest_applied = report.last_applied;
-                execution_hash = report.last_applied_hash;
+                last_applied = report.last_applied_hash;
             }
             member_count += 1;
             if member_count >= all_members {
@@ -264,22 +268,26 @@ where
             }
         }
 
+        dbg!("Sync");
         // 2.1 if majority replies with 0 events -> skip to 2.4.
-        self.sync_events(highest_applied, execution_hash).await?;
+        self.sync_events(highest_applied, last_applied, &replica)
+            .await?;
 
         // 2.4 Apply buffered commits & applies
+        dbg!("Apply buffered");
         let mut rcv = replica.send_buffered().await?;
-        while let Some((_, request)) = rcv
+        while let Some((t, request)) = rcv
             .recv()
             .await
             .ok_or_else(|| SyneviError::ReceiveError("Channel closed".to_string()))?
         {
+            dbg!(t);
             match request {
                 BufferedMessage::Commit(req) => {
-                    replica.commit(req).await?;
+                    replica.commit(req, true).await?;
                 }
                 BufferedMessage::Apply(req) => {
-                    replica.apply(req).await?;
+                    replica.apply(req, true).await?;
                 }
             }
         }
@@ -289,70 +297,76 @@ where
     async fn sync_events(
         &self,
         highest_applied: T,
-        execution_hash: [u8; 32],
+        last_applied: [u8; 32],
+        replica: &ReplicaConfig<N, E, S>,
     ) -> Result<(), SyneviError> {
         let mut last_applied_t_zero = T0::default();
         if highest_applied != T::default() {
             // 2.2 else Request stream with events until last_applied (highest t of JoinElectorate)
             let mut rcv = self.network.get_stream_events(highest_applied).await?;
+            //let mut join_set = JoinSet::new();
             while let Some(event) = rcv.recv().await {
                 last_applied_t_zero = event.t_zero.as_slice().try_into()?;
                 let state: State = event.state.into();
+                dbg!("Got event", &last_applied_t_zero, &state);
+                self.event_store
+                    .upsert_tx(UpsertEvent {
+                        id: u128::from_be_bytes(event.id.as_slice().try_into()?),
+                        t_zero: last_applied_t_zero,
+                        t: event.t.as_slice().try_into()?,
+                        state,
+                        transaction: Some(event.transaction.clone()),
+                        dependencies: Some(from_dependency(event.dependencies.clone())?),
+                        ballot: Some(event.ballot.as_slice().try_into()?),
+                        execution_hash: Some(event.execution_hash.as_slice().try_into()?),
+                    })
+                    .await?;
                 match state {
-                    State::Commited => {
-                        let (sx, rx) = tokio::sync::oneshot::channel();
-                        self.get_wait_handler()
-                            .await?
-                            .send_msg(
-                                last_applied_t_zero,
-                                event.t.as_slice().try_into()?,
-                                from_dependency(event.dependencies)?,
-                                event.transaction,
-                                WaitAction::CommitBefore,
-                                sx,
-                                u128::from_be_bytes(event.id.as_slice().try_into()?),
-                            )
-                            .await?;
-                        let _ = rx.await;
-                    }
                     State::Applied => {
-                        let (sx, rx) = tokio::sync::oneshot::channel();
-                        self.get_wait_handler()
-                            .await?
-                            .send_msg(
-                                last_applied_t_zero,
-                                event.t.as_slice().try_into()?,
-                                from_dependency(event.dependencies)?,
-                                event.transaction,
-                                WaitAction::ApplyAfter,
-                                sx,
-                                u128::from_be_bytes(event.id.as_slice().try_into()?),
+                        //let clone = replica.clone();
+                        //join_set.spawn(async move {
+                        // let res = replica
+                        //     .commit(
+                        //         CommitRequest {
+                        //             id: event.id.clone(),
+                        //             event: event.transaction.clone(),
+                        //             timestamp_zero: event.t_zero.clone(),
+                        //             timestamp: event.t.clone(),
+                        //             dependencies: event.dependencies.clone(),
+                        //         },
+                        //         false,
+                        //     )
+                        //     .await;
+                        // dbg!(&res);
+                        let res = replica
+                            .apply(
+                                ApplyRequest {
+                                    id: event.id,
+                                    event: event.transaction,
+                                    timestamp_zero: event.t_zero,
+                                    timestamp: event.t,
+                                    dependencies: event.dependencies,
+                                    execution_hash: event.execution_hash,
+                                    transaction_hash: event.transaction_hash,
+                                },
+                                false,
                             )
-                            .await?;
-                        let _ = rx.await;
+                            .await;
+                        dbg!(&res);
+                        //});
                     }
 
-                    _ => panic!("Unexpected message state"),
+                    _ => {
+                        panic!("Unexpected sync event");
+                    }
                 }
             }
-            // 2.3 Check if execution hash == last applied execution hash
-            if let Some(Event { hashes, .. }) =
-                self.event_store.get_event(last_applied_t_zero).await?
-            {
-                if let Some(hashes) = hashes {
-                    if hashes.execution_hash != execution_hash {
-                        panic!("Mismatched execution hashes for last_applied event")
-                    }
-                } else if execution_hash == [0; 32] {
-                    ()
-                } else {
-                    panic!("No hashes for last_applied event found")
-                }
-            } else {
-                // Not sure if we should panic here
-                if last_applied_t_zero != T0::default() {
-                    panic!("No last_applied event found")
-                }
+            //let _ = join_set.join_all().await.iter();
+            // 2.3 Check if last_applied == last applied execution hash
+            let (t, last_applied_self) = self.event_store.last_applied_hash().await?;
+            if last_applied_self != last_applied {
+                dbg!(&t, &last_applied_self, last_applied);
+                //panic!("Mismatched execution hashes for last_applied event")
             }
         }
         Ok(())

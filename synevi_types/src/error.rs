@@ -56,7 +56,7 @@ pub enum SyneviError {
     DependencyNotFound(u128),
     #[error("Missing execution hash")]
     MissingExecutionHash,
-    #[error("Missing execution hash")]
+    #[error("Missing transaction hash")]
     MissingTransactionHash,
     #[error("Competing coordinator")]
     CompetingCoordinator,

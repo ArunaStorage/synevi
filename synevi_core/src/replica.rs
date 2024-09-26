@@ -33,7 +33,7 @@ where
     S: Store,
 {
     node: Arc<Node<N, E, S>>,
-    buffer: Arc<Mutex<BTreeMap<T0, BufferedMessage>>>,
+    buffer: Arc<Mutex<BTreeMap<T, BufferedMessage>>>,
     notifier: Sender<Report>,
     ready: Arc<AtomicBool>,
 }
@@ -59,7 +59,7 @@ where
 
     pub async fn send_buffered(
         &self,
-    ) -> Result<Receiver<Option<(T0, BufferedMessage)>>, SyneviError> {
+    ) -> Result<Receiver<Option<(T, BufferedMessage)>>, SyneviError> {
         let (sdx, rcv) = channel(100);
         let inner = self.buffer.clone();
         tokio::spawn(async move {
@@ -84,7 +84,6 @@ where
         });
         Ok(rcv)
     }
-    
 }
 
 #[async_trait::async_trait]
@@ -94,13 +93,17 @@ where
     E: Executor + Send + Sync,
     S: Store + Send + Sync,
 {
+    fn is_ready(&self) -> bool {
+        self.ready.load(Ordering::Relaxed)
+    }
     #[instrument(level = "trace", skip(self, request))]
     async fn pre_accept(
         &self,
         request: PreAcceptRequest,
         _node_serial: u16,
+        ready: bool,
     ) -> Result<PreAcceptResponse, SyneviError> {
-        if !self.ready.load(Ordering::Relaxed) {
+        if !ready {
             return Ok(PreAcceptResponse::default());
         }
 
@@ -149,8 +152,12 @@ where
     }
 
     #[instrument(level = "trace", skip(self, request))]
-    async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse, SyneviError> {
-        if !self.ready.load(Ordering::Relaxed) {
+    async fn accept(
+        &self,
+        request: AcceptRequest,
+        ready: bool,
+    ) -> Result<AcceptResponse, SyneviError> {
+        if !ready {
             return Ok(AcceptResponse::default());
         }
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
@@ -201,13 +208,17 @@ where
     }
 
     #[instrument(level = "trace", skip(self, request))]
-    async fn commit(&self, request: CommitRequest) -> Result<CommitResponse, SyneviError> {
-        if !self.ready.load(Ordering::Relaxed) {
-            let t0 = request.timestamp_zero.as_slice().try_into()?;
+    async fn commit(
+        &self,
+        request: CommitRequest,
+        ready: bool,
+    ) -> Result<CommitResponse, SyneviError> {
+        if !ready {
+            let t = request.timestamp.as_slice().try_into()?;
             self.buffer
                 .lock()
                 .await
-                .insert(t0, BufferedMessage::Commit(request));
+                .insert(t, BufferedMessage::Commit(request));
             return Ok(CommitResponse {});
         }
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
@@ -235,13 +246,17 @@ where
     }
 
     #[instrument(level = "trace", skip(self, request))]
-    async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse, SyneviError> {
-        if !self.ready.load(Ordering::Relaxed) {
-            let t0 = request.timestamp_zero.as_slice().try_into()?;
+    async fn apply(
+        &self,
+        request: ApplyRequest,
+        ready: bool,
+    ) -> Result<ApplyResponse, SyneviError> {
+        if !ready {
+            let t = request.timestamp.as_slice().try_into()?;
             self.buffer
                 .lock()
                 .await
-                .insert(t0, BufferedMessage::Apply(request));
+                .insert(t, BufferedMessage::Apply(request));
             return Ok(ApplyResponse {});
         }
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
@@ -271,6 +286,7 @@ where
                 request_id,
             )
             .await?;
+
         rx.await
             .map_err(|_| SyneviError::ReceiveError("Wait receiver closed".to_string()))?;
 
@@ -283,13 +299,20 @@ where
                 // TODO: Build special execution
                 let result = match &request {
                     InternalExecution::JoinElectorate { id, serial, host } => {
-                        let res = self.node.add_member(*id, *serial, host.clone(), false).await;
-                        let (t, hash) = self.node.event_store.last_applied_hash().await?;
-                        self.node
-                            .network
-                            .report_config(t, hash, host.clone())
-                            .await?;
-                        res
+                        if id != &self.node.info.id {
+                            let res = self
+                                .node
+                                .add_member(*id, *serial, host.clone(), false)
+                                .await;
+                            let (t, hash) = self.node.event_store.last_applied_hash().await?;
+                            self.node
+                                .network
+                                .report_config(t, hash, host.clone())
+                                .await?;
+                            res
+                        } else {
+                            Ok(())
+                        }
                     }
                     InternalExecution::ReadyElectorate { id, serial } => {
                         if id != &self.node.info.id {
@@ -311,19 +334,25 @@ where
         let mut hasher = Sha3_256::new();
         postcard::to_io(&result, &mut hasher)?;
         let hash = hasher.finalize();
-        let _hashes = self
+        let hashes = self
             .node
             .event_store
             .get_and_update_hash(t_zero, hash.into())
-            .await?;
+            .await;
+        if let Err(err) = hashes {
+            dbg!(err);
+        }
 
         Ok(ApplyResponse {})
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse, SyneviError> {
-        if !self.ready.load(Ordering::Relaxed) {
-
+    async fn recover(
+        &self,
+        request: RecoverRequest,
+        ready: bool,
+    ) -> Result<RecoverResponse, SyneviError> {
+        if !ready {
             return Ok(RecoverResponse::default());
         }
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
@@ -425,10 +454,8 @@ where
             )
             .await?;
         match _res {
-            ExecutorResult::External(_) => {
-            }
-            ExecutorResult::Internal(_internal_execution) => {
-            }
+            ExecutorResult::External(_) => {}
+            ExecutorResult::Internal(_internal_execution) => {}
         }
 
         Ok(JoinElectorateResponse { majority })
@@ -436,39 +463,64 @@ where
 
     async fn get_events(
         &self,
-        _request: GetEventRequest,
+        request: GetEventRequest,
     ) -> Receiver<Result<GetEventResponse, SyneviError>> {
         if !self.ready.load(Ordering::Relaxed) {
             todo!()
         }
-        let (sdx, rcv) = tokio::sync::mpsc::channel(100);
-        let mut store_rcv = self.node.event_store.get_events_until(T::default()).await;
-        while let Some(Ok(event)) = store_rcv.recv().await {
-            let response = {
-                if let Some(hashes) = event.hashes {
-                    Ok(GetEventResponse {
-                        id: event.id.to_be_bytes().to_vec(),
-                        t_zero: event.t_zero.into(),
-                        t: event.t.into(),
-                        state: event.state.into(),
-                        transaction: event.transaction,
-                        dependencies: into_dependency(&event.dependencies),
-                        ballot: event.ballot.into(),
-                        last_updated: Vec::new(), // TODO
-                        previous_hash: hashes.previous_hash.to_vec(),
-                        transaction_hash: hashes.transaction_hash.to_vec(),
-                        execution_hash: hashes.execution_hash.to_vec(),
-                    })
-                } else {
-                    Err(SyneviError::MissingExecutionHash)
-                }
-            };
-            sdx.send(response).await.unwrap();
-        }
+        let (sdx, rcv) = tokio::sync::mpsc::channel(200);
+        let t = match request.last_applied.as_slice().try_into() {
+            Ok(t) => t,
+            Err(err) => {
+                sdx.send(Err(err)).await.unwrap();
+                return rcv;
+            }
+        };
+        let mut store_rcv = self.node.event_store.get_events_after(t).await;
+        tokio::spawn(async move {
+            while let Some(Ok(event)) = store_rcv.recv().await {
+                let response = {
+                    if let Some(hashes) = event.hashes {
+                        Ok(GetEventResponse {
+                            id: event.id.to_be_bytes().to_vec(),
+                            t_zero: event.t_zero.into(),
+                            t: event.t.into(),
+                            state: event.state.into(),
+                            transaction: event.transaction,
+                            dependencies: into_dependency(&event.dependencies),
+                            ballot: event.ballot.into(),
+                            last_updated: Vec::new(), // TODO
+                            previous_hash: hashes.previous_hash.to_vec(),
+                            transaction_hash: hashes.transaction_hash.to_vec(),
+                            execution_hash: hashes.execution_hash.to_vec(),
+                        })
+                    } else {
+                        dbg!("MissingExecutionHash");
+
+                        // Ok(GetEventResponse {
+                        //     id: event.id.to_be_bytes().to_vec(),
+                        //     t_zero: event.t_zero.into(),
+                        //     t: event.t.into(),
+                        //     state: event.state.into(),
+                        //     transaction: event.transaction,
+                        //     dependencies: into_dependency(&event.dependencies),
+                        //     ballot: event.ballot.into(),
+                        //     last_updated: Vec::new(), // TODO
+                        //     previous_hash: [0;32].to_vec(),
+                        //     transaction_hash: [0;32].to_vec(),
+                        //     execution_hash: [0;32].to_vec(),
+                        // })
+                        Err(SyneviError::MissingExecutionHash)
+                    }
+                };
+                sdx.send(response).await.unwrap();
+            }
+        });
         // Stream all events to member
         rcv
     }
 
+    // Existing Node
     async fn ready_electorate(
         &self,
         request: ReadyElectorateRequest,
@@ -482,6 +534,7 @@ where
             node_serial,
         } = request;
         let node = self.node.clone();
+        dbg!("Before ready transaction");
         node.transaction(
             Ulid::new().0,
             TransactionPayload::Internal(InternalExecution::ReadyElectorate {
@@ -490,9 +543,11 @@ where
             }),
         )
         .await?;
+        dbg!("After ready transaction");
         Ok(ReadyElectorateResponse {})
     }
 
+    // TODO: Move trait to Joining Node -> Rename to receive_config, Ready checks
     async fn report_last_applied(
         &self,
         request: ReportLastAppliedRequest,
@@ -521,6 +576,7 @@ where
                 SyneviError::InvalidConversionFromBytes("Invalid hash conversion".to_string())
             })?,
         };
+        dbg!(&report);
         self.notifier.send(report).await.map_err(|_| {
             SyneviError::SendError("Sender for reporting last applied closed".to_string())
         })?;
@@ -528,7 +584,7 @@ where
     }
 }
 
-impl<N,E,S> Clone for ReplicaConfig<N, E, S>
+impl<N, E, S> Clone for ReplicaConfig<N, E, S>
 where
     N: Network,
     E: Executor,

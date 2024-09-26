@@ -238,10 +238,7 @@ impl Store for PersistentStore {
             let mut event = Event::from(upsert_event.clone());
 
             if matches!(event.state, State::Applied) {
-                if let Some(old_t) = event.update_t(upsert_event.t) {
-                    data.mappings.remove(&old_t);
-                    data.mappings.insert(event.t, event.t_zero);
-                }
+                data.mappings.insert(event.t, event.t_zero);
                 if let Some(deps) = upsert_event.dependencies {
                     event.dependencies = deps;
                 }
@@ -257,12 +254,10 @@ impl Store for PersistentStore {
                     }
                 }
 
-                if event.state == State::Applied {
-                    data.last_applied = event.t;
-                    let hashes = event.hash_event(data.latest_hash);
-                    data.latest_hash = hashes.transaction_hash;
-                    event.hashes = Some(hashes);
-                };
+                data.last_applied = event.t;
+                let hashes = event.hash_event(data.latest_hash);
+                data.latest_hash = hashes.transaction_hash;
+                event.hashes = Some(hashes);
                 events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
             } else {
                 events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
@@ -285,6 +280,7 @@ impl Store for PersistentStore {
 
         // Event is already applied
         if event.state == State::Applied {
+            dbg!("Already applied", event.t_zero);
             write_txn.commit()?;
             return Ok(());
         }
@@ -436,7 +432,6 @@ impl Store for PersistentStore {
                 ballot: event.ballot,
             })
         } else {
-            write_txn.commit()?;
             Err(SyneviError::EventNotFound(t_zero_recover.get_inner()))
         }
     }
@@ -454,17 +449,25 @@ impl Store for PersistentStore {
         self.data.lock().await.last_applied
     }
 
-    async fn get_events_until(&self, _last_applied: T) -> Receiver<Result<Event, SyneviError>> {
+    async fn get_events_after(&self, _last_applied: T) -> Receiver<Result<Event, SyneviError>> {
         let (sdx, rcv) = tokio::sync::mpsc::channel(100);
         let db = self.db.clone();
+        let iter = self.data.lock().await.mappings.clone();
         tokio::task::spawn_blocking(move || {
             let read_txn = db.read_txn()?;
             let events_db: EventDb = db
                 .open_database(&read_txn, Some(EVENT_DB_NAME))?
                 .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
 
-            for entry in events_db.iter(&read_txn)? {
-                let (_, event) = entry?;
+            for (_, entry) in iter.iter() {
+                let Some(event) = events_db.get(&read_txn, &entry.get_inner())? else {
+                    return Err(SyneviError::EventNotFound(entry.get_inner()));
+                };
+                //let (_, event) = entry;
+                if !matches!(event.state, State::Applied) {
+                    continue;
+                }
+                dbg!("replica store worker", &event.t_zero);
                 sdx.blocking_send(Ok(event))
                     .map_err(|e| SyneviError::SendError(e.to_string()))?;
             }

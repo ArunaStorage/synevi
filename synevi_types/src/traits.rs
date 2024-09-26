@@ -103,7 +103,7 @@ pub trait Store: Send + Sync + Sized + 'static {
     async fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError>;
 
     async fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError>;
-    async fn get_events_until(&self, last_applied: T) -> Receiver<Result<Event, SyneviError>>;
+    async fn get_events_after(&self, last_applied: T) -> Receiver<Result<Event, SyneviError>>;
 
     async fn get_and_update_hash(
         &self,

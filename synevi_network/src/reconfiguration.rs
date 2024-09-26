@@ -60,6 +60,7 @@ impl ReplicaBuffer {
 
 #[async_trait::async_trait]
 pub trait Reconfiguration {
+    // Existing nodes
     async fn join_electorate(
         &self,
         request: JoinElectorateRequest,
@@ -73,6 +74,7 @@ pub trait Reconfiguration {
         request: ReadyElectorateRequest,
     ) -> Result<ReadyElectorateResponse, SyneviError>;
 
+    // Joining node
     async fn report_last_applied(
         &self,
         request: ReportLastAppliedRequest,

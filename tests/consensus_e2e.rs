@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use rand::Rng;
     use std::collections::BTreeMap;
     use std::net::SocketAddr;
     use std::str::FromStr;
@@ -35,9 +36,14 @@ mod tests {
         for (i, name) in node_names.iter().enumerate() {
             for (i2, node) in nodes.iter_mut().enumerate() {
                 if i != i2 {
-                    node.add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i), true)
-                        .await
-                        .unwrap();
+                    node.add_member(
+                        *name,
+                        i as u16,
+                        format!("http://localhost:{}", 10000 + i),
+                        true,
+                    )
+                    .await
+                    .unwrap();
                 }
             }
         }
@@ -157,9 +163,14 @@ mod tests {
             for (i, name) in node_names.iter().enumerate() {
                 for (i2, node) in nodes.iter_mut().enumerate() {
                     if i != i2 {
-                        node.add_member(*name, i as u16, format!("http://localhost:{}", 11000 + i), true)
-                            .await
-                            .unwrap();
+                        node.add_member(
+                            *name,
+                            i as u16,
+                            format!("http://localhost:{}", 11000 + i),
+                            true,
+                        )
+                        .await
+                        .unwrap();
                     }
                 }
             }
@@ -363,7 +374,12 @@ mod tests {
             for (i, name) in node_names.iter().enumerate() {
                 coordinator
                     .clone()
-                    .add_member(*name, i as u16, format!("http://localhost:{}", 12000 + i),true)
+                    .add_member(
+                        *name,
+                        i as u16,
+                        format!("http://localhost:{}", 12000 + i),
+                        true,
+                    )
                     .await
                     .unwrap();
             }
@@ -442,22 +458,54 @@ mod tests {
                 nodes.push(node);
             }
         }
-        dbg!("Finished config");
+        dbg!("Finished setup");
 
         let coordinator = nodes.pop().unwrap();
 
         let mut joinset = tokio::task::JoinSet::new();
 
-        for i in 0..10000 {
-            let coordinator = coordinator.clone();
-            joinset.spawn(async move {
-                coordinator
-                    .transaction(
-                        i,
-                        synevi::TransactionPayload::External(Vec::from("This is a transaction")),
-                    )
-                    .await
-            });
+        let random_number = rand::thread_rng().gen_range(0..99);
+        dbg!(&random_number);
+        for i in 0..100 {
+            if i == random_number {
+                let id = Ulid::new();
+                let network = synevi_network::network::GrpcNetwork::new(
+                    SocketAddr::from_str("0.0.0.0:13006").unwrap(),
+                    "http://0.0.0.0:13006".to_string(),
+                    id,
+                    6,
+                );
+
+                // Copy & create db
+                let test_path = format!("/dev/shm/{id}/");
+                fs::create_dir(&test_path).await.unwrap();
+                dbg!(&test_path);
+                let store = PersistentStore::new(test_path, 6).unwrap();
+                let node = Node::new_with_member(
+                    id,
+                    6,
+                    network,
+                    DummyExecutor,
+                    store,
+                    "http://0.0.0.0:13000".to_string(),
+                )
+                .await
+                .unwrap();
+                nodes.push(node);
+                dbg!("Finished second config");
+            } else {
+                let coordinator = coordinator.clone();
+                joinset.spawn(async move {
+                    coordinator
+                        .transaction(
+                            i,
+                            synevi::TransactionPayload::External(Vec::from(
+                                "This is a transaction",
+                            )),
+                        )
+                        .await
+                });
+            }
         }
         while let Some(res) = joinset.join_next().await {
             match res.unwrap().unwrap() {

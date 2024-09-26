@@ -98,7 +98,7 @@ impl Store for MemStore {
         self.store.lock().await.last_applied()
     }
 
-    async fn get_events_until(&self, last_applied: T) -> Receiver<Result<Event, SyneviError>> {
+    async fn get_events_after(&self, last_applied: T) -> Receiver<Result<Event, SyneviError>> {
         let (sdx, rcv) = tokio::sync::mpsc::channel(100);
         // TODO: Spawn in separate threads and remove the lock
         if let Err(err) = self
@@ -254,6 +254,7 @@ impl InternalStore {
             return Ok(());
         }
 
+        //TODO: Apply changes from database.rs
         if event.is_update(&upsert_event) {
             if let Some(old_t) = event.update_t(upsert_event.t) {
                 self.mappings.remove(&old_t);

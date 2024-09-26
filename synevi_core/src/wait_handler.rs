@@ -3,6 +3,7 @@ use crate::node::Node;
 use ahash::RandomState;
 use async_channel::{Receiver, Sender};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, AtomicU8};
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
@@ -28,8 +29,6 @@ pub struct WaitMessage {
     deps: HashSet<T0, RandomState>,
     transaction: Vec<u8>,
     action: WaitAction,
-    //execution_hash: Option<[u8; 32]>,
-    //notify: Option<oneshot::Sender<Option<Hashes>>>,
     notify: Option<oneshot::Sender<()>>,
 }
 
@@ -58,6 +57,8 @@ struct WaiterState {
     committed: HashMap<T0, T, RandomState>,
     applied: HashSet<T0, RandomState>,
 }
+
+static RECOVERY_CYCLE: AtomicU8 = AtomicU8::new(0);
 
 impl<N, E, S> WaitHandler<N, E, S>
 where
@@ -103,12 +104,17 @@ where
         // HashMap<T0_dep waiting_for, Vec<T0_transaction waiting>>
 
         let mut waiter_state = WaiterState::new();
+        let mut recovering = BTreeSet::new();
 
         loop {
-            match timeout(Duration::from_millis(50), self.receiver.recv()).await {
+            let future = async {
+                let msg = self.receiver.recv().await;
+                dbg!(&msg);
+                msg
+            };
+            match timeout(Duration::from_millis(50), future).await {
                 Ok(Ok(msg)) => match msg.action {
                     WaitAction::CommitBefore => {
-                        //println!("CommitBefore");
                         if let Err(e) = self.upsert_event(&msg).await {
                             tracing::error!("Error upserting event: {:?}", e);
                             println!("Error upserting event: {:?}", e);
@@ -133,6 +139,7 @@ where
                         waiter_state.insert_commit(msg);
                     }
                     WaitAction::ApplyAfter => {
+                        //waiter_state.committed.insert(msg.t_zero, msg.t);
                         if let Some(mut msg) = waiter_state.insert_apply(msg) {
                             if let Err(e) = self.upsert_event(&msg).await {
                                 tracing::error!("Error upserting event: {:?}", e);
@@ -163,10 +170,12 @@ where
                     }
                 },
                 _ => {
-                    if let Some(t0_recover) = self.check_recovery(&waiter_state) {
+                    if let Some(t0_recover) = self.check_recovery(&mut waiter_state) {
+                        recovering.insert(t0_recover);
                         //println!("Recovering: {:?}", t0_recover);
+                        let recover_t0 = recovering.pop_last().unwrap_or(t0_recover);
                         let wait_handler = self.clone();
-                        wait_handler.recover(t0_recover, &mut waiter_state).await;
+                        wait_handler.recover(recover_t0, &mut waiter_state).await;
                     }
                 }
             }
@@ -206,17 +215,34 @@ where
     }
 
     async fn recover(self: Arc<Self>, t0_recover: T0, waiter_state: &mut WaiterState) {
+        dbg!("Started recovery of", t0_recover);
         if let Some(event) = waiter_state.events.get_mut(&t0_recover) {
             event.started_at = Instant::now();
+            if let Some(msg) = &event.wait_message {
+                dbg!(msg.t);
+            }
+            if RECOVERY_CYCLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 5{
+                panic!("Started 2nd recovery");
+            }
+        } else {
+            dbg!("No event found");
         }
         let node = self.node.clone();
-        tokio::spawn(async move { Coordinator::recover(node, t0_recover).await });
+        tokio::spawn(async move {
+            if let Err(err) = Coordinator::recover(node, t0_recover).await {
+                dbg!(err);
+            }
+        });
+        //panic!("Started recovery");
     }
 
-    fn check_recovery(&self, waiter_state: &WaiterState) -> Option<T0> {
-        for WaitDependency {
-            deps, started_at, ..
-        } in waiter_state.events.values()
+    fn check_recovery(&self, waiter_state: &mut WaiterState) -> Option<T0> {
+        for (
+            t0,
+            WaitDependency {
+                deps, started_at, ..
+            },
+        ) in waiter_state.events.iter_mut()
         {
             if started_at.elapsed() > Duration::from_secs(1) {
                 let sorted_deps: BTreeSet<T0> = deps.iter().cloned().collect();
@@ -237,12 +263,21 @@ where
                     } else {
                         // Lowest T0 is not commited -> Recover lowest t0 to ensure commit
                         // Recover t0_dep
+                        dbg!("Recover deps from:", &t0);
+                        //dbg!(&waiter_state.events);
+                        dbg!(&waiter_state.committed);
+                        dbg!(&waiter_state.applied);
+                        
+                        *started_at = Instant::now();
                         return Some(t0_dep);
                     }
                 }
 
                 // Recover min_dep
                 if let Some((t0_dep, _)) = min_dep {
+                    dbg!("Recover deps from:", &t0);
+
+                    *started_at = Instant::now();
                     return Some(t0_dep);
                 }
             }
@@ -378,6 +413,7 @@ impl WaiterState {
                             continue;
                         }
                     }
+                    // if not applied and not comitted with lower t
                     wait_dep.deps.insert(*dep_t0);
                 }
             }

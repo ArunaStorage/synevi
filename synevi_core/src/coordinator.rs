@@ -319,8 +319,7 @@ where
             )
             .await?;
 
-        rx.await
-            .map_err(|_| SyneviError::ReceiveError("Hash receiver closed".to_string()))?;
+        rx.await.map_err(|_| SyneviError::ReceiveError("Wait handle sender closed".to_string()))?;
 
         let result = match &self.transaction.transaction {
             TransactionPayload::None => Err(SyneviError::TransactionNotFound),
@@ -330,7 +329,7 @@ where
                 let result = match request {
                     InternalExecution::JoinElectorate { id, serial, host } => {
                         let res = self.node.add_member(*id, *serial, host.clone(), false).await;
-                        let (t, hash) = self.node.event_store.last_applied_hash().await?;
+                        let (t, hash) = self.node.event_store.last_applied_hash().await?; // TODO: Remove ?
                         self.node
                             .network
                             .report_config(t, hash, host.clone())
@@ -401,8 +400,11 @@ where
                         .map(|res| res.into_inner())
                         .collect::<Result<Vec<_>, SyneviError>>()?,
                 )
-                .await?;
-            match recover_result {
+                .await;
+            if let Err(err) = &recover_result {
+                dbg!(&err);
+            }
+            match recover_result? {
                 RecoveryState::Recovered(result) => return Ok(result),
                 RecoveryState::RestartRecovery => {
                     continue;
