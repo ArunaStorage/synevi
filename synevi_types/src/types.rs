@@ -349,7 +349,7 @@ impl Event {
         hasher.update(self.transaction.as_slice());
         hasher.update(previous_hash);
 
-        let event_hash = hasher.finalize().into();
+        let event_hash: [u8;32] = hasher.finalize().into();
         Hashes {
             previous_hash,
             transaction_hash: event_hash,

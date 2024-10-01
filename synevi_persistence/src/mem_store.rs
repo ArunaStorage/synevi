@@ -98,14 +98,14 @@ impl Store for MemStore {
         self.store.lock().await.last_applied()
     }
 
-    async fn get_events_after(&self, last_applied: T) -> Receiver<Result<Event, SyneviError>> {
+    async fn get_events_after(&self, last_applied: T, self_event: u128) -> Receiver<Result<Event, SyneviError>> {
         let (sdx, rcv) = tokio::sync::mpsc::channel(100);
         // TODO: Spawn in separate threads and remove the lock
         if let Err(err) = self
             .store
             .lock()
             .await
-            .get_events_until(last_applied, sdx)
+            .get_events_until(last_applied, self_event, sdx)
             .await
         {
             tracing::error!(?err);
@@ -386,13 +386,15 @@ impl InternalStore {
     async fn get_events_until(
         &self,
         _last_applied: T,
+        self_event: u128,
         sdx: Sender<Result<Event, SyneviError>>,
     ) -> Result<(), SyneviError> {
-        for (_, event) in &self.events {
-            sdx.send(Ok(event.clone()))
-                .await
-                .map_err(|e| SyneviError::SendError(e.to_string()))?;
-        }
-        Ok(())
+        todo!()
+        // for (_, event) in &self.events {
+        //     sdx.send(Ok(event.clone()))
+        //         .await
+        //         .map_err(|e| SyneviError::SendError(e.to_string()))?;
+        // }
+        // Ok(())
     }
 }

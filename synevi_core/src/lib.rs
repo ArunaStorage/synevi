@@ -74,12 +74,13 @@ pub mod tests {
             0
         }
 
-        async fn broadcast_config(&self, _host: String) -> Result<u32, SyneviError> {
-            Ok(0)
+        async fn broadcast_config(&self, _host: String) -> Result<(u32, Vec<u8>), SyneviError> {
+            Ok((0, vec![0]))
         }
         async fn get_stream_events(
             &self,
             _last_applied: T,
+            _self_id: Vec<u8>,
         ) -> Result<Receiver<GetEventResponse>, SyneviError> {
             let (_, rcv) = tokio::sync::mpsc::channel(1);
             Ok(rcv)

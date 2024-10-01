@@ -280,7 +280,6 @@ impl Store for PersistentStore {
 
         // Event is already applied
         if event.state == State::Applied {
-            dbg!("Already applied", event.t_zero);
             write_txn.commit()?;
             return Ok(());
         }
@@ -449,25 +448,27 @@ impl Store for PersistentStore {
         self.data.lock().await.last_applied
     }
 
-    async fn get_events_after(&self, _last_applied: T) -> Receiver<Result<Event, SyneviError>> {
+    async fn get_events_after(
+        &self,
+        _last_applied: T,
+        self_event: u128,
+    ) -> Receiver<Result<Event, SyneviError>> {
         let (sdx, rcv) = tokio::sync::mpsc::channel(100);
         let db = self.db.clone();
-        let iter = self.data.lock().await.mappings.clone();
         tokio::task::spawn_blocking(move || {
             let read_txn = db.read_txn()?;
             let events_db: EventDb = db
                 .open_database(&read_txn, Some(EVENT_DB_NAME))?
                 .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
 
-            for (_, entry) in iter.iter() {
-                let Some(event) = events_db.get(&read_txn, &entry.get_inner())? else {
-                    return Err(SyneviError::EventNotFound(entry.get_inner()));
-                };
-                //let (_, event) = entry;
-                if !matches!(event.state, State::Applied) {
-                    continue;
-                }
-                dbg!("replica store worker", &event.t_zero);
+            for result in events_db.iter(&read_txn)? {
+                let (_t0, event) = result?;
+                dbg!("replica store worker", &event.id, &event.t_zero, &event.t);
+                //if event.id == self_event {
+                //    sdx.blocking_send(Ok(event))
+                //        .map_err(|e| SyneviError::SendError(e.to_string()))?;
+                //    break;
+                //}
                 sdx.blocking_send(Ok(event))
                     .map_err(|e| SyneviError::SendError(e.to_string()))?;
             }

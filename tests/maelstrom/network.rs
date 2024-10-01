@@ -179,11 +179,12 @@ impl Network for MaelstromNetwork {
     async fn get_stream_events(
         &self,
         _last_applied: T,
+        _self_event: Vec<u8>,
     ) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError> {
         todo!()
     }
 
-    async fn broadcast_config(&self, _host: String) -> Result<u32, SyneviError> {
+    async fn broadcast_config(&self, _host: String) -> Result<(u32, Vec<u8>), SyneviError> {
         todo!()
     }
 

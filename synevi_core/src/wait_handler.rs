@@ -3,7 +3,8 @@ use crate::node::Node;
 use ahash::RandomState;
 use async_channel::{Receiver, Sender};
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU8};
+use std::panic;
+use std::sync::atomic::AtomicU8;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
@@ -48,7 +49,6 @@ where
 struct WaitDependency {
     wait_message: Option<WaitMessage>,
     deps: HashSet<T0, RandomState>,
-    #[allow(dead_code)]
     started_at: Instant,
 }
 
@@ -109,12 +109,18 @@ where
         loop {
             let future = async {
                 let msg = self.receiver.recv().await;
-                dbg!(&msg);
+                //if self.node.info.serial == 6 {
+                //    dbg!(&msg);
+                //}
                 msg
             };
             match timeout(Duration::from_millis(50), future).await {
                 Ok(Ok(msg)) => match msg.action {
                     WaitAction::CommitBefore => {
+                        //println!(
+                        //    "t0: {:?}, t: {:?}, deps: {:?}",
+                        //    &msg.t_zero, &msg.t, &msg.deps
+                        //);
                         if let Err(e) = self.upsert_event(&msg).await {
                             tracing::error!("Error upserting event: {:?}", e);
                             println!("Error upserting event: {:?}", e);
@@ -139,7 +145,77 @@ where
                         waiter_state.insert_commit(msg);
                     }
                     WaitAction::ApplyAfter => {
-                        //waiter_state.committed.insert(msg.t_zero, msg.t);
+                        //println!("t0: {:?}, t: {:?}, deps: {:?}", &msg.t_zero, &msg.t, &msg.deps);
+                        match &self.node.event_store.get_event(msg.t_zero).await? {
+                            Some(event) if event.state < State::Commited => {
+                                if let Err(e) = self.upsert_event(&msg).await {
+                                    tracing::error!("Error upserting event: {:?}", e);
+                                    println!("Error upserting event: {:?}", e);
+                                    continue;
+                                };
+                                waiter_state.committed.insert(msg.t_zero, msg.t);
+                                let mut to_apply =
+                                    waiter_state.remove_from_waiter_commit(&msg.t_zero, &msg.t);
+                                while let Some(mut apply) = to_apply.pop_first() {
+                                    apply.1.action = WaitAction::ApplyAfter;
+                                    if let Err(e) = self.upsert_event(&msg).await {
+                                        tracing::error!("Error upserting event: {:?}", e);
+                                        println!("Error upserting event: {:?}", e);
+                                        continue;
+                                    };
+                                    waiter_state.applied.insert(apply.1.t_zero);
+                                    if let Some(notify) = apply.1.notify.take() {
+                                        let _ = notify.send(());
+                                    }
+                                    waiter_state
+                                        .remove_from_waiter_apply(&apply.1.t_zero, &mut to_apply);
+                                }
+                                waiter_state.insert_commit(WaitMessage {
+                                    id: msg.id,
+                                    t_zero: msg.t_zero,
+                                    t: msg.t,
+                                    deps: msg.deps.clone(),
+                                    transaction: msg.transaction.clone(),
+                                    action: WaitAction::CommitBefore,
+                                    notify: None,
+                                });
+                            }
+                            None => {
+                                if let Err(e) = self.upsert_event(&msg).await {
+                                    tracing::error!("Error upserting event: {:?}", e);
+                                    println!("Error upserting event: {:?}", e);
+                                    continue;
+                                };
+                                waiter_state.committed.insert(msg.t_zero, msg.t);
+                                let mut to_apply =
+                                    waiter_state.remove_from_waiter_commit(&msg.t_zero, &msg.t);
+                                while let Some(mut apply) = to_apply.pop_first() {
+                                    apply.1.action = WaitAction::ApplyAfter;
+                                    if let Err(e) = self.upsert_event(&msg).await {
+                                        tracing::error!("Error upserting event: {:?}", e);
+                                        println!("Error upserting event: {:?}", e);
+                                        continue;
+                                    };
+                                    waiter_state.applied.insert(apply.1.t_zero);
+                                    if let Some(notify) = apply.1.notify.take() {
+                                        let _ = notify.send(());
+                                    }
+                                    waiter_state
+                                        .remove_from_waiter_apply(&apply.1.t_zero, &mut to_apply);
+                                }
+                                waiter_state.insert_commit(WaitMessage {
+                                    id: msg.id,
+                                    t_zero: msg.t_zero,
+                                    t: msg.t,
+                                    deps: msg.deps.clone(),
+                                    transaction: msg.transaction.clone(),
+                                    action: WaitAction::CommitBefore,
+                                    notify: None,
+                                });
+                            }
+                            _ => (),
+                        }
+
                         if let Some(mut msg) = waiter_state.insert_apply(msg) {
                             if let Err(e) = self.upsert_event(&msg).await {
                                 tracing::error!("Error upserting event: {:?}", e);
@@ -171,9 +247,16 @@ where
                 },
                 _ => {
                     if let Some(t0_recover) = self.check_recovery(&mut waiter_state) {
-                        recovering.insert(t0_recover);
+                        if self.node.info.serial == 6 {
+                            dbg!("Recovering", t0_recover);
+                        }
+
+                        if !recovering.insert(t0_recover) {
+                            dbg!("Inserting existing recovery");
+                        };
+                        //panic!("Starting recovery");
                         //println!("Recovering: {:?}", t0_recover);
-                        let recover_t0 = recovering.pop_last().unwrap_or(t0_recover);
+                        let recover_t0 = recovering.pop_first().unwrap_or(t0_recover);
                         let wait_handler = self.clone();
                         wait_handler.recover(recover_t0, &mut waiter_state).await;
                     }
@@ -215,22 +298,43 @@ where
     }
 
     async fn recover(self: Arc<Self>, t0_recover: T0, waiter_state: &mut WaiterState) {
-        dbg!("Started recovery of", t0_recover);
+        if self.node.info.serial == 6 {
+            dbg!("Started recovery of", t0_recover, &self.node.info);
+            panic!("STARTED_RECOVERY");
+        }
+        //if RECOVERY_CYCLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 1 {
+        //    panic!("Reached recovery cycle threshold");
+        //}
         if let Some(event) = waiter_state.events.get_mut(&t0_recover) {
             event.started_at = Instant::now();
             if let Some(msg) = &event.wait_message {
-                dbg!(msg.t);
+                if self.node.info.serial == 6 {
+                    dbg!(msg.t);
+                }
             }
-            if RECOVERY_CYCLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 5{
-                panic!("Started 2nd recovery");
-            }
+            // if RECOVERY_CYCLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 2 {
+            //     panic!("Reached recovery cycle threshold");
+            // }
         } else {
-            dbg!("No event found");
+            if self.node.info.serial == 6 {
+                if let Ok(None) = &self.node.event_store.get_event(t0_recover).await {
+                    //let msgs = self.receiver.clone().collect::<Vec<WaitMessage>>();
+                    //self.sender.close();
+                    //dbg!("IN FLIGHT MSGS", msgs.await);
+                    dbg!(&self.node.stats.total_recovers);
+                    panic!("Nothing found in event store");
+                    //dbg!("Nothing found in event store");
+                    //return ();
+                }
+            }
         }
+
         let node = self.node.clone();
         tokio::spawn(async move {
             if let Err(err) = Coordinator::recover(node, t0_recover).await {
-                dbg!(err);
+                if self.node.info.serial == 6 {
+                    dbg!(err);
+                }
             }
         });
         //panic!("Started recovery");
@@ -261,13 +365,15 @@ where
                             min_dep = Some((t0_dep, *t_dep));
                         }
                     } else {
+                        if self.node.info.serial == 6 {
+                            dbg!("Recover deps from:", &t0);
+                            // dbg!(&waiter_state.events));
+                            // dbg!(&waiter_state.committed);
+                            // dbg!(&waiter_state.applied);
+                        }
                         // Lowest T0 is not commited -> Recover lowest t0 to ensure commit
                         // Recover t0_dep
-                        dbg!("Recover deps from:", &t0);
-                        //dbg!(&waiter_state.events);
-                        dbg!(&waiter_state.committed);
-                        dbg!(&waiter_state.applied);
-                        
+
                         *started_at = Instant::now();
                         return Some(t0_dep);
                     }
@@ -275,7 +381,9 @@ where
 
                 // Recover min_dep
                 if let Some((t0_dep, _)) = min_dep {
-                    dbg!("Recover deps from:", &t0);
+                    if self.node.info.serial == 6 {
+                        dbg!("Recover deps from:", &t0);
+                    }
 
                     *started_at = Instant::now();
                     return Some(t0_dep);

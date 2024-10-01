@@ -30,7 +30,6 @@ where
     S: Store,
 {
     pub node: Arc<Node<N, E, S>>,
-    pub network_interface: Arc<N::Ni>,
     pub transaction: TransactionStateMachine<E::Tx>,
 }
 
@@ -70,10 +69,8 @@ where
     ) -> Self {
         trace!(?id, "Coordinator: New");
         let t0 = node.event_store.init_t_zero(node.info.serial).await;
-        let network_interface = node.network.get_interface().await;
         Coordinator {
             node,
-            network_interface,
             transaction: TransactionStateMachine {
                 id,
                 state: State::Undefined,
@@ -110,8 +107,8 @@ where
             last_applied,
         };
 
-        let pre_accepted_responses = self
-            .network_interface
+        let network_interface = self.node.network.get_interface().await;
+        let pre_accepted_responses = network_interface
             .broadcast(BroadcastRequest::PreAccept(
                 pre_accepted_request,
                 self.node.info.serial,
@@ -184,8 +181,9 @@ where
                 dependencies: into_dependency(&self.transaction.dependencies),
                 last_applied,
             };
-            let accepted_responses = self
-                .network_interface
+
+            let network_interface = self.node.network.get_interface().await;
+            let accepted_responses = network_interface
                 .broadcast(BroadcastRequest::Accept(accepted_request))
                 .await?;
 
@@ -235,11 +233,11 @@ where
             timestamp: (*self.transaction.t).into(),
             dependencies: into_dependency(&self.transaction.dependencies),
         };
-        let network_interface_clone = self.network_interface.clone();
 
+        let network_interface = self.node.network.get_interface().await;
         let (committed_result, broadcast_result) = tokio::join!(
             self.commit_consensus(),
-            network_interface_clone.broadcast(BroadcastRequest::Commit(committed_request))
+            network_interface.broadcast(BroadcastRequest::Commit(committed_request))
         );
 
         committed_result.unwrap();
@@ -294,7 +292,8 @@ where
             transaction_hash: hashes.transaction_hash.to_vec(),
         };
 
-        self.network_interface
+        let network_interface = self.node.network.get_interface().await;
+        network_interface
             .broadcast(BroadcastRequest::Apply(applied_request))
             .await?; // This should not be awaited
 
@@ -319,7 +318,8 @@ where
             )
             .await?;
 
-        rx.await.map_err(|_| SyneviError::ReceiveError("Wait handle sender closed".to_string()))?;
+        rx.await
+            .map_err(|_| SyneviError::ReceiveError("Wait handle sender closed".to_string()))?;
 
         let result = match &self.transaction.transaction {
             TransactionPayload::None => Err(SyneviError::TransactionNotFound),
@@ -328,7 +328,10 @@ where
                 // TODO: Build special execution
                 let result = match request {
                     InternalExecution::JoinElectorate { id, serial, host } => {
-                        let res = self.node.add_member(*id, *serial, host.clone(), false).await;
+                        let res = self
+                            .node
+                            .add_member(*id, *serial, host.clone(), false)
+                            .await;
                         let (t, hash) = self.node.event_store.last_applied_hash().await?; // TODO: Remove ?
                         self.node
                             .network
@@ -355,7 +358,12 @@ where
             .event_store
             .get_and_update_hash(self.transaction.t_zero, hash.into())
             .await?;
-
+        println!(
+            "NODE_COORDINATOR {} with
+PREVIOUS: {:?},
+TRANSACTION: {:?}",
+            self.node.info.serial, hashes.previous_hash, hashes.transaction_hash
+        );
         Ok((result, hashes))
     }
 
@@ -368,8 +376,8 @@ where
                 .recover_event(&t0_recover, node.get_info().serial)
                 .await;
             let recover_event = recover_event?;
-            let network_interface = node.network.get_interface().await;
 
+            let network_interface = node.network.get_interface().await;
             let recover_responses = network_interface
                 .broadcast(BroadcastRequest::Recover(RecoverRequest {
                     id: recover_event.id.to_be_bytes().to_vec(),
@@ -381,7 +389,6 @@ where
 
             let mut recover_coordinator = Coordinator::<N, E, S> {
                 node,
-                network_interface,
                 transaction: TransactionStateMachine {
                     transaction: TransactionPayload::from_bytes(recover_event.transaction)?,
                     t_zero: recover_event.t_zero,
@@ -586,8 +593,8 @@ pub mod tests {
                 last_applied,
             };
 
-            let pre_accepted_responses = self
-                .network_interface
+            let network_interface = self.node.network.get_interface().await;
+            let pre_accepted_responses = network_interface
                 .broadcast(BroadcastRequest::PreAccept(
                     pre_accepted_request,
                     self.node.info.serial,

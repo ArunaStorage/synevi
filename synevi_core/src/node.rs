@@ -5,8 +5,10 @@ use crate::wait_handler::WaitHandler;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{atomic::AtomicU64, Arc};
-use synevi_network::consensus_transport::{ApplyRequest, CommitRequest};
-use synevi_network::network::{Network, NodeInfo};
+use synevi_network::consensus_transport::{
+    ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
+};
+use synevi_network::network::{BroadcastResponse, Network, NodeInfo};
 use synevi_network::reconfiguration::{BufferedMessage, Report};
 use synevi_network::replica::Replica;
 use synevi_persistence::mem_store::MemStore;
@@ -14,7 +16,8 @@ use synevi_types::traits::Store;
 use synevi_types::types::{SyneviResult, TransactionPayload, UpsertEvent};
 use synevi_types::{Executor, State, SyneviError, T, T0};
 use tokio::sync::mpsc::Receiver;
-use tokio::sync::RwLock;
+use tokio::sync::{oneshot, RwLock};
+use tokio::task::JoinSet;
 use tracing::instrument;
 use ulid::Ulid;
 
@@ -23,6 +26,11 @@ pub struct Stats {
     pub total_requests: AtomicU64,
     pub total_accepts: AtomicU64,
     pub total_recovers: AtomicU64,
+}
+
+enum HelperResponse {
+    Commit(CommitResponse),
+    Apply(ApplyResponse),
 }
 
 pub struct Node<N, E, S = MemStore>
@@ -112,6 +120,10 @@ where
 
         // If no config / persistence -> default
         Ok(node)
+    }
+
+    pub fn set_ready(&self) -> () {
+        self.is_ready.store(true, Ordering::Relaxed);
     }
 
     #[instrument(level = "trace", skip(network, executor, store))]
@@ -232,11 +244,11 @@ where
     ) -> Result<(), SyneviError> {
         // 1. Broadcast self_config to other member
         dbg!("Broadcast");
-        let all_members = self.network.broadcast_config(member_host).await?;
+        let (all_members, self_id) = self.network.broadcast_config(member_host).await?;
 
         // 2. wait for JoinElectorate responses with expected majority and config from others
         dbg!("Join");
-        self.join_electorate(config_receiver, all_members, &replica)
+        self.join_electorate(config_receiver, all_members, self_id, &replica)
             .await?;
 
         // 3. Send ReadyJoinElectorate && set myself to ready
@@ -250,6 +262,7 @@ where
         &self,
         mut receiver: Receiver<Report>,
         all_members: u32,
+        self_id: Vec<u8>,
         replica: &ReplicaConfig<N, E, S>,
     ) -> Result<(), SyneviError> {
         let mut member_count = 0;
@@ -270,13 +283,17 @@ where
 
         dbg!("Sync");
         // 2.1 if majority replies with 0 events -> skip to 2.4.
-        self.sync_events(highest_applied, last_applied, &replica)
+        self.sync_events(highest_applied, last_applied, self_id, &replica)
             .await?;
 
         // 2.4 Apply buffered commits & applies
-        dbg!("Apply buffered");
+        if self.info.serial == 6 {
+            dbg!("Apply buffered");
+            //replica.dump_buffer().await;
+        }
         let mut rcv = replica.send_buffered().await?;
-        while let Some((t, request)) = rcv
+        let mut join_set = JoinSet::new();
+        while let Some((t, _, request)) = rcv
             .recv()
             .await
             .ok_or_else(|| SyneviError::ReceiveError("Channel closed".to_string()))?
@@ -284,12 +301,33 @@ where
             dbg!(t);
             match request {
                 BufferedMessage::Commit(req) => {
-                    replica.commit(req, true).await?;
+                    let clone = replica.clone();
+                    join_set.spawn(async move {
+                        let res = HelperResponse::Commit(clone.commit(req, true).await?);
+                        Ok::<HelperResponse, SyneviError>(res)
+                    });
                 }
                 BufferedMessage::Apply(req) => {
-                    replica.apply(req, true).await?;
+                    let clone = replica.clone();
+                    join_set.spawn(async move {
+                        let res = HelperResponse::Apply(clone.apply(req, true).await?);
+                        Ok::<HelperResponse, SyneviError>(res)
+                    });
                 }
             }
+        }
+        let len = join_set.len();
+        let mut errs = 0;
+        for task in join_set.join_all().await {
+            if let Err(err) = task {
+                errs += 1;
+                dbg!(err);
+            };
+        }
+        if errs != 0 {
+            dbg!(len, errs);
+            replica.dump_buffer().await;
+            panic!("Wait handler panicked");
         }
         Ok(())
     }
@@ -297,47 +335,27 @@ where
     async fn sync_events(
         &self,
         highest_applied: T,
-        last_applied: [u8; 32],
+        _last_applied: [u8; 32],
+        self_id: Vec<u8>,
         replica: &ReplicaConfig<N, E, S>,
     ) -> Result<(), SyneviError> {
         let mut last_applied_t_zero = T0::default();
+        let mut last_applied_id = u128::default();
         if highest_applied != T::default() {
             // 2.2 else Request stream with events until last_applied (highest t of JoinElectorate)
-            let mut rcv = self.network.get_stream_events(highest_applied).await?;
-            //let mut join_set = JoinSet::new();
+            let mut rcv = self
+                .network
+                .get_stream_events(highest_applied, self_id)
+                .await?;
             while let Some(event) = rcv.recv().await {
                 last_applied_t_zero = event.t_zero.as_slice().try_into()?;
+                last_applied_id = u128::from_be_bytes(event.id.as_slice().try_into()?);
                 let state: State = event.state.into();
-                dbg!("Got event", &last_applied_t_zero, &state);
-                self.event_store
-                    .upsert_tx(UpsertEvent {
-                        id: u128::from_be_bytes(event.id.as_slice().try_into()?),
-                        t_zero: last_applied_t_zero,
-                        t: event.t.as_slice().try_into()?,
-                        state,
-                        transaction: Some(event.transaction.clone()),
-                        dependencies: Some(from_dependency(event.dependencies.clone())?),
-                        ballot: Some(event.ballot.as_slice().try_into()?),
-                        execution_hash: Some(event.execution_hash.as_slice().try_into()?),
-                    })
-                    .await?;
+                if self.info.serial == 6 {
+                    dbg!("Got event", &last_applied_id, &last_applied_t_zero, &state);
+                }
                 match state {
                     State::Applied => {
-                        //let clone = replica.clone();
-                        //join_set.spawn(async move {
-                        // let res = replica
-                        //     .commit(
-                        //         CommitRequest {
-                        //             id: event.id.clone(),
-                        //             event: event.transaction.clone(),
-                        //             timestamp_zero: event.t_zero.clone(),
-                        //             timestamp: event.t.clone(),
-                        //             dependencies: event.dependencies.clone(),
-                        //         },
-                        //         false,
-                        //     )
-                        //     .await;
-                        // dbg!(&res);
                         let res = replica
                             .apply(
                                 ApplyRequest {
@@ -353,21 +371,43 @@ where
                             )
                             .await;
                         dbg!(&res);
-                        //});
                     }
-
+                    State::Commited => {
+                        let res = replica
+                            .commit(
+                                CommitRequest {
+                                    id: event.id,
+                                    event: event.transaction,
+                                    timestamp_zero: event.t_zero,
+                                    timestamp: event.t,
+                                    dependencies: event.dependencies,
+                                },
+                                false,
+                            )
+                            .await;
+                        dbg!(&res);
+                    }
                     _ => {
-                        panic!("Unexpected sync event");
+                        self.event_store
+                            .upsert_tx(UpsertEvent {
+                                id: u128::from_be_bytes(event.id.as_slice().try_into()?),
+                                t_zero: last_applied_t_zero,
+                                t: event.t.as_slice().try_into()?,
+                                state,
+                                transaction: Some(event.transaction.clone()),
+                                dependencies: Some(from_dependency(event.dependencies.clone())?),
+                                ballot: Some(event.ballot.as_slice().try_into()?),
+                                execution_hash: Some(event.execution_hash.as_slice().try_into()?),
+                            })
+                            .await?;
                     }
                 }
             }
-            //let _ = join_set.join_all().await.iter();
-            // 2.3 Check if last_applied == last applied execution hash
-            let (t, last_applied_self) = self.event_store.last_applied_hash().await?;
-            if last_applied_self != last_applied {
-                dbg!(&t, &last_applied_self, last_applied);
-                //panic!("Mismatched execution hashes for last_applied event")
-            }
+            dbg!(
+                "LAST APPLIED STREAMED EVENT:",
+                last_applied_id,
+                last_applied_t_zero
+            );
         }
         Ok(())
     }
@@ -602,4 +642,9 @@ mod tests {
 
         assert_eq!(result, vec![127u8]);
     }
+
+    // #[tokio::test(flavor = "multi_thread")]
+    // async fn reconfiguration() {
+    //     todo!()
+    // }
 }

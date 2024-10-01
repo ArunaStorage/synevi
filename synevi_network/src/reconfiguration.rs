@@ -81,6 +81,7 @@ pub trait Reconfiguration {
     ) -> Result<ReportLastAppliedResponse, SyneviError>;
 }
 
+#[derive(Debug, Clone)]
 pub enum BufferedMessage {
     Commit(CommitRequest),
     Apply(ApplyRequest),
