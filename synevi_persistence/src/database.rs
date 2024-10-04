@@ -190,8 +190,19 @@ impl Store for PersistentStore {
             return HashSet::default();
         }
         assert!(data.last_applied < *t);
-        // What about deps with dep_t0 < last_applied_t0 && dep_t > t?
         let mut deps = HashSet::default();
+        if let Some(last_applied_t0) = data.mappings.get(&data.last_applied) {
+            if last_applied_t0 != &T0::default() {
+                deps.insert(*last_applied_t0);
+            } else {
+                println!(
+                    "NO LAST APPLIED FOUND FOR
+{t_zero:?},
+{t:?}"
+                );
+            }
+        }
+        // What about deps with dep_t0 < last_applied_t0 && dep_t > t?
 
         // Dependencies are where any of these cases match:
         // - t_dep < t if not applied
@@ -444,8 +455,12 @@ impl Store for PersistentStore {
             .collect()
     }
 
-    async fn last_applied(&self) -> T {
-        self.data.lock().await.last_applied
+    async fn last_applied(&self) -> (T, T0) {
+        let lock = self.data.lock().await;
+        let t = lock.last_applied.clone();
+        let t0 = lock.mappings.get(&t).cloned().unwrap_or(T0::default());
+        drop(lock);
+        (t, t0)
     }
 
     async fn get_events_after(
@@ -463,7 +478,29 @@ impl Store for PersistentStore {
 
             for result in events_db.iter(&read_txn)? {
                 let (_t0, event) = result?;
-                dbg!("replica store worker", &event.id, &event.t_zero, &event.t);
+                let (p, t, e) = if let Some(Hashes {
+                    previous_hash,
+                    transaction_hash,
+                    execution_hash,
+                }) = &event.hashes
+                {
+                    (
+                        Some(previous_hash),
+                        Some(transaction_hash),
+                        Some(execution_hash),
+                    )
+                } else {
+                    (None, None, None)
+                };
+                println!(
+                    "replica store worker:
+ID:         {:?}
+T0:         {:?}
+T:           {:?}
+PREV:       {:?}
+TRANS:      {:?}",
+                    &event.id, &event.t_zero, &event.t, p, t,
+                );
                 //if event.id == self_event {
                 //    sdx.blocking_send(Ok(event))
                 //        .map_err(|e| SyneviError::SendError(e.to_string()))?;

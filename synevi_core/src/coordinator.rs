@@ -97,7 +97,10 @@ where
             .total_requests
             .fetch_add(1, Ordering::Relaxed);
 
-        let last_applied = self.node.event_store.last_applied().await.into();
+        let last_applied = {
+            let (t, _) = self.node.event_store.last_applied().await;
+            t.into()
+        };
 
         // Create the PreAccepted msg
         let pre_accepted_request = PreAcceptRequest {
@@ -140,6 +143,10 @@ where
         responses: &[PreAcceptResponse],
     ) -> Result<(), SyneviError> {
         // Collect deps by t_zero and only keep the max t
+        let (_, last_applied_t0) = self.node.event_store.last_applied().await;
+        if last_applied_t0 != T0::default() {
+            self.transaction.dependencies.insert(last_applied_t0);
+        }
         for response in responses {
             let t_response = T::try_from(response.timestamp.as_slice())?;
             if t_response > self.transaction.t {
@@ -171,7 +178,10 @@ where
                 .stats
                 .total_accepts
                 .fetch_add(1, Ordering::Relaxed);
-            let last_applied = self.node.event_store.last_applied().await.into();
+            let last_applied = {
+                let (t, _) = self.node.event_store.last_applied().await;
+                t.into()
+            };
             let accepted_request = AcceptRequest {
                 id: self.transaction.id.to_be_bytes().into(),
                 ballot: self.transaction.ballot.into(),
@@ -205,6 +215,7 @@ where
     async fn accept_consensus(&mut self, responses: &[AcceptResponse]) -> Result<(), SyneviError> {
         // A little bit redundant, but I think the alternative to create a common behavior between responses may be even worse
         // Handle returned dependencies
+
         for response in responses {
             for dep in from_dependency(response.dependencies.clone())?.iter() {
                 if !self.transaction.dependencies.contains(dep) {
@@ -358,12 +369,12 @@ where
             .event_store
             .get_and_update_hash(self.transaction.t_zero, hash.into())
             .await?;
-        println!(
-            "NODE_COORDINATOR {} with
-PREVIOUS: {:?},
-TRANSACTION: {:?}",
-            self.node.info.serial, hashes.previous_hash, hashes.transaction_hash
-        );
+        //         println!(
+        //             "NODE_COORDINATOR {} with
+        // PREVIOUS: {:?},
+        // TRANSACTION: {:?}",
+        //             self.node.info.serial, hashes.previous_hash, hashes.transaction_hash
+        //         );
         Ok((result, hashes))
     }
 
@@ -583,7 +594,10 @@ pub mod tests {
                 .total_requests
                 .fetch_add(1, Ordering::Relaxed);
 
-            let last_applied = self.node.event_store.last_applied().await.into();
+            let last_applied = {
+                let (t, _) = self.node.event_store.last_applied().await;
+                t.into()
+            };
 
             // Create the PreAccepted msg
             let pre_accepted_request = PreAcceptRequest {

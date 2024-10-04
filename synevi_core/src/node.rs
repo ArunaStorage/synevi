@@ -8,7 +8,7 @@ use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::consensus_transport::{
     ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
 };
-use synevi_network::network::{BroadcastResponse, Network, NodeInfo};
+use synevi_network::network::{Network, NodeInfo};
 use synevi_network::reconfiguration::{BufferedMessage, Report};
 use synevi_network::replica::Replica;
 use synevi_persistence::mem_store::MemStore;
@@ -16,7 +16,7 @@ use synevi_types::traits::Store;
 use synevi_types::types::{SyneviResult, TransactionPayload, UpsertEvent};
 use synevi_types::{Executor, State, SyneviError, T, T0};
 use tokio::sync::mpsc::Receiver;
-use tokio::sync::{oneshot, RwLock};
+use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tracing::instrument;
 use ulid::Ulid;
@@ -293,12 +293,21 @@ where
         }
         let mut rcv = replica.send_buffered().await?;
         let mut join_set = JoinSet::new();
-        while let Some((t, _, request)) = rcv
+        while let Some((t0, _, request)) = rcv
             .recv()
             .await
             .ok_or_else(|| SyneviError::ReceiveError("Channel closed".to_string()))?
         {
-            dbg!(t);
+            if self.info.serial == 6 {
+                println!(
+                    "
+BUFFER WORKER
+T0:         {:?}",
+//req:        {:?}
+//",
+                    t0, //request
+                );
+            }
             match request {
                 BufferedMessage::Commit(req) => {
                     let clone = replica.clone();
@@ -327,7 +336,7 @@ where
         if errs != 0 {
             dbg!(len, errs);
             replica.dump_buffer().await;
-            panic!("Wait handler panicked");
+            panic!("Replica panicked");
         }
         Ok(())
     }
@@ -388,18 +397,18 @@ where
                         dbg!(&res);
                     }
                     _ => {
-                        self.event_store
-                            .upsert_tx(UpsertEvent {
-                                id: u128::from_be_bytes(event.id.as_slice().try_into()?),
-                                t_zero: last_applied_t_zero,
-                                t: event.t.as_slice().try_into()?,
-                                state,
-                                transaction: Some(event.transaction.clone()),
-                                dependencies: Some(from_dependency(event.dependencies.clone())?),
-                                ballot: Some(event.ballot.as_slice().try_into()?),
-                                execution_hash: Some(event.execution_hash.as_slice().try_into()?),
-                            })
-                            .await?;
+                        // self.event_store
+                        //     .upsert_tx(UpsertEvent {
+                        //         id: u128::from_be_bytes(event.id.as_slice().try_into()?),
+                        //         t_zero: last_applied_t_zero,
+                        //         t: event.t.as_slice().try_into()?,
+                        //         state,
+                        //         transaction: Some(event.transaction.clone()),
+                        //         dependencies: Some(from_dependency(event.dependencies.clone())?),
+                        //         ballot: Some(event.ballot.as_slice().try_into()?),
+                        //         execution_hash: None,
+                        //     })
+                        //     .await?;
                     }
                 }
             }

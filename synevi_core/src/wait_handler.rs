@@ -117,101 +117,170 @@ where
             match timeout(Duration::from_millis(50), future).await {
                 Ok(Ok(msg)) => match msg.action {
                     WaitAction::CommitBefore => {
+                        if self.node.info.serial == 6 {
+                            println!(
+                                "COMMIT BEFORE
+t0: {:?}
+t: {:?}
+deps: {:?}",
+                                &msg.t_zero, &msg.t, &msg.deps
+                            );
+                        }
+
+                        if let Err(err) = self.commit_action(msg, &mut waiter_state).await {
+                            tracing::error!("Error commit event: {:?}", err);
+                            println!("Error commit event: {:?}", err);
+                            continue;
+                        };
                         //println!(
                         //    "t0: {:?}, t: {:?}, deps: {:?}",
                         //    &msg.t_zero, &msg.t, &msg.deps
                         //);
-                        if let Err(e) = self.upsert_event(&msg).await {
-                            tracing::error!("Error upserting event: {:?}", e);
-                            println!("Error upserting event: {:?}", e);
-                            continue;
-                        };
-                        waiter_state.committed.insert(msg.t_zero, msg.t);
-                        let mut to_apply =
-                            waiter_state.remove_from_waiter_commit(&msg.t_zero, &msg.t);
-                        while let Some(mut apply) = to_apply.pop_first() {
-                            apply.1.action = WaitAction::ApplyAfter;
-                            if let Err(e) = self.upsert_event(&msg).await {
-                                tracing::error!("Error upserting event: {:?}", e);
-                                println!("Error upserting event: {:?}", e);
-                                continue;
-                            };
-                            waiter_state.applied.insert(apply.1.t_zero);
-                            if let Some(notify) = apply.1.notify.take() {
-                                let _ = notify.send(());
-                            }
-                            waiter_state.remove_from_waiter_apply(&apply.1.t_zero, &mut to_apply);
-                        }
-                        waiter_state.insert_commit(msg);
+                        // if let Err(e) = self.upsert_event(&msg).await {
+                        //     tracing::error!("Error upserting event: {:?}", e);
+                        //     println!("Error upserting event: {:?}", e);
+                        //     continue;
+                        // };
+                        // waiter_state.committed.insert(msg.t_zero, msg.t);
+                        // let mut to_apply =
+                        //     waiter_state.remove_from_waiter_commit(&msg.t_zero, &msg.t);
+                        // while let Some(mut apply) = to_apply.pop_first() {
+                        //     apply.1.action = WaitAction::ApplyAfter;
+                        //     if let Err(e) = self.upsert_event(&msg).await {
+                        //         tracing::error!("Error upserting event: {:?}", e);
+                        //         println!("Error upserting event: {:?}", e);
+                        //         continue;
+                        //     };
+                        //     waiter_state.applied.insert(apply.1.t_zero);
+                        //     if let Some(notify) = apply.1.notify.take() {
+                        //         let _ = notify.send(());
+                        //     }
+                        //     waiter_state.remove_from_waiter_apply(&apply.1.t_zero, &mut to_apply);
+                        // }
+                        // waiter_state.insert_commit(msg);
                     }
                     WaitAction::ApplyAfter => {
-                        //println!("t0: {:?}, t: {:?}, deps: {:?}", &msg.t_zero, &msg.t, &msg.deps);
+                        if self.node.info.serial == 6 {
+                            println!(
+                                "APPLY AFTER
+t0: {:?}
+t: {:?}
+deps: {:?}",
+                                &msg.t_zero, &msg.t, &msg.deps
+                            );
+                        }
                         match &self.node.event_store.get_event(msg.t_zero).await? {
                             Some(event) if event.state < State::Commited => {
-                                if let Err(e) = self.upsert_event(&msg).await {
-                                    tracing::error!("Error upserting event: {:?}", e);
-                                    println!("Error upserting event: {:?}", e);
+                                println!("{:?} NOT COMMITTED", &msg.t_zero);
+                                if let Err(err) = self
+                                    .commit_action(
+                                        WaitMessage {
+                                            id: msg.id,
+                                            t_zero: msg.t_zero,
+                                            t: msg.t,
+                                            deps: msg.deps.clone(),
+                                            transaction: msg.transaction.clone(),
+                                            action: WaitAction::CommitBefore,
+                                            notify: None,
+                                        },
+                                        &mut waiter_state,
+                                    )
+                                    .await
+                                {
+                                    tracing::error!(
+                                        "Error committing event before apply: {:?}",
+                                        err
+                                    );
+                                    println!("Error committing event bevore apply: {:?}", err);
                                     continue;
                                 };
-                                waiter_state.committed.insert(msg.t_zero, msg.t);
-                                let mut to_apply =
-                                    waiter_state.remove_from_waiter_commit(&msg.t_zero, &msg.t);
-                                while let Some(mut apply) = to_apply.pop_first() {
-                                    apply.1.action = WaitAction::ApplyAfter;
-                                    if let Err(e) = self.upsert_event(&msg).await {
-                                        tracing::error!("Error upserting event: {:?}", e);
-                                        println!("Error upserting event: {:?}", e);
-                                        continue;
-                                    };
-                                    waiter_state.applied.insert(apply.1.t_zero);
-                                    if let Some(notify) = apply.1.notify.take() {
-                                        let _ = notify.send(());
-                                    }
-                                    waiter_state
-                                        .remove_from_waiter_apply(&apply.1.t_zero, &mut to_apply);
-                                }
-                                waiter_state.insert_commit(WaitMessage {
-                                    id: msg.id,
-                                    t_zero: msg.t_zero,
-                                    t: msg.t,
-                                    deps: msg.deps.clone(),
-                                    transaction: msg.transaction.clone(),
-                                    action: WaitAction::CommitBefore,
-                                    notify: None,
-                                });
+                                //                                if let Err(e) = self.upsert_event(&msg).await {
+                                //                                    tracing::error!("Error upserting event: {:?}", e);
+                                //                                    println!("Error upserting event: {:?}", e);
+                                //                                    continue;
+                                //                                };
+                                //                                waiter_state.committed.insert(msg.t_zero, msg.t);
+                                //                                let mut to_apply =
+                                //                                    waiter_state.remove_from_waiter_commit(&msg.t_zero, &msg.t);
+                                //                                while let Some(mut apply) = to_apply.pop_first() {
+                                //                                    apply.1.action = WaitAction::ApplyAfter;
+                                //                                    if let Err(e) = self.upsert_event(&msg).await {
+                                //                                        tracing::error!("Error upserting event: {:?}", e);
+                                //                                        println!("Error upserting event: {:?}", e);
+                                //                                        continue;
+                                //                                    };
+                                //                                    waiter_state.applied.insert(apply.1.t_zero);
+                                //                                    if let Some(notify) = apply.1.notify.take() {
+                                //                                        let _ = notify.send(());
+                                //                                    }
+                                //                                    waiter_state
+                                //                                        .remove_from_waiter_apply(&apply.1.t_zero, &mut to_apply);
+                                //                                }
+                                //                                waiter_state.insert_commit(WaitMessage {
+                                //                                    id: msg.id,
+                                //                                    t_zero: msg.t_zero,
+                                //                                    t: msg.t,
+                                //                                    deps: msg.deps.clone(),
+                                //                                    transaction: msg.transaction.clone(),
+                                //                                    action: WaitAction::CommitBefore,
+                                //                                    notify: None,
+                                //                                });
                             }
                             None => {
-                                if let Err(e) = self.upsert_event(&msg).await {
-                                    tracing::error!("Error upserting event: {:?}", e);
-                                    println!("Error upserting event: {:?}", e);
+                                println!("{:?} NOT COMMITTED", &msg.t_zero);
+                                if let Err(err) = self
+                                    .commit_action(
+                                        WaitMessage {
+                                            id: msg.id,
+                                            t_zero: msg.t_zero,
+                                            t: msg.t,
+                                            deps: msg.deps.clone(),
+                                            transaction: msg.transaction.clone(),
+                                            action: WaitAction::CommitBefore,
+                                            notify: None,
+                                        },
+                                        &mut waiter_state,
+                                    )
+                                    .await
+                                {
+                                    tracing::error!(
+                                        "Error committing event before apply: {:?}",
+                                        err
+                                    );
+                                    println!("Error committing event before apply: {:?}", err);
                                     continue;
                                 };
-                                waiter_state.committed.insert(msg.t_zero, msg.t);
-                                let mut to_apply =
-                                    waiter_state.remove_from_waiter_commit(&msg.t_zero, &msg.t);
-                                while let Some(mut apply) = to_apply.pop_first() {
-                                    apply.1.action = WaitAction::ApplyAfter;
-                                    if let Err(e) = self.upsert_event(&msg).await {
-                                        tracing::error!("Error upserting event: {:?}", e);
-                                        println!("Error upserting event: {:?}", e);
-                                        continue;
-                                    };
-                                    waiter_state.applied.insert(apply.1.t_zero);
-                                    if let Some(notify) = apply.1.notify.take() {
-                                        let _ = notify.send(());
-                                    }
-                                    waiter_state
-                                        .remove_from_waiter_apply(&apply.1.t_zero, &mut to_apply);
-                                }
-                                waiter_state.insert_commit(WaitMessage {
-                                    id: msg.id,
-                                    t_zero: msg.t_zero,
-                                    t: msg.t,
-                                    deps: msg.deps.clone(),
-                                    transaction: msg.transaction.clone(),
-                                    action: WaitAction::CommitBefore,
-                                    notify: None,
-                                });
+                                //                                if let Err(e) = self.upsert_event(&msg).await {
+                                //                                    tracing::error!("Error upserting event: {:?}", e);
+                                //                                    println!("Error upserting event: {:?}", e);
+                                //                                    continue;
+                                //                                };
+                                //                                waiter_state.committed.insert(msg.t_zero, msg.t);
+                                //                                let mut to_apply =
+                                //                                    waiter_state.remove_from_waiter_commit(&msg.t_zero, &msg.t);
+                                //                                while let Some(mut apply) = to_apply.pop_first() {
+                                //                                    apply.1.action = WaitAction::ApplyAfter;
+                                //                                    if let Err(e) = self.upsert_event(&msg).await {
+                                //                                        tracing::error!("Error upserting event: {:?}", e);
+                                //                                        println!("Error upserting event: {:?}", e);
+                                //                                        continue;
+                                //                                    };
+                                //                                    waiter_state.applied.insert(apply.1.t_zero);
+                                //                                    if let Some(notify) = apply.1.notify.take() {
+                                //                                        let _ = notify.send(());
+                                //                                    }
+                                //                                    waiter_state
+                                //                                        .remove_from_waiter_apply(&apply.1.t_zero, &mut to_apply);
+                                //                                }
+                                //                                waiter_state.insert_commit(WaitMessage {
+                                //                                    id: msg.id,
+                                //                                    t_zero: msg.t_zero,
+                                //                                    t: msg.t,
+                                //                                    deps: msg.deps.clone(),
+                                //                                    transaction: msg.transaction.clone(),
+                                //                                    action: WaitAction::CommitBefore,
+                                //                                    notify: None,
+                                //                                });
                             }
                             _ => (),
                         }
@@ -223,7 +292,7 @@ where
                                 continue;
                             };
                             if let Some(notify) = msg.notify.take() {
-                                let _ = notify.send(());
+                                let _ = notify.send(()).unwrap();
                             }
                             waiter_state.applied.insert(msg.t_zero);
                             let mut to_apply = BTreeMap::new();
@@ -237,7 +306,7 @@ where
                                 };
                                 waiter_state.applied.insert(apply.1.t_zero);
                                 if let Some(notify) = apply.1.notify.take() {
-                                    let _ = notify.send(());
+                                    let _ = notify.send(()).unwrap();
                                 }
                                 waiter_state
                                     .remove_from_waiter_apply(&apply.1.t_zero, &mut to_apply);
@@ -250,7 +319,6 @@ where
                         if self.node.info.serial == 6 {
                             dbg!("Recovering", t0_recover);
                         }
-
                         if !recovering.insert(t0_recover) {
                             dbg!("Inserting existing recovery");
                         };
@@ -263,6 +331,31 @@ where
                 }
             }
         }
+    }
+
+    async fn commit_action(
+        &self,
+        msg: WaitMessage,
+        waiter_state: &mut WaiterState,
+    ) -> Result<(), SyneviError> {
+        self.upsert_event(&msg).await?;
+        waiter_state.committed.insert(msg.t_zero, msg.t);
+        let mut to_apply = waiter_state.remove_from_waiter_commit(&msg.t_zero, &msg.t);
+        while let Some(mut apply) = to_apply.pop_first() {
+            apply.1.action = WaitAction::ApplyAfter;
+            if let Err(e) = self.upsert_event(&msg).await {
+                tracing::error!("Error upserting event: {:?}", e);
+                println!("Error upserting event: {:?}", e);
+                continue;
+            };
+            waiter_state.applied.insert(apply.1.t_zero);
+            if let Some(notify) = apply.1.notify.take() {
+                let _ = notify.send(()).unwrap();
+            }
+            waiter_state.remove_from_waiter_apply(&apply.1.t_zero, &mut to_apply);
+        }
+        waiter_state.insert_commit(msg);
+        Ok(())
     }
 
     async fn upsert_event(
@@ -341,6 +434,7 @@ where
     }
 
     fn check_recovery(&self, waiter_state: &mut WaiterState) -> Option<T0> {
+        println!("CHECK RECOVERY");
         for (
             t0,
             WaitDependency {
@@ -419,7 +513,7 @@ impl WaiterState {
                 if event.deps.is_empty() {
                     if msg.action != WaitAction::ApplyAfter {
                         if let Some(sender) = msg.notify.take() {
-                            let _ = sender.send(());
+                            let _ = sender.send(()).unwrap();
                         }
                     } else if let Some(msg) = event.wait_message.take() {
                         apply_deps.insert(msg.t, msg);
@@ -443,7 +537,7 @@ impl WaiterState {
                 if event.deps.is_empty() {
                     if msg.action != WaitAction::ApplyAfter {
                         if let Some(sender) = msg.notify.take() {
-                            let _ = sender.send(());
+                            let _ = sender.send(()).unwrap();
                         }
                     } else if let Some(msg) = event.wait_message.take() {
                         to_apply.insert(msg.t, msg);
@@ -458,7 +552,7 @@ impl WaiterState {
     fn insert_commit(&mut self, mut wait_message: WaitMessage) {
         if self.applied.contains(&wait_message.t_zero) {
             if let Some(sender) = wait_message.notify.take() {
-                let _ = sender.send(());
+                let _ = sender.send(()).unwrap();
             }
             return;
         }
@@ -482,7 +576,7 @@ impl WaiterState {
 
             if wait_dep.deps.is_empty() {
                 if let Some(sender) = wait_message.notify.take() {
-                    let _ = sender.send(());
+                    let _ = sender.send(()).unwrap();
                 }
                 return;
             }
@@ -490,7 +584,7 @@ impl WaiterState {
             if let Some(existing) = self.events.get_mut(&wait_message.t_zero) {
                 if let Some(existing_wait_message) = &mut existing.wait_message {
                     if let Some(sender) = existing_wait_message.notify.take() {
-                        let _ = sender.send(());
+                        let _ = sender.send(()).unwrap();
                         return;
                     }
                 }
@@ -500,40 +594,74 @@ impl WaiterState {
     }
 
     fn insert_apply(&mut self, mut wait_message: WaitMessage) -> Option<WaitMessage> {
+        let (t0, t) = (wait_message.t_zero, wait_message.t);
+        println!("INSERT APPLY {:?}", &t0);
         if self.applied.contains(&wait_message.t_zero) {
             if let Some(sender) = wait_message.notify.take() {
                 println!("Already applied");
-                let _ = sender.send(());
+                let _ = sender.send(()).unwrap();
             }
+            println!("CURRENTLY COMMITTING, WAIT FOR NEXT ITERATION");
             return None;
         }
+        let mut deps = HashSet::default();
         let mut wait_dep = WaitDependency {
             wait_message: Some(wait_message),
             deps: HashSet::default(),
             started_at: Instant::now(),
         };
+
         if let Some(wait_message) = &wait_dep.wait_message {
             for dep_t0 in wait_message.deps.iter() {
                 if !self.applied.contains(dep_t0) {
                     if let Some(stored_t) = self.committed.get(dep_t0) {
                         // Your T is lower than the dep commited t -> no wait necessary
                         if &wait_message.t < stored_t {
+                            println!(
+                                "SKIP EVENT WITH 
+T0:  {:?}
+T:    {:?}",
+                                dep_t0, stored_t
+                            );
                             continue;
                         }
                     }
                     // if not applied and not comitted with lower t
-                    wait_dep.deps.insert(*dep_t0);
+                    deps.insert(*dep_t0);
                 }
             }
 
-            if wait_dep.deps.is_empty() {
+            if deps.is_empty() {
                 if let Some(wait_msg) = wait_dep.wait_message.take() {
+                    println!(
+                        "NO DEPS FOUND FOR
+T0:  {:?}
+T:    {:?},
+/////////////////////////////
+{:?}
+{:?}",
+                        &t0, &t, &self.committed, &self.applied
+                    );
+
                     return Some(wait_msg);
                 }
             } else {
+                wait_dep.deps = deps.clone();
                 self.events.insert(wait_message.t_zero, wait_dep);
             }
         }
+        println!(
+            "
+NOT APPLYING BECAUSE OF DEPENDENCIES:
+{:?}
+{:?}
+{:?}
+//////////////////////////////////////
+{:?}
+{:?}
+",
+            &t0, &t, deps, &self.committed, &self.applied
+        );
         None
     }
 }

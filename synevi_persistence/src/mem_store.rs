@@ -94,7 +94,7 @@ impl Store for MemStore {
         self.store.lock().await.get_event_store()
     }
 
-    async fn last_applied(&self) -> T {
+    async fn last_applied(&self) -> (T, T0) {
         self.store.lock().await.last_applied()
     }
 
@@ -379,8 +379,9 @@ impl InternalStore {
         self.events.clone()
     }
 
-    fn last_applied(&mut self) -> T {
-        self.last_applied
+    fn last_applied(&mut self) -> (T, T0) {
+        let t0 = self.mappings.get(&self.last_applied).cloned().unwrap_or(T0::default());
+        (self.last_applied, t0)
     }
 
     async fn get_events_until(

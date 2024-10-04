@@ -136,13 +136,6 @@ where
         let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
 
-        if self.node.info.serial == 6 {
-            dbg!("PRE_ACCEPT", t0);
-        }
-        //  else {
-        //      dbg!("PRE_ACCEPT FROM", self.node.info.serial, t0);
-        //  }
-
         if !ready {
             // self.node
             //     .event_store
@@ -210,13 +203,6 @@ where
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         let t = T::try_from(request.timestamp.as_slice())?;
         let request_ballot = Ballot::try_from(request.ballot.as_slice())?;
-
-        if self.node.info.serial == 6 {
-            dbg!("ACCEPT", t_zero);
-        }
-        // else {
-        //     dbg!("ACCEPT FROM", self.node.info.serial, t_zero);
-        // }
 
         if !ready {
             // self.node
@@ -286,19 +272,13 @@ where
         let t = T::try_from(request.timestamp.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         if !self.configuring.load(Ordering::SeqCst) && !ready {
-            dbg!("Got buffer message", &request_id, &t_zero, &t);
+            //dbg!("Got buffer message", &request_id, &t_zero, &t);
             self.buffer
                 .lock()
                 .await
                 .insert((t_zero, State::Commited), BufferedMessage::Commit(request));
             return Ok(CommitResponse {});
         }
-        if self.node.info.serial == 6 {
-            dbg!("COMMIT", t_zero, t);
-        }
-        // else {
-        //     dbg!("COMMIT FROM", self.node.info.serial, t_zero);
-        // }
 
         trace!(?request_id, "Replica: Commit");
 
@@ -330,33 +310,31 @@ where
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         let t = T::try_from(request.timestamp.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
+        if self.node.info.serial == 6 {
+            println!(
+                "APPLYING
+ID:     {:?}
+T0:     {:?}
+T:       {:?}
+",
+                request_id, t_zero, t
+            );
+        }
         if !self.configuring.load(Ordering::SeqCst) && !ready {
-            dbg!("Got buffer message", &request_id, &t_zero, &t);
+            //dbg!("Got buffer message", &request_id, &t_zero, &t);
             self.buffer
                 .lock()
                 .await
                 .insert((t_zero, State::Applied), BufferedMessage::Apply(request));
             return Ok(ApplyResponse {});
         }
-
-        if self.node.info.serial == 6 {
-            dbg!("APPLY", t_zero, t);
-        }
-        // else {
-        //     dbg!("APPLY FROM", self.node.info.serial, t_zero);
-        // }
-
         trace!(?request_id, "Replica: Apply");
 
         let transaction: TransactionPayload<<E as Executor>::Tx> =
             TransactionPayload::from_bytes(request.event)?;
         //let transaction = <E as Executor>::Tx::from_bytes(request.event)?;
 
-        let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
-        let t = T::try_from(request.timestamp.as_slice())?;
-
         let deps = from_dependency(request.dependencies)?;
-
         let (sx, rx) = tokio::sync::oneshot::channel();
 
         self.node
@@ -424,14 +402,52 @@ where
             .node
             .event_store
             .get_and_update_hash(t_zero, hash.into())
-            .await?;
+            .await?; //?;
+        if self.node.info.serial == 6 {
+            println!(
+                "UPDATING
+ID:         {:?}
+T0:         {:?}
+T:           {:?}
+PREV:       {:?}
+TRANS:      {:?}
+",
+                request_id,
+                t_zero,
+                t,
+                hashes.previous_hash,
+                hashes.transaction_hash,
+                //hashes.execution_hash
+            )
+        }
+        if request.transaction_hash != hashes.transaction_hash
+            || request.execution_hash != hashes.execution_hash
+        {
+            println!(
+                "EXPECTED: 
+ID:         {:?}
+T0:         {:?}
+EXPECTED    {:?}
+GOT         {:?}
+",
+                request_id,
+                t_zero,
+                request.transaction_hash,
+                //request.execution_hash,
+                hashes.transaction_hash,
+                //hashes.execution_hash
+            );
+            panic!("Mismatched hashes")
+        }
         //if let Err(err) = hashes {
         //    dbg!("HASHES_ERR", err);
         //}
-        println!("NODE_REPLICA {} with
-PREVIOUS: {:?},
-TRANSACTION: {:?}", self.node.info.serial, hashes.previous_hash, hashes.transaction_hash);
-        
+        //         println!(
+        //             "NODE_REPLICA {} with
+        // PREVIOUS: {:?},
+        // TRANSACTION: {:?}",
+        //             self.node.info.serial, hashes.previous_hash, hashes.transaction_hash
+        //         );
 
         Ok(ApplyResponse {})
     }
@@ -440,11 +456,11 @@ TRANSACTION: {:?}", self.node.info.serial, hashes.previous_hash, hashes.transact
     async fn recover(
         &self,
         request: RecoverRequest,
-        _ready: bool,
+        ready: bool,
     ) -> Result<RecoverResponse, SyneviError> {
-        //if !ready {
-        //    return Ok(RecoverResponse::default());
-        //}
+        if !ready {
+            return Ok(RecoverResponse::default());
+        }
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Recover");
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
