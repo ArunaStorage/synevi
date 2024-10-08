@@ -5,6 +5,7 @@ use ahash::RandomState;
 use serde::Serialize;
 use sha3::{Digest, Sha3_256};
 use std::collections::HashSet;
+use std::default;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use synevi_network::consensus_transport::{
@@ -302,6 +303,27 @@ where
             execution_hash: hashes.execution_hash.to_vec(),
             transaction_hash: hashes.transaction_hash.to_vec(),
         };
+//        println!(
+//            "
+//APPLY REQUEST
+//NODE        {:?}
+//ID          {:?}
+//T0          {:?}
+//T            {:?}
+//LAST        {:?}
+//TRANS       {:?}
+//EXEC        {:?}
+//DEPS        {:?}
+//",
+//            self.node.info.serial,
+//            &self.transaction.id,
+//            &self.transaction.t_zero,
+//            self.transaction.t,
+//            hashes.previous_hash,
+//            hashes.transaction_hash,
+//            hashes.execution_hash,
+//            self.transaction.dependencies,
+//        );
 
         let network_interface = self.node.network.get_interface().await;
         network_interface

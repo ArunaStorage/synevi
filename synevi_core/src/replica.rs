@@ -78,10 +78,10 @@ where
                         )
                     })?;
                 } else {
-                    if serial == 6 {
-                        dbg!("BUFFER_CLOSED");
+                    //if serial == 6 {
+                    //    dbg!("BUFFER_CLOSED");
                         node.set_ready();
-                    }
+                    //}
                     sdx.send(None).await.map_err(|_| {
                         SyneviError::SendError(
                             "Channel for receiving buffered messages closed".to_string(),
@@ -310,16 +310,16 @@ where
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         let t = T::try_from(request.timestamp.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
-        if self.node.info.serial == 6 {
-            println!(
-                "APPLYING
-ID:     {:?}
-T0:     {:?}
-T:       {:?}
-",
-                request_id, t_zero, t
-            );
-        }
+//         if self.node.info.serial == 6 {
+//             println!(
+//                 "APPLYING
+// ID:     {:?}
+// T0:     {:?}
+// T:       {:?}
+// ",
+//                 request_id, t_zero, t
+//             );
+//         }
         if !self.configuring.load(Ordering::SeqCst) && !ready {
             //dbg!("Got buffer message", &request_id, &t_zero, &t);
             self.buffer
@@ -343,7 +343,7 @@ T:       {:?}
             .send_msg(
                 t_zero,
                 t,
-                deps,
+                deps.clone(),
                 transaction.as_bytes(),
                 WaitAction::ApplyAfter,
                 sx,
@@ -358,7 +358,9 @@ T:       {:?}
             TransactionPayload::None => {
                 return Err(SyneviError::TransactionNotFound);
             }
-            TransactionPayload::External(tx) => self.node.executor.execute(tx).await,
+            TransactionPayload::External(tx) => {
+                self.node.executor.execute(tx).await
+            }
             TransactionPayload::Internal(request) => {
                 // TODO: Build special execution
                 let result = match &request {
@@ -402,52 +404,52 @@ T:       {:?}
             .node
             .event_store
             .get_and_update_hash(t_zero, hash.into())
-            .await?; //?;
-        if self.node.info.serial == 6 {
-            println!(
-                "UPDATING
-ID:         {:?}
-T0:         {:?}
-T:           {:?}
-PREV:       {:?}
-TRANS:      {:?}
-",
-                request_id,
-                t_zero,
-                t,
-                hashes.previous_hash,
-                hashes.transaction_hash,
-                //hashes.execution_hash
-            )
-        }
+            .await?;
+//        {
+//            Ok(hashes) => hashes,
+//            Err(err) => {}};
+//                dbg!("HASHES_ERR", err);
+//                println!(
+//                    "
+//NODE:   {:?},
+//ID:     {:?},
+//T0:     {:?},
+//T:       {:?},
+//",
+//                    self.node.info.serial, request_id, t_zero, t
+//                );
+//                panic!("hash error");
+//            }
+//        };
         if request.transaction_hash != hashes.transaction_hash
-            || request.execution_hash != hashes.execution_hash
-        {
-            println!(
-                "EXPECTED: 
-ID:         {:?}
-T0:         {:?}
-EXPECTED    {:?}
-GOT         {:?}
-",
-                request_id,
-                t_zero,
-                request.transaction_hash,
-                //request.execution_hash,
-                hashes.transaction_hash,
-                //hashes.execution_hash
-            );
-            panic!("Mismatched hashes")
-        }
-        //if let Err(err) = hashes {
-        //    dbg!("HASHES_ERR", err);
-        //}
-        //         println!(
-        //             "NODE_REPLICA {} with
-        // PREVIOUS: {:?},
-        // TRANSACTION: {:?}",
-        //             self.node.info.serial, hashes.previous_hash, hashes.transaction_hash
-        //         );
+            //|| request.execution_hash != hashes.execution_hash
+        {}
+//             println!(
+//                 "MISMATCHED HASHES
+// NODE:       {:?}
+// ID:         {:?}
+// T0:         {:?}
+// deps:       {:?}
+// 
+// TRANS       
+// EXPECTED    {:?}
+// GOT         {:?}
+// 
+// EXEC        
+// EXPECTED    {:?}
+// GOT         {:?}
+// ",
+//                 self.node.info.serial,
+//                 request_id,
+//                 t_zero,
+//                 deps,
+//                 request.transaction_hash,
+//                 hashes.transaction_hash,
+//                 request.execution_hash,
+//                 hashes.execution_hash
+//             );
+//             //panic!("Mismatched hashes")
+//         }
 
         Ok(ApplyResponse {})
     }
@@ -614,7 +616,7 @@ where
                             execution_hash: hashes.execution_hash.to_vec(),
                         })
                     } else {
-                        dbg!("MissingExecutionHash");
+                        //dbg!("MissingExecutionHash");
                         // TODO: Upsert execution hash flow
 
                         Ok(GetEventResponse {
@@ -653,7 +655,7 @@ where
             node_serial,
         } = request;
         let node = self.node.clone();
-        dbg!("Before ready transaction");
+        //dbg!("Before ready transaction");
         node.transaction(
             Ulid::new().0,
             TransactionPayload::Internal(InternalExecution::ReadyElectorate {
@@ -662,7 +664,7 @@ where
             }),
         )
         .await?;
-        dbg!("After ready transaction");
+        //dbg!("After ready transaction");
         Ok(ReadyElectorateResponse {})
     }
 
@@ -695,7 +697,7 @@ where
                 SyneviError::InvalidConversionFromBytes("Invalid hash conversion".to_string())
             })?,
         };
-        dbg!(&report);
+        //dbg!(&report);
         self.notifier.send(report).await.map_err(|_| {
             SyneviError::SendError("Sender for reporting last applied closed".to_string())
         })?;

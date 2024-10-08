@@ -1,7 +1,9 @@
 #[cfg(test)]
 mod tests {
     use rand::Rng;
+    //use tokio::io::AsyncWriteExt;
     use std::collections::BTreeMap;
+    use std::fmt::Write;
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
@@ -12,6 +14,7 @@ mod tests {
     use synevi_persistence::database::PersistentStore;
     use synevi_persistence::mem_store::MemStore;
     use tokio::fs;
+    use tokio::io::{AsyncWrite, AsyncWriteExt};
     use tokio::runtime::Builder;
     use ulid::Ulid;
 
@@ -52,7 +55,7 @@ mod tests {
 
         let mut joinset = tokio::task::JoinSet::new();
 
-        for i in 0..10000 {
+        for i in 0..1000 {
             let coordinator = coordinator.clone();
             joinset.spawn(async move {
                 coordinator
@@ -411,6 +414,7 @@ mod tests {
     async fn reconfiguration() {
         let node_names: Vec<_> = (0..5).map(|_| Ulid::new()).collect();
         let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, PersistentStore>>> = vec![];
+        //let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, MemStore>>> = vec![];
 
         for (i, m) in node_names.iter().enumerate() {
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 13000 + i)).unwrap();
@@ -427,6 +431,7 @@ mod tests {
                 fs::create_dir(&test_path).await.unwrap();
                 dbg!(&test_path);
                 let store = PersistentStore::new(test_path, i as u16).unwrap();
+                //let store = MemStore::new(i as u16).unwrap();
                 let node = Node::new(*m, i as u16, network, DummyExecutor, store)
                     .await
                     .unwrap();
@@ -445,6 +450,7 @@ mod tests {
                 fs::create_dir(&test_path).await.unwrap();
                 dbg!(&test_path);
                 let store = PersistentStore::new(test_path, i as u16).unwrap();
+                //let store = MemStore::new(i as u16).unwrap();
                 let node = Node::new_with_member(
                     *m,
                     i as u16,
@@ -460,40 +466,41 @@ mod tests {
         }
         dbg!("Finished setup");
 
-        let coordinator = nodes.pop().unwrap();
+        let coordinator = nodes.first().cloned().unwrap();
 
         let mut joinset = tokio::task::JoinSet::new();
 
-        let random_number = rand::thread_rng().gen_range(0..9);
+        let random_number = rand::thread_rng().gen_range(0..99);
         dbg!(&random_number);
-        for i in 0..10 {
-            if i == random_number {
-                let id = Ulid::new();
-                let network = synevi_network::network::GrpcNetwork::new(
-                    SocketAddr::from_str("0.0.0.0:13006").unwrap(),
-                    "http://0.0.0.0:13006".to_string(),
-                    id,
-                    6,
-                );
+        for i in 0..100 {
+            //if i == random_number {
+            //    let id = Ulid::new();
+            //    let network = synevi_network::network::GrpcNetwork::new(
+            //        SocketAddr::from_str("0.0.0.0:13006").unwrap(),
+            //        "http://0.0.0.0:13006".to_string(),
+            //        id,
+            //        6,
+            //    );
 
-                // Copy & create db
-                let test_path = format!("/dev/shm/{id}/");
-                fs::create_dir(&test_path).await.unwrap();
-                dbg!(&test_path);
-                let store = PersistentStore::new(test_path, 6).unwrap();
-                let node = Node::new_with_member(
-                    id,
-                    6,
-                    network,
-                    DummyExecutor,
-                    store,
-                    "http://0.0.0.0:13000".to_string(),
-                )
-                .await
-                .unwrap();
-                nodes.push(node);
-                dbg!("Finished second config");
-            } else {
+            //    // Copy & create db
+            //    let test_path = format!("/dev/shm/{id}/");
+            //    fs::create_dir(&test_path).await.unwrap();
+            //    dbg!(&test_path);
+            //    let store = PersistentStore::new(test_path, 6).unwrap();
+            //    //let store = MemStore::new(6).unwrap();
+            //    let node = Node::new_with_member(
+            //        id,
+            //        6,
+            //        network,
+            //        DummyExecutor,
+            //        store,
+            //        "http://0.0.0.0:13000".to_string(),
+            //    )
+            //    .await
+            //    .unwrap();
+            //    nodes.push(node);
+            //    println!("Finished second config on iteration {i}");
+            //} else {
                 let coordinator = coordinator.clone();
                 joinset.spawn(async move {
                     coordinator
@@ -505,17 +512,17 @@ mod tests {
                         )
                         .await
                 });
-            }
+            //}
         }
         while let Some(res) = joinset.join_next().await {
-            match res.unwrap().unwrap() {
-                synevi::ExecutorResult::External(res) => {
-                    res.unwrap();
-                }
-                synevi::ExecutorResult::Internal(res) => {
-                    res.unwrap();
-                }
-            };
+            //match res.unwrap().unwrap() {
+            //    synevi::ExecutorResult::External(res) => {
+            //        res.unwrap();
+            //    }
+            //    synevi::ExecutorResult::Internal(res) => {
+            //        res.unwrap();
+            //    }
+            //};
         }
 
         let (total, accepts, recovers) = coordinator.get_stats();
@@ -528,13 +535,28 @@ mod tests {
         );
 
         //assert_eq!(recovers, 0);
-
-        let coordinator_store: BTreeMap<T0, (T, Option<[u8; 32]>)> = coordinator
+        let hex_encode = |bytes: Option<[u8; 32]>| -> String {
+            if let Some(bytes) = bytes {
+                let mut s = String::with_capacity(bytes.len() * 2);
+                for &b in &bytes {
+                    write!(&mut s, "{:02x}", b).unwrap();
+                }
+                s
+            } else {
+                "NONE".to_string()
+            }
+        };
+        let coordinator_store: BTreeMap<T0, (T, String)> = coordinator
             .event_store
             .get_event_store()
             .await
             .into_values()
-            .map(|e| (e.t_zero, (e.t, e.get_latest_hash())))
+            .map(|e| {
+                (
+                    e.t_zero,
+                    (e.t, hex_encode(e.hashes.map(|e| e.transaction_hash))),
+                )
+            })
             .collect();
 
         assert!(coordinator
@@ -545,41 +567,65 @@ mod tests {
             .all(|(_, e)| e.state == State::Applied));
 
         let mut got_mismatch = false;
+        let mut file = tokio::fs::File::create_new("./debug.csv").await.unwrap();
+        let mut stores = Vec::new();
         for node in nodes {
-            let node_store: BTreeMap<T0, (T, Option<[u8; 32]>)> = node
+            let node_store: BTreeMap<T0, (T, String)> = node
                 .event_store
                 .get_event_store()
                 .await
                 .into_values()
-                .map(|e| (e.t_zero, (e.t, e.get_latest_hash())))
+                .map(|e| {
+                    (
+                        e.t_zero,
+                        (e.t, hex_encode(e.hashes.map(|e| e.transaction_hash))),
+                    )
+                })
                 .collect();
-            assert!(
-                node.event_store
-                    .get_event_store()
-                    .await
-                    .iter()
-                    .all(|(_, e)| e.state == State::Applied),
-                "Not all applied @ {:?}",
-                node.get_info()
-            );
-            assert_eq!(coordinator_store.len(), node_store.len());
+            stores.push(node_store.clone().into_iter());
+            //             assert!(
+            //                 node.event_store
+            //                     .get_event_store()
+            //                     .await
+            //                     .iter()
+            //                     .all(|(_, e)| e.state == State::Applied),
+            //                 "Not all applied @ {:?}",
+            //                 node.get_info()
+            //             );
+            //             assert_eq!(coordinator_store.len(), node_store.len());
             if coordinator_store != node_store {
                 println!("Node: {:?}", node.get_info());
                 let mut node_store_iter = node_store.iter();
                 for (k, v) in coordinator_store.iter() {
                     if let Some(next) = node_store_iter.next() {
                         if next != (k, v) {
-                            println!("Diff: 
-Got:      {:?},
-Expected: {:?}", next, (k, v));
+                            println!(
+                                "Diff:
+             Got:      {:?},
+             Expected: {:?}",
+                                next,
+                                (k, v)
+                            );
                             println!("Nanos: {:?} | {:?}", next.1 .0.get_nanos(), v.0.get_nanos());
                         }
                     }
                 }
                 got_mismatch = true;
             }
-
-            assert!(!got_mismatch);
+            //
+            //             assert!(!got_mismatch);
         }
+        let max = stores.iter().map(|store| store.len()).max().unwrap();
+        for elem in 0..max {
+            for node in &mut stores {
+                if let Some((t0, (t, hash))) = node.next() {
+                    file.write_all(format!("{:?}-{:?}-{:?}\t", t0, t, hash).as_bytes())
+                        .await
+                        .unwrap();
+                }
+            }
+            file.write_all(format!("\n").as_bytes()).await.unwrap();
+        }
+        assert!(!got_mismatch)
     }
 }

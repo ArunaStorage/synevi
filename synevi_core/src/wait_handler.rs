@@ -118,13 +118,13 @@ where
                 Ok(Ok(msg)) => match msg.action {
                     WaitAction::CommitBefore => {
                         if self.node.info.serial == 6 {
-                            println!(
-                                "COMMIT BEFORE
-t0: {:?}
-t: {:?}
-deps: {:?}",
-                                &msg.t_zero, &msg.t, &msg.deps
-                            );
+//                             println!(
+//                                 "COMMIT BEFORE
+// t0: {:?}
+// t: {:?}
+// deps: {:?}",
+//                                 &msg.t_zero, &msg.t, &msg.deps
+//                             );
                         }
 
                         if let Err(err) = self.commit_action(msg, &mut waiter_state).await {
@@ -160,18 +160,18 @@ deps: {:?}",
                         // waiter_state.insert_commit(msg);
                     }
                     WaitAction::ApplyAfter => {
-                        if self.node.info.serial == 6 {
-                            println!(
-                                "APPLY AFTER
-t0: {:?}
-t: {:?}
-deps: {:?}",
-                                &msg.t_zero, &msg.t, &msg.deps
-                            );
-                        }
+//                        if self.node.info.serial == 6 {
+//                            println!(
+//                                "APPLY AFTER
+//t0: {:?}
+//t: {:?}
+//deps: {:?}",
+//                                &msg.t_zero, &msg.t, &msg.deps
+//                            );
+//                        }
                         match &self.node.event_store.get_event(msg.t_zero).await? {
                             Some(event) if event.state < State::Commited => {
-                                println!("{:?} NOT COMMITTED", &msg.t_zero);
+                                //println!("{:?} NOT COMMITTED", &msg.t_zero);
                                 if let Err(err) = self
                                     .commit_action(
                                         WaitMessage {
@@ -227,7 +227,7 @@ deps: {:?}",
                                 //                                });
                             }
                             None => {
-                                println!("{:?} NOT COMMITTED", &msg.t_zero);
+                                //println!("{:?} NOT COMMITTED", &msg.t_zero);
                                 if let Err(err) = self
                                     .commit_action(
                                         WaitMessage {
@@ -316,11 +316,11 @@ deps: {:?}",
                 },
                 _ => {
                     if let Some(t0_recover) = self.check_recovery(&mut waiter_state) {
-                        if self.node.info.serial == 6 {
-                            dbg!("Recovering", t0_recover);
-                        }
+                        //if self.node.info.serial == 6 {
+                        //    dbg!("Recovering", t0_recover);
+                        //}
                         if !recovering.insert(t0_recover) {
-                            dbg!("Inserting existing recovery");
+                            //dbg!("Inserting existing recovery");
                         };
                         //panic!("Starting recovery");
                         //println!("Recovering: {:?}", t0_recover);
@@ -343,7 +343,7 @@ deps: {:?}",
         let mut to_apply = waiter_state.remove_from_waiter_commit(&msg.t_zero, &msg.t);
         while let Some(mut apply) = to_apply.pop_first() {
             apply.1.action = WaitAction::ApplyAfter;
-            if let Err(e) = self.upsert_event(&msg).await {
+            if let Err(e) = self.upsert_event(&apply.1).await {
                 tracing::error!("Error upserting event: {:?}", e);
                 println!("Error upserting event: {:?}", e);
                 continue;
@@ -391,19 +391,19 @@ deps: {:?}",
     }
 
     async fn recover(self: Arc<Self>, t0_recover: T0, waiter_state: &mut WaiterState) {
-        if self.node.info.serial == 6 {
-            dbg!("Started recovery of", t0_recover, &self.node.info);
-            panic!("STARTED_RECOVERY");
-        }
+        //if self.node.info.serial == 6 {
+        //    //dbg!("Started recovery of", t0_recover, &self.node.info);
+        //    panic!("STARTED_RECOVERY");
+        //}
         //if RECOVERY_CYCLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 1 {
         //    panic!("Reached recovery cycle threshold");
         //}
         if let Some(event) = waiter_state.events.get_mut(&t0_recover) {
             event.started_at = Instant::now();
             if let Some(msg) = &event.wait_message {
-                if self.node.info.serial == 6 {
-                    dbg!(msg.t);
-                }
+                //if self.node.info.serial == 6 {
+                //    dbg!(msg.t);
+                //}
             }
             // if RECOVERY_CYCLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 2 {
             //     panic!("Reached recovery cycle threshold");
@@ -414,8 +414,8 @@ deps: {:?}",
                     //let msgs = self.receiver.clone().collect::<Vec<WaitMessage>>();
                     //self.sender.close();
                     //dbg!("IN FLIGHT MSGS", msgs.await);
-                    dbg!(&self.node.stats.total_recovers);
-                    panic!("Nothing found in event store");
+                    //dbg!(&self.node.stats.total_recovers);
+                    //panic!("Nothing found in event store");
                     //dbg!("Nothing found in event store");
                     //return ();
                 }
@@ -434,7 +434,7 @@ deps: {:?}",
     }
 
     fn check_recovery(&self, waiter_state: &mut WaiterState) -> Option<T0> {
-        println!("CHECK RECOVERY");
+        //println!("CHECK RECOVERY");
         for (
             t0,
             WaitDependency {
@@ -460,7 +460,7 @@ deps: {:?}",
                         }
                     } else {
                         if self.node.info.serial == 6 {
-                            dbg!("Recover deps from:", &t0);
+                            //dbg!("Recover deps from:", &t0);
                             // dbg!(&waiter_state.events));
                             // dbg!(&waiter_state.committed);
                             // dbg!(&waiter_state.applied);
@@ -475,9 +475,9 @@ deps: {:?}",
 
                 // Recover min_dep
                 if let Some((t0_dep, _)) = min_dep {
-                    if self.node.info.serial == 6 {
-                        dbg!("Recover deps from:", &t0);
-                    }
+                    //if self.node.info.serial == 6 {
+                        //dbg!("Recover deps from:", &t0);
+                    //}
 
                     *started_at = Instant::now();
                     return Some(t0_dep);
@@ -595,15 +595,13 @@ impl WaiterState {
 
     fn insert_apply(&mut self, mut wait_message: WaitMessage) -> Option<WaitMessage> {
         let (t0, t) = (wait_message.t_zero, wait_message.t);
-        println!("INSERT APPLY {:?}", &t0);
         if self.applied.contains(&wait_message.t_zero) {
             if let Some(sender) = wait_message.notify.take() {
-                println!("Already applied");
                 let _ = sender.send(()).unwrap();
             }
-            println!("CURRENTLY COMMITTING, WAIT FOR NEXT ITERATION");
             return None;
         }
+        let debug_deps = wait_message.deps.clone();
         let mut deps = HashSet::default();
         let mut wait_dep = WaitDependency {
             wait_message: Some(wait_message),
@@ -617,12 +615,12 @@ impl WaiterState {
                     if let Some(stored_t) = self.committed.get(dep_t0) {
                         // Your T is lower than the dep commited t -> no wait necessary
                         if &wait_message.t < stored_t {
-                            println!(
-                                "SKIP EVENT WITH 
-T0:  {:?}
-T:    {:?}",
-                                dep_t0, stored_t
-                            );
+//                            println!(
+//                                "SKIP EVENT WITH 
+//T0:  {:?}
+//T:    {:?}",
+//                                dep_t0, stored_t
+//                            );
                             continue;
                         }
                     }
@@ -633,15 +631,16 @@ T:    {:?}",
 
             if deps.is_empty() {
                 if let Some(wait_msg) = wait_dep.wait_message.take() {
-                    println!(
-                        "NO DEPS FOUND FOR
-T0:  {:?}
-T:    {:?},
-/////////////////////////////
-{:?}
-{:?}",
-                        &t0, &t, &self.committed, &self.applied
-                    );
+//                    println!(
+//                        "NO DEPS FOUND FOR
+//T0:  {:?}
+//T:    {:?},
+//DEPS: {:?},
+///////////////////////////////
+//{:?}
+//{:?}",
+//                        &t0, &t, &debug_deps, &self.committed, &self.applied
+//                    );
 
                     return Some(wait_msg);
                 }
@@ -650,18 +649,18 @@ T:    {:?},
                 self.events.insert(wait_message.t_zero, wait_dep);
             }
         }
-        println!(
-            "
-NOT APPLYING BECAUSE OF DEPENDENCIES:
-{:?}
-{:?}
-{:?}
-//////////////////////////////////////
-{:?}
-{:?}
-",
-            &t0, &t, deps, &self.committed, &self.applied
-        );
+//        println!(
+//            "
+//NOT APPLYING BECAUSE OF DEPENDENCIES:
+//{:?}
+//{:?}
+//{:?}
+////////////////////////////////////////
+//{:?}
+//{:?}
+//",
+//            &t0, &t, deps, &self.committed, &self.applied
+//        );
         None
     }
 }

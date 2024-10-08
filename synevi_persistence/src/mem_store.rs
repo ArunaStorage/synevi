@@ -98,7 +98,11 @@ impl Store for MemStore {
         self.store.lock().await.last_applied()
     }
 
-    async fn get_events_after(&self, last_applied: T, self_event: u128) -> Receiver<Result<Event, SyneviError>> {
+    async fn get_events_after(
+        &self,
+        last_applied: T,
+        self_event: u128,
+    ) -> Receiver<Result<Event, SyneviError>> {
         let (sdx, rcv) = tokio::sync::mpsc::channel(100);
         // TODO: Spawn in separate threads and remove the lock
         if let Err(err) = self
@@ -233,9 +237,36 @@ impl InternalStore {
     #[instrument(level = "trace")]
     fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<(), SyneviError> {
         let Some(event) = self.events.get_mut(&upsert_event.t_zero) else {
-            let event = Event::from(upsert_event.clone());
-            self.events.insert(upsert_event.t_zero, event);
-            self.mappings.insert(upsert_event.t, upsert_event.t_zero);
+            let mut event = Event::from(upsert_event.clone());
+            if matches!(event.state, State::Applied) {
+                self.mappings.insert(event.t, event.t_zero);
+                if let Some(deps) = upsert_event.dependencies {
+                    event.dependencies = deps;
+                }
+                if let Some(transaction) = upsert_event.transaction {
+                    if event.transaction.is_empty() && !transaction.is_empty() {
+                        event.transaction = transaction;
+                    }
+                }
+                event.state = upsert_event.state;
+                if let Some(ballot) = upsert_event.ballot {
+                    if event.ballot < ballot {
+                        event.ballot = ballot;
+                    }
+                }
+                if self.last_applied >= event.t {
+                    panic!("Should not happen");
+                }
+                self.last_applied = event.t;
+                let hashes = event.hash_event(self.latest_hash);
+                self.latest_hash = hashes.transaction_hash;
+                event.hashes = Some(hashes);
+                self.events.insert(upsert_event.t_zero, event);
+            } else {
+                self.events.insert(upsert_event.t_zero, event);
+                self.mappings.insert(upsert_event.t, upsert_event.t_zero);
+            }
+
             return Ok(());
         };
 
@@ -276,6 +307,9 @@ impl InternalStore {
             }
 
             if event.state == State::Applied {
+                if self.last_applied >= event.t {
+                    panic!("Should not happen");
+                }
                 self.last_applied = event.t;
                 let hashes = event.hash_event(self.latest_hash);
                 self.latest_hash = hashes.transaction_hash;
@@ -380,7 +414,11 @@ impl InternalStore {
     }
 
     fn last_applied(&mut self) -> (T, T0) {
-        let t0 = self.mappings.get(&self.last_applied).cloned().unwrap_or(T0::default());
+        let t0 = self
+            .mappings
+            .get(&self.last_applied)
+            .cloned()
+            .unwrap_or(T0::default());
         (self.last_applied, t0)
     }
 
@@ -390,12 +428,12 @@ impl InternalStore {
         self_event: u128,
         sdx: Sender<Result<Event, SyneviError>>,
     ) -> Result<(), SyneviError> {
-        todo!()
-        // for (_, event) in &self.events {
-        //     sdx.send(Ok(event.clone()))
-        //         .await
-        //         .map_err(|e| SyneviError::SendError(e.to_string()))?;
-        // }
-        // Ok(())
+        //todo!()
+        for (_, event) in &self.events {
+            sdx.send(Ok(event.clone()))
+                .await
+                .map_err(|e| SyneviError::SendError(e.to_string()))?;
+        }
+        Ok(())
     }
 }
