@@ -21,6 +21,7 @@ use crate::{
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use synevi_types::error::SyneviError;
 use synevi_types::{T, T0};
@@ -413,17 +414,36 @@ impl Network for GrpcNetwork {
             return Err(SyneviError::NoMembersFound);
         };
         let channel = member.member.channel.clone();
-        let request = tonic::Request::new(GetEventRequest {
+        let request = GetEventRequest {
             last_applied: last_applied.into(),
             self_event,
-        });
-        let mut client = ReconfigurationServiceClient::new(channel);
-        let mut response = client.get_events(request).await?.into_inner();
+        };
+
         let (sdx, rcv) = tokio::sync::mpsc::channel(200);
         tokio::spawn(async move {
+            let mut client = ReconfigurationServiceClient::new(channel);
+            println!("STREAMING CLIENT CREATED");
+            let response = client.get_events(tonic::Request::new(request)).await;
+            //let response = loop {
+            //    match tokio::time::timeout(
+            //        Duration::from_millis(300),
+            //        client.get_events(tonic::Request::new(request.clone())),
+            //    )
+            //    .await
+            //    {
+            //        Ok(res) => break (res),
+            //        Err(_) => {
+            //            dbg!("RETRY");
+            //            continue;
+            //        }
+            //    } //.await?;//.into_inner();
+            //};
+            println!("GOT RESPONSE");
+            let mut inner = response?.into_inner();
+            println!("GOT STREAM");
+            println!("STARTING STREAM LOOP");
             loop {
-                let msg = response.message().await;
-                //dbg!(&msg);
+                let msg = inner.message().await;
                 match msg {
                     Ok(Some(msg)) => {
                         sdx.send(msg).await.map_err(|_| {

@@ -5,6 +5,8 @@ use sha3::{Digest, Sha3_256};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tokio::time::sleep;
+use std::time::Duration;
 use synevi_network::configure_transport::{
     Config, GetEventRequest, GetEventResponse, JoinElectorateRequest, JoinElectorateResponse,
     ReadyElectorateRequest, ReadyElectorateResponse, ReportLastAppliedRequest,
@@ -599,6 +601,7 @@ where
         };
         let mut store_rcv = self.node.event_store.get_events_after(t, event_id).await;
         tokio::spawn(async move {
+            //sleep(Duration::from_millis(100)).await;
             while let Some(Ok(event)) = store_rcv.recv().await {
                 let response = {
                     if let Some(hashes) = event.hashes {
@@ -637,6 +640,7 @@ where
                 sdx.send(response).await.unwrap();
             }
         });
+        println!("Returning streaming receiver");
         // Stream all events to member
         rcv
     }

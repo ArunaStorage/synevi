@@ -117,15 +117,15 @@ where
             match timeout(Duration::from_millis(50), future).await {
                 Ok(Ok(msg)) => match msg.action {
                     WaitAction::CommitBefore => {
-                        if self.node.info.serial == 6 {
-//                             println!(
-//                                 "COMMIT BEFORE
-// t0: {:?}
-// t: {:?}
-// deps: {:?}",
-//                                 &msg.t_zero, &msg.t, &msg.deps
-//                             );
-                        }
+                        //if self.node.info.serial == 6 {
+                        //                             println!(
+                        //                                 "COMMIT BEFORE
+                        // t0: {:?}
+                        // t: {:?}
+                        // deps: {:?}",
+                        //                                 &msg.t_zero, &msg.t, &msg.deps
+                        //                             );
+                        //}
 
                         if let Err(err) = self.commit_action(msg, &mut waiter_state).await {
                             tracing::error!("Error commit event: {:?}", err);
@@ -160,15 +160,15 @@ where
                         // waiter_state.insert_commit(msg);
                     }
                     WaitAction::ApplyAfter => {
-//                        if self.node.info.serial == 6 {
-//                            println!(
-//                                "APPLY AFTER
-//t0: {:?}
-//t: {:?}
-//deps: {:?}",
-//                                &msg.t_zero, &msg.t, &msg.deps
-//                            );
-//                        }
+                        //                        if self.node.info.serial == 6 {
+                        //                            println!(
+                        //                                "APPLY AFTER
+                        //t0: {:?}
+                        //t: {:?}
+                        //deps: {:?}",
+                        //                                &msg.t_zero, &msg.t, &msg.deps
+                        //                            );
+                        //                        }
                         match &self.node.event_store.get_event(msg.t_zero).await? {
                             Some(event) if event.state < State::Commited => {
                                 //println!("{:?} NOT COMMITTED", &msg.t_zero);
@@ -476,7 +476,7 @@ where
                 // Recover min_dep
                 if let Some((t0_dep, _)) = min_dep {
                     //if self.node.info.serial == 6 {
-                        //dbg!("Recover deps from:", &t0);
+                    //dbg!("Recover deps from:", &t0);
                     //}
 
                     *started_at = Instant::now();
@@ -615,12 +615,12 @@ impl WaiterState {
                     if let Some(stored_t) = self.committed.get(dep_t0) {
                         // Your T is lower than the dep commited t -> no wait necessary
                         if &wait_message.t < stored_t {
-//                            println!(
-//                                "SKIP EVENT WITH 
-//T0:  {:?}
-//T:    {:?}",
-//                                dep_t0, stored_t
-//                            );
+                            //                            println!(
+                            //                                "SKIP EVENT WITH
+                            //T0:  {:?}
+                            //T:    {:?}",
+                            //                                dep_t0, stored_t
+                            //                            );
                             continue;
                         }
                     }
@@ -631,16 +631,16 @@ impl WaiterState {
 
             if deps.is_empty() {
                 if let Some(wait_msg) = wait_dep.wait_message.take() {
-//                    println!(
-//                        "NO DEPS FOUND FOR
-//T0:  {:?}
-//T:    {:?},
-//DEPS: {:?},
-///////////////////////////////
-//{:?}
-//{:?}",
-//                        &t0, &t, &debug_deps, &self.committed, &self.applied
-//                    );
+                    //                    println!(
+                    //                        "NO DEPS FOUND FOR
+                    //T0:  {:?}
+                    //T:    {:?},
+                    //DEPS: {:?},
+                    ///////////////////////////////
+                    //{:?}
+                    //{:?}",
+                    //                        &t0, &t, &debug_deps, &self.committed, &self.applied
+                    //                    );
 
                     return Some(wait_msg);
                 }
@@ -649,18 +649,18 @@ impl WaiterState {
                 self.events.insert(wait_message.t_zero, wait_dep);
             }
         }
-//        println!(
-//            "
-//NOT APPLYING BECAUSE OF DEPENDENCIES:
-//{:?}
-//{:?}
-//{:?}
-////////////////////////////////////////
-//{:?}
-//{:?}
-//",
-//            &t0, &t, deps, &self.committed, &self.applied
-//        );
+        //        println!(
+        //            "
+        //NOT APPLYING BECAUSE OF DEPENDENCIES:
+        //{:?}
+        //{:?}
+        //{:?}
+        ////////////////////////////////////////
+        //{:?}
+        //{:?}
+        //",
+        //            &t0, &t, deps, &self.committed, &self.applied
+        //        );
         None
     }
 }

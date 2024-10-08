@@ -243,16 +243,16 @@ where
         ready: Arc<AtomicBool>,
     ) -> Result<(), SyneviError> {
         // 1. Broadcast self_config to other member
-        //dbg!("Broadcast");
+        dbg!("Broadcast");
         let (all_members, self_id) = self.network.broadcast_config(member_host).await?;
 
         // 2. wait for JoinElectorate responses with expected majority and config from others
-        //dbg!("Join");
+        dbg!("Join");
         self.join_electorate(config_receiver, all_members, self_id, &replica)
             .await?;
 
         // 3. Send ReadyJoinElectorate && set myself to ready
-        //dbg!("Ready");
+        dbg!("Ready");
         ready.store(true, Ordering::Relaxed);
         self.network.ready_electorate().await?;
         Ok(())
@@ -281,14 +281,14 @@ where
             }
         }
 
-        //dbg!("Sync");
+        dbg!("Sync");
         // 2.1 if majority replies with 0 events -> skip to 2.4.
         self.sync_events(highest_applied, last_applied, self_id, &replica)
             .await?;
 
         // 2.4 Apply buffered commits & applies
         if self.info.serial == 6 {
-            //dbg!("Apply buffered");
+            dbg!("Apply buffered");
             //replica.dump_buffer().await;
         }
         let mut rcv = replica.send_buffered().await?;
@@ -298,16 +298,16 @@ where
             .await
             .ok_or_else(|| SyneviError::ReceiveError("Channel closed".to_string()))?
         {
-//             if self.info.serial == 6 {
-//                 println!(
-//                     "
-// BUFFER WORKER
-// T0:         {:?}",
-// //req:        {:?}
-// //",
-//                     t0, //request
-//                 );
-            //}
+             if self.info.serial == 6 {
+ //                println!(
+ //                    "
+ //BUFFER WORKER
+ //T0:         {:?}",
+ //req:        {:?}
+ //",
+ //                    t0, //request
+ //                );
+            }
             match request {
                 BufferedMessage::Commit(req) => {
                     let clone = replica.clone();
@@ -361,7 +361,7 @@ where
                 last_applied_id = u128::from_be_bytes(event.id.as_slice().try_into()?);
                 let state: State = event.state.into();
                 if self.info.serial == 6 {
-                    //dbg!("Got event", &last_applied_id, &last_applied_t_zero, &state);
+                    dbg!("Got event", &last_applied_id, &last_applied_t_zero, &state);
                 }
                 match state {
                     State::Applied => {

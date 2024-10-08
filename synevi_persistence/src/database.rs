@@ -4,6 +4,7 @@ use heed::{
     types::{SerdeBincode, U128},
     Database, Env, EnvOpenOptions,
 };
+use monotime::MonoTime;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write;
 use synevi_types::{
@@ -20,7 +21,6 @@ type EventDb = Database<U128<BigEndian>, SerdeBincode<Event>>;
 
 #[derive(Debug)]
 pub struct PersistentStore {
-    //db: Env,
     data: Mutex<MutableData>,
 }
 
@@ -106,27 +106,6 @@ impl PersistentStore {
         }
     }
 
-    pub async fn read_all(&self) -> Result<Vec<Event>, SyneviError> {
-        let lock = self.data.lock().await;
-        let read_txn = lock.db.read_txn()?;
-        let events_db: Database<U128<BigEndian>, SerdeBincode<Event>> = lock
-            .db
-            .open_database(&read_txn, Some(EVENT_DB_NAME))?
-            .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
-        let result = events_db
-            .iter(&read_txn)?
-            .filter_map(|e| {
-                if let Ok((_, event)) = e {
-                    Some(event)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        read_txn.commit()?;
-        Ok(result)
-    }
-
     // pub async fn upsert_object(&self, event: Event) -> Result<(), SyneviError> {
     //     let lock = self.data.lock().await;
     //     let mut wtxn = lock.db.write_txn()?;
@@ -142,10 +121,7 @@ impl PersistentStore {
 impl Store for PersistentStore {
     #[instrument(level = "trace")]
     async fn init_t_zero(&self, node_serial: u16) -> T0 {
-        let mut data = self.data.lock().await;
-        let t0 = T0(data.latest_t0.next_with_node(node_serial).into_time());
-        data.latest_t0 = t0;
-        t0
+        self.data.lock().await.init_t_zero(node_serial).await
     }
 
     #[instrument(level = "trace")]
@@ -155,12 +131,120 @@ impl Store for PersistentStore {
         t_zero: T0,
         transaction: Vec<u8>,
     ) -> Result<(T, HashSet<T0, RandomState>), SyneviError> {
-        let data = self.data.lock().await;
+        self.data
+            .lock()
+            .await
+            .pre_accept_tx(id, t_zero, transaction)
+            .await
+    }
+
+    #[instrument(level = "trace")]
+    async fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> HashSet<T0, RandomState> {
+        self.data.lock().await.get_tx_dependencies(t, t_zero).await
+    }
+
+    #[instrument(level = "trace")]
+    async fn accept_tx_ballot(&self, t_zero: &T0, ballot: Ballot) -> Option<Ballot> {
+        self.data
+            .lock()
+            .await
+            .accept_tx_ballot(t_zero, ballot)
+            .await
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn upsert_tx(&self, upsert_event: UpsertEvent) -> Result<(), SyneviError> {
+        self.data.lock().await.upsert_tx(upsert_event).await
+    }
+
+    #[instrument(level = "trace")]
+    async fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, SyneviError> {
+        self.data.lock().await.get_recover_deps(t_zero).await
+    }
+
+    #[instrument(level = "trace")]
+    async fn get_event_state(&self, t_zero: &T0) -> Option<State> {
+        self.data.lock().await.get_event_state(t_zero).await
+    }
+
+    #[instrument(level = "trace")]
+    async fn recover_event(
+        &self,
+        t_zero_recover: &T0,
+        node_serial: u16,
+    ) -> Result<RecoverEvent, SyneviError> {
+        self.data
+            .lock()
+            .await
+            .recover_event(t_zero_recover, node_serial)
+            .await
+    }
+
+    #[instrument(level = "trace")]
+    async fn get_event_store(&self) -> BTreeMap<T0, Event> {
+        self.data.lock().await.get_event_store().await
+    }
+
+    #[instrument(level = "trace")]
+    async fn last_applied(&self) -> (T, T0) {
+        self.data.lock().await.last_applied().await
+    }
+
+    #[instrument(level = "trace")]
+    async fn get_events_after(
+        &self,
+        last_applied: T,
+        self_event: u128,
+    ) -> Receiver<Result<Event, SyneviError>> {
+        self.data
+            .lock()
+            .await
+            .get_events_after(last_applied, self_event)
+            .await
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError> {
+        self.data.lock().await.get_event(t_zero).await
+    }
+
+    async fn get_and_update_hash(
+        &self,
+        t_zero: T0,
+        execution_hash: [u8; 32],
+    ) -> Result<Hashes, SyneviError> {
+        self.data
+            .lock()
+            .await
+            .get_and_update_hash(t_zero, execution_hash)
+            .await
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError> {
+        self.data.lock().await.last_applied_hash().await
+    }
+}
+impl MutableData {
+    #[instrument(level = "trace")]
+    async fn init_t_zero(&mut self, node_serial: u16) -> T0 {
+        let t0 = T0(self.latest_t0.next_with_node(node_serial).into_time());
+        self.latest_t0 = t0;
+        t0
+    }
+
+    #[instrument(level = "trace")]
+    async fn pre_accept_tx(
+        &mut self,
+        id: u128,
+        t_zero: T0,
+        transaction: Vec<u8>,
+    ) -> Result<(T, HashSet<T0, RandomState>), SyneviError> {
         let (t, deps) = {
-            let t = T(if let Some((last_t, _)) = data.mappings.last_key_value() {
+            let t = T(if let Some((last_t, _)) = self.mappings.last_key_value() {
                 if **last_t > *t_zero {
                     t_zero
-                        .next_with_guard_and_node(last_t, data.node_serial)
+                        .next_with_guard_and_node(last_t, self.node_serial)
                         .into_time()
                 } else {
                     *t_zero
@@ -169,8 +253,6 @@ impl Store for PersistentStore {
                 // No entries in the map -> insert the new event
                 *t_zero
             });
-            drop(data);
-            // This might not be necessary to re-use the write lock here
             let deps = self.get_tx_dependencies(&t, &t_zero).await;
             (t, deps)
         };
@@ -190,23 +272,15 @@ impl Store for PersistentStore {
 
     #[instrument(level = "trace")]
     async fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> HashSet<T0, RandomState> {
-        let data = self.data.lock().await;
-        if &data.last_applied == t {
+        if self.last_applied == *t {
             return HashSet::default();
         }
-        assert!(data.last_applied < *t);
+        assert!(self.last_applied < *t);
         let mut deps = HashSet::default();
-        if let Some(last_applied_t0) = data.mappings.get(&data.last_applied) {
+        if let Some(last_applied_t0) = self.mappings.get(&self.last_applied) {
             if last_applied_t0 != &T0::default() {
                 deps.insert(*last_applied_t0);
-            } else {
             }
-            //                println!(
-            //                    "NO LAST APPLIED FOUND FOR
-            //{t_zero:?},
-            //{t:?}"
-            //                );
-            //            }
         }
         // What about deps with dep_t0 < last_applied_t0 && dep_t > t?
 
@@ -214,7 +288,7 @@ impl Store for PersistentStore {
         // - t_dep < t if not applied
         // - t0_dep < t0_last_applied, if t_dep > t0
         // - t_dep > t if t0_dep < t
-        for (_, t0_dep) in data.mappings.range(data.last_applied..) {
+        for (_, t0_dep) in self.mappings.range(self.last_applied..) {
             if t0_dep != t_zero && (t0_dep < &T0(**t)) {
                 deps.insert(*t0_dep);
             }
@@ -224,9 +298,8 @@ impl Store for PersistentStore {
 
     #[instrument(level = "trace")]
     async fn accept_tx_ballot(&self, t_zero: &T0, ballot: Ballot) -> Option<Ballot> {
-        let lock = self.data.lock().await;
-        let mut write_txn = lock.db.write_txn().ok()?;
-        let events_db: EventDb = lock
+        let mut write_txn = self.db.write_txn().ok()?;
+        let events_db: EventDb = self
             .db
             .open_database(&write_txn, Some(EVENT_DB_NAME))
             .ok()??;
@@ -242,12 +315,11 @@ impl Store for PersistentStore {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn upsert_tx(&self, upsert_event: UpsertEvent) -> Result<(), SyneviError> {
-        let mut data = self.data.lock().await;
-        let db = data.db.clone();
+    async fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<(), SyneviError> {
+        //let db = self.db.clone();
 
-        let mut write_txn = db.write_txn()?;
-        let events_db: EventDb = data
+        let mut write_txn = self.db.write_txn()?;
+        let events_db: EventDb = self
             .db
             .open_database(&write_txn, Some(EVENT_DB_NAME))?
             .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
@@ -256,8 +328,13 @@ impl Store for PersistentStore {
         let Some(mut event) = event else {
             let mut event = Event::from(upsert_event.clone());
 
+            // Update the latest t0
+            if self.latest_t0 < event.t_zero {
+                self.latest_t0 = event.t_zero;
+            }
+
             if matches!(event.state, State::Applied) {
-                data.mappings.insert(event.t, event.t_zero);
+                self.mappings.insert(event.t, event.t_zero);
                 if let Some(deps) = upsert_event.dependencies {
                     event.dependencies = deps;
                 }
@@ -273,54 +350,75 @@ impl Store for PersistentStore {
                     }
                 }
 
-                let last_t = data.last_applied;
-                let last_t0 = data
+                let last_t = self.last_applied;
+                let last_t0 = self
                     .mappings
-                    .get(&data.last_applied)
+                    .get(&self.last_applied)
                     .cloned()
                     .unwrap_or_default();
 
                 if last_t >= event.t {
+                    //                    println!(
+                    //                        "
+                    //NODE:       {:?}
+                    //TIME:       {:?}
+                    //T0:         {:?}
+                    //T:           {:?}
+                    //LAST_T0:    {:?}
+                    //LAST_T:      {:?}
+                    //
+                    //DEPS        {:?}
+                    //",
+                    //                        &self.node_serial,
+                    //                        std::time::SystemTime::now(),
+                    //                        &event.t_zero,
+                    //                        &event.t,
+                    //                        &last_t0,
+                    //                        &last_t,
+                    //                        event.dependencies,
+                    //                    );
                     panic!("Should not happen");
                 }
 
-                data.last_applied = event.t;
-                let hashes = event.hash_event(data.latest_hash);
-                data.latest_hash = hashes.transaction_hash;
+                self.last_applied = event.t;
+                let hashes = event.hash_event(self.latest_hash);
+                self.latest_hash = hashes.transaction_hash;
                 event.hashes = Some(hashes.clone());
-                println!(
-                    "
-NODE:       {:?}
-T0:         {:?}
-T:           {:?}
-LAST_T0:    {:?}
-LAST_T:      {:?}
-PREV        {:?}
-TRANS       {:?}
-
-DEPS:       {:?}
-",
-                    &data.node_serial,
-                    &event.t_zero,
-                    &event.t,
-                    &last_t0,
-                    &last_t,
-                    hex_encode(Some(hashes.previous_hash)),
-                    hex_encode(Some(hashes.transaction_hash)),
-                    event.dependencies,
-                );
+                //                println!(
+                //                    "
+                //NODE:       {:?}
+                //TIME:       {:?}
+                //T0:         {:?}
+                //T:           {:?}
+                //LAST_T0:    {:?}
+                //LAST_T:      {:?}
+                //PREV        {:?}
+                //TRANS       {:?}
+                //
+                //DEPS:       {:?}
+                //",
+                //                    &self.node_serial,
+                //                    std::time::SystemTime::now(),
+                //                    &event.t_zero,
+                //                    &event.t,
+                //                    &last_t0,
+                //                    &last_t,
+                //                    hex_encode(Some(hashes.previous_hash)),
+                //                    hex_encode(Some(hashes.transaction_hash)),
+                //                    event.dependencies,
+                //                );
                 events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
             } else {
                 events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
-                data.mappings.insert(upsert_event.t, upsert_event.t_zero);
+                self.mappings.insert(upsert_event.t, upsert_event.t_zero);
             }
             write_txn.commit()?;
             return Ok(());
         };
 
         // Update the latest t0
-        if data.latest_t0 < event.t_zero {
-            data.latest_t0 = event.t_zero;
+        if self.latest_t0 < event.t_zero {
+            self.latest_t0 = event.t_zero;
         }
 
         // Do not update to a "lower" state
@@ -337,8 +435,8 @@ DEPS:       {:?}
 
         if event.is_update(&upsert_event) {
             if let Some(old_t) = event.update_t(upsert_event.t) {
-                data.mappings.remove(&old_t);
-                data.mappings.insert(event.t, event.t_zero);
+                self.mappings.remove(&old_t);
+                self.mappings.insert(event.t, event.t_zero);
             }
             if let Some(deps) = upsert_event.dependencies {
                 event.dependencies = deps;
@@ -356,42 +454,63 @@ DEPS:       {:?}
             }
 
             if event.state == State::Applied {
-                let last_t = data.last_applied;
-                let last_t0 = data
+                let last_t = self.last_applied;
+                let last_t0 = self
                     .mappings
-                    .get(&data.last_applied)
+                    .get(&self.last_applied)
                     .cloned()
                     .unwrap_or_default();
 
                 if last_t >= event.t {
+                    //                    println!(
+                    //                        "
+                    //NODE:       {:?}
+                    //TIME:       {:?}
+                    //T0:         {:?}
+                    //T:           {:?}
+                    //LAST_T0:    {:?}
+                    //LAST_T:      {:?}
+                    //
+                    //DEPS        {:?}
+                    //",
+                    //                        &self.node_serial,
+                    //                        std::time::SystemTime::now(),
+                    //                        &event.t_zero,
+                    //                        &event.t,
+                    //                        &last_t0,
+                    //                        &last_t,
+                    //                        event.dependencies,
+                    //                    );
                     panic!("Should not happen");
                 }
 
-                data.last_applied = event.t;
-                let hashes = event.hash_event(data.latest_hash);
-                data.latest_hash = hashes.transaction_hash;
+                self.last_applied = event.t;
+                let hashes = event.hash_event(self.latest_hash);
+                self.latest_hash = hashes.transaction_hash;
                 event.hashes = Some(hashes.clone());
-                println!(
-                    "
-NODE:       {:?}
-T0:         {:?}
-T:           {:?}
-LAST_T0:    {:?}
-LAST_T:      {:?}
-PREV        {:?}
-TRANS       {:?}
-
-DEPS        {:?}
-",
-                    &data.node_serial,
-                    &event.t_zero,
-                    &event.t,
-                    &last_t0,
-                    &last_t,
-                    hex_encode(Some(hashes.previous_hash)),
-                    hex_encode(Some(hashes.transaction_hash)),
-                    event.dependencies,
-                );
+                //                println!(
+                //                    "
+                //NODE:       {:?}
+                //TIME:       {:?}
+                //T0:         {:?}
+                //T:           {:?}
+                //LAST_T0:    {:?}
+                //LAST_T:      {:?}
+                //PREV        {:?}
+                //TRANS       {:?}
+                //
+                //DEPS        {:?}
+                //",
+                //                    &self.node_serial,
+                //                    std::time::SystemTime::now(),
+                //                    &event.t_zero,
+                //                    &event.t,
+                //                    &last_t0,
+                //                    &last_t,
+                //                    hex_encode(Some(hashes.previous_hash)),
+                //                    hex_encode(Some(hashes.transaction_hash)),
+                //                    event.dependencies,
+                //                );
             };
             events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
             write_txn.commit()?;
@@ -404,10 +523,8 @@ DEPS        {:?}
 
     #[instrument(level = "trace")]
     async fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, SyneviError> {
-        let data = self.data.lock().await;
-
-        let read_txn = data.db.read_txn()?;
-        let db: EventDb = data
+        let read_txn = self.db.read_txn()?;
+        let db: EventDb = self
             .db
             .open_database(&read_txn, Some(EVENT_DB_NAME))?
             .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
@@ -420,7 +537,7 @@ DEPS        {:?}
             ..Default::default()
         };
 
-        for (t_dep, t_zero_dep) in data.mappings.range(data.last_applied..) {
+        for (t_dep, t_zero_dep) in self.mappings.range(self.last_applied..) {
             let dep_event = db
                 .get(&read_txn, &t_zero_dep.get_inner())?
                 .ok_or_else(|| SyneviError::DependencyNotFound(t_zero_dep.get_inner()))?;
@@ -465,9 +582,8 @@ DEPS        {:?}
     }
 
     async fn get_event_state(&self, t_zero: &T0) -> Option<State> {
-        let lock = self.data.lock().await;
-        let read_txn = lock.db.read_txn().ok()?;
-        let db: EventDb = lock
+        let read_txn = self.db.read_txn().ok()?;
+        let db: EventDb = self
             .db
             .open_database(&read_txn, Some(EVENT_DB_NAME))
             .ok()??;
@@ -493,10 +609,8 @@ DEPS        {:?}
             return Err(SyneviError::UndefinedRecovery);
         }
 
-        let lock = self.data.lock().await;
-
-        let mut write_txn = lock.db.write_txn()?;
-        let db: EventDb = lock
+        let mut write_txn = self.db.write_txn()?;
+        let db: EventDb = self
             .db
             .open_database(&write_txn, Some(EVENT_DB_NAME))?
             .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
@@ -523,30 +637,41 @@ DEPS        {:?}
 
     async fn get_event_store(&self) -> BTreeMap<T0, Event> {
         // TODO: Remove unwrap and change trait result
-        self.read_all()
-            .await
+        let read_txn = self.db.read_txn().unwrap();
+        let events_db: Database<U128<BigEndian>, SerdeBincode<Event>> = self
+            .db
+            .open_database(&read_txn, Some(EVENT_DB_NAME))
             .unwrap()
-            .into_iter()
-            .map(|event| (event.t_zero, event))
-            .collect()
+            .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))
+            .unwrap();
+        let result = events_db
+            .iter(&read_txn)
+            .unwrap()
+            .filter_map(|e| {
+                if let Ok((t0, event)) = e {
+                    Some((T0(MonoTime::from(t0)), event))
+                } else {
+                    None
+                }
+            })
+            .collect::<BTreeMap<T0, Event>>();
+        read_txn.commit().unwrap();
+        result
     }
 
     async fn last_applied(&self) -> (T, T0) {
-        let lock = self.data.lock().await;
-        let t = lock.last_applied.clone();
-        let t0 = lock.mappings.get(&t).cloned().unwrap_or(T0::default());
-        drop(lock);
+        let t = self.last_applied.clone();
+        let t0 = self.mappings.get(&t).cloned().unwrap_or(T0::default());
         (t, t0)
     }
 
     async fn get_events_after(
         &self,
         _last_applied: T,
-        self_event: u128,
+        _self_event: u128,
     ) -> Receiver<Result<Event, SyneviError>> {
-        let lock = self.data.lock().await;
-        let (sdx, rcv) = tokio::sync::mpsc::channel(100);
-        let db = lock.db.clone();
+        let (sdx, rcv) = tokio::sync::mpsc::channel(200);
+        let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
             let read_txn = db.read_txn()?;
             let events_db: EventDb = db
@@ -569,20 +694,20 @@ DEPS        {:?}
                 } else {
                     (None, None, None)
                 };
-                //                println!(
-                //                    "replica store worker:
-                //ID:         {:?}
-                //T0:         {:?}
-                //T:           {:?}
-                //PREV:       {:?}
-                //TRANS:      {:?}",
-                //                    //DEPS        {:?}",
-                //                    &event.id,
-                //                    &event.t_zero,
-                //                    &event.t,
-                //                    p,
-                //                    t, //&event.dependencies
-                //                );
+//                 println!(
+//                     "replica store worker:
+// ID:         {:?}
+// T0:         {:?}
+// T:           {:?}
+// PREV:       {:?}
+// TRANS:      {:?}",
+//                     //DEPS        {:?}",
+//                     &event.id,
+//                     &event.t_zero,
+//                     &event.t,
+//                     p,
+//                     t, //&event.dependencies
+//                 );
                 //if event.id == self_event {
                 //    sdx.blocking_send(Ok(event))
                 //        .map_err(|e| SyneviError::SendError(e.to_string()))?;
@@ -598,9 +723,8 @@ DEPS        {:?}
     }
 
     async fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError> {
-        let lock = self.data.lock().await;
-        let read_txn = lock.db.read_txn()?;
-        let db: EventDb = lock
+        let read_txn = self.db.read_txn()?;
+        let db: EventDb = self
             .db
             .open_database(&read_txn, Some(EVENT_DB_NAME))?
             .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
@@ -615,9 +739,8 @@ DEPS        {:?}
         execution_hash: [u8; 32],
     ) -> Result<Hashes, SyneviError> {
         let t_zero = t_zero.get_inner();
-        let lock = self.data.lock().await;
-        let mut write_txn = lock.db.write_txn()?;
-        let db: EventDb = lock
+        let mut write_txn = self.db.write_txn()?;
+        let db: EventDb = self
             .db
             .open_database(&write_txn, Some(EVENT_DB_NAME))?
             .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
@@ -636,14 +759,13 @@ DEPS        {:?}
     }
 
     async fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError> {
-        let lock = self.data.lock().await;
-        let last = lock.last_applied;
-        let last_t0 = lock
+        let last = self.last_applied;
+        let last_t0 = self
             .mappings
             .get(&last)
             .ok_or_else(|| SyneviError::EventNotFound(last.get_inner()))?;
-        let read_txn = lock.db.read_txn()?;
-        let db: EventDb = lock
+        let read_txn = self.db.read_txn()?;
+        let db: EventDb = self
             .db
             .open_database(&read_txn, Some(EVENT_DB_NAME))?
             .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;

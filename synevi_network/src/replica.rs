@@ -25,13 +25,26 @@ pub trait Replica: Send + Sync {
         ready: bool,
     ) -> Result<PreAcceptResponse, SyneviError>;
 
-    async fn accept(&self, request: AcceptRequest, ready: bool) -> Result<AcceptResponse, SyneviError>;
+    async fn accept(
+        &self,
+        request: AcceptRequest,
+        ready: bool,
+    ) -> Result<AcceptResponse, SyneviError>;
 
-    async fn commit(&self, request: CommitRequest, ready: bool) -> Result<CommitResponse, SyneviError>;
+    async fn commit(
+        &self,
+        request: CommitRequest,
+        ready: bool,
+    ) -> Result<CommitResponse, SyneviError>;
 
-    async fn apply(&self, request: ApplyRequest, ready: bool) -> Result<ApplyResponse, SyneviError>;
+    async fn apply(&self, request: ApplyRequest, ready: bool)
+        -> Result<ApplyResponse, SyneviError>;
 
-    async fn recover(&self, request: RecoverRequest, ready: bool) -> Result<RecoverResponse, SyneviError>;
+    async fn recover(
+        &self,
+        request: RecoverRequest,
+        ready: bool,
+    ) -> Result<RecoverResponse, SyneviError>;
 
     fn is_ready(&self) -> bool;
 }
@@ -200,12 +213,14 @@ impl<R: Replica + 'static + Reconfiguration> ReconfigurationService for ReplicaB
     ) -> Result<tonic::Response<Self::GetEventsStream>, tonic::Status> {
         let mut receiver = self.inner.get_events(request.into_inner()).await;
 
-        let (sdx, rcv) = tokio::sync::mpsc::channel(100);
-        while let Some(event) = receiver.recv().await {
-            sdx.send(event.map_err(|e| tonic::Status::internal(e.to_string())))
-                .await
-                .map_err(|_e| tonic::Status::internal("Sender closed"))?;
-        }
+        let (sdx, rcv) = tokio::sync::mpsc::channel(200);
+        tokio::spawn(async move {
+            while let Some(event) = receiver.recv().await {
+                sdx.send(event.map_err(|e| tonic::Status::internal(e.to_string())))
+                    .await
+                    .map_err(|_e| tonic::Status::internal("Sender closed")).unwrap();
+            }
+        });
 
         let stream = ReceiverStream::new(rcv);
 
@@ -221,7 +236,7 @@ impl<R: Replica + 'static + Reconfiguration> ReconfigurationService for ReplicaB
                 .ready_electorate(request.into_inner())
                 .await
                 .map_err(|e| tonic::Status::internal(e.to_string()))?,
-        )) 
+        ))
     }
 }
 #[async_trait::async_trait]
