@@ -108,7 +108,11 @@ impl Store for MemStore {
 
         let store = self.store.clone();
         tokio::spawn(async move {
-            store.lock().await.get_events_until(last_applied, self_event, sdx).await?;
+            store
+                .lock()
+                .await
+                .get_events_until(last_applied, self_event, sdx)
+                .await?;
             Ok::<(), SyneviError>(())
         });
 
@@ -421,10 +425,11 @@ impl InternalStore {
         _self_event: u128,
         sdx: Sender<Result<Event, SyneviError>>,
     ) -> Result<(), SyneviError> {
-        let last_applied_t0 = self
-            .mappings
-            .get(&last_applied)
-            .ok_or_else(|| SyneviError::EventNotFound(last_applied.get_inner()))?;
+        let last_applied_t0 = match self.mappings.get(&last_applied) {
+            Some(t0) => *t0,
+            None if last_applied == T::default() => T0::default(),
+            _ => return Err(SyneviError::EventNotFound(last_applied.get_inner())),
+        };
         for (_, event) in self.events.range(last_applied_t0..) {
             sdx.send(Ok(event.clone()))
                 .await

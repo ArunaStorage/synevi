@@ -610,8 +610,8 @@ mod tests {
                 }
                 got_mismatch = true;
             }
-            
-                         assert!(!got_mismatch);
+
+            assert!(!got_mismatch);
         }
         //let max = stores.iter().map(|store| store.len()).max().unwrap();
         //for elem in 0..max {

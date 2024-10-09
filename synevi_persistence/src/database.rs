@@ -184,7 +184,7 @@ impl Store for PersistentStore {
         &self,
         last_applied: T,
         self_event: u128,
-    ) -> Result<Receiver<Result<Event, SyneviError>>, SyneviError >{
+    ) -> Result<Receiver<Result<Event, SyneviError>>, SyneviError> {
         self.data
             .lock()
             .await
@@ -564,10 +564,11 @@ impl MutableData {
     ) -> Result<Receiver<Result<Event, SyneviError>>, SyneviError> {
         let (sdx, rcv) = tokio::sync::mpsc::channel(200);
         let db = self.db.clone();
-        let last_applied_t0 = self
-            .mappings
-            .get(&last_applied)
-            .ok_or_else(|| SyneviError::EventNotFound(last_applied.get_inner()))?.clone();
+        let last_applied_t0 = match self.mappings.get(&last_applied) {
+            Some(t0) => *t0,
+            None if last_applied == T::default() => T0::default(),
+            _ => return Err(SyneviError::EventNotFound(last_applied.get_inner())),
+        };
         tokio::task::spawn_blocking(move || {
             let read_txn = db.read_txn()?;
             let range = last_applied_t0.get_inner()..;
