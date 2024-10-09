@@ -5,7 +5,6 @@ use ahash::RandomState;
 use serde::Serialize;
 use sha3::{Digest, Sha3_256};
 use std::collections::HashSet;
-use std::default;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use synevi_network::consensus_transport::{
@@ -51,8 +50,6 @@ where
 {
     fn get_transaction_bytes(&self) -> Vec<u8> {
         self.transaction.as_bytes()
-        // .as_ref()
-        // .map_or_else(Vec::new, |tx| tx.as_bytes())
     }
 }
 
@@ -129,8 +126,6 @@ where
             .any(|PreAcceptResponse { nack, .. }| *nack)
         {
             return Err(SyneviError::CompetingCoordinator);
-            // TODO: Catch this error for reconfiguration
-            //return Ok(ExecutorResult::Internal(Ok(InternalExecution::ReadyElectorate { id: ulid::Ulid::default(), serial: 0  }) ))
         }
 
         self.pre_accept_consensus(&pa_responses).await?;
@@ -216,7 +211,6 @@ where
     async fn accept_consensus(&mut self, responses: &[AcceptResponse]) -> Result<(), SyneviError> {
         // A little bit redundant, but I think the alternative to create a common behavior between responses may be even worse
         // Handle returned dependencies
-
         for response in responses {
             for dep in from_dependency(response.dependencies.clone())?.iter() {
                 if !self.transaction.dependencies.contains(dep) {
@@ -290,10 +284,6 @@ where
 
         let (synevi_result, hashes) = self.execute_consensus().await?;
 
-        //let mut hasher = Sha3_256::new();
-        //postcard::to_io(&synevi_result, &mut hasher)?;
-        //let hash = hasher.finalize();
-
         let applied_request = ApplyRequest {
             id: self.transaction.id.to_be_bytes().into(),
             event: self.transaction.get_transaction_bytes(),
@@ -303,32 +293,11 @@ where
             execution_hash: hashes.execution_hash.to_vec(),
             transaction_hash: hashes.transaction_hash.to_vec(),
         };
-//        println!(
-//            "
-//APPLY REQUEST
-//NODE        {:?}
-//ID          {:?}
-//T0          {:?}
-//T            {:?}
-//LAST        {:?}
-//TRANS       {:?}
-//EXEC        {:?}
-//DEPS        {:?}
-//",
-//            self.node.info.serial,
-//            &self.transaction.id,
-//            &self.transaction.t_zero,
-//            self.transaction.t,
-//            hashes.previous_hash,
-//            hashes.transaction_hash,
-//            hashes.execution_hash,
-//            self.transaction.dependencies,
-//        );
 
         let network_interface = self.node.network.get_interface().await;
         network_interface
             .broadcast(BroadcastRequest::Apply(applied_request))
-            .await?; // This should not be awaited
+            .await?; // TODO: This should not be awaited, but can be used to compare hashes
 
         synevi_result
     }
@@ -358,7 +327,6 @@ where
             TransactionPayload::None => Err(SyneviError::TransactionNotFound),
             TransactionPayload::External(tx) => self.node.executor.execute(tx.clone()).await,
             TransactionPayload::Internal(request) => {
-                // TODO: Build special execution
                 let result = match request {
                     InternalExecution::JoinElectorate { id, serial, host } => {
                         let res = self
@@ -391,12 +359,6 @@ where
             .event_store
             .get_and_update_hash(self.transaction.t_zero, hash.into())
             .await?;
-        //         println!(
-        //             "NODE_COORDINATOR {} with
-        // PREVIOUS: {:?},
-        // TRANSACTION: {:?}",
-        //             self.node.info.serial, hashes.previous_hash, hashes.transaction_hash
-        //         );
         Ok((result, hashes))
     }
 

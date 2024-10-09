@@ -211,14 +211,19 @@ impl<R: Replica + 'static + Reconfiguration> ReconfigurationService for ReplicaB
         &self,
         request: tonic::Request<GetEventRequest>,
     ) -> Result<tonic::Response<Self::GetEventsStream>, tonic::Status> {
-        let mut receiver = self.inner.get_events(request.into_inner()).await;
+        let mut receiver = self
+            .inner
+            .get_events(request.into_inner())
+            .await
+            .map_err(|err| tonic::Status::internal(err.to_string()))?;
 
         let (sdx, rcv) = tokio::sync::mpsc::channel(200);
         tokio::spawn(async move {
             while let Some(event) = receiver.recv().await {
                 sdx.send(event.map_err(|e| tonic::Status::internal(e.to_string())))
                     .await
-                    .map_err(|_e| tonic::Status::internal("Sender closed")).unwrap();
+                    .map_err(|_e| tonic::Status::internal("Sender closed"))
+                    .unwrap();
             }
         });
 

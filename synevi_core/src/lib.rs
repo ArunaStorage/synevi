@@ -79,8 +79,8 @@ pub mod tests {
         }
         async fn get_stream_events(
             &self,
-            _last_applied: T,
             _self_id: Vec<u8>,
+            _last_applied: Vec<u8>,
         ) -> Result<Receiver<GetEventResponse>, SyneviError> {
             let (_, rcv) = tokio::sync::mpsc::channel(1);
             Ok(rcv)

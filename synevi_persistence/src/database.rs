@@ -6,7 +6,6 @@ use heed::{
 };
 use monotime::MonoTime;
 use std::collections::{BTreeMap, HashSet};
-use std::fmt::Write;
 use synevi_types::{
     error::SyneviError,
     traits::Store,
@@ -105,16 +104,6 @@ impl PersistentStore {
             }
         }
     }
-
-    // pub async fn upsert_object(&self, event: Event) -> Result<(), SyneviError> {
-    //     let lock = self.data.lock().await;
-    //     let mut wtxn = lock.db.write_txn()?;
-    //     let events_db: Database<U128<BigEndian>, SerdeBincode<Event>> =
-    //         lock.db.create_database(&mut wtxn, Some(EVENT_DB_NAME))?;
-    //     events_db.put(&mut wtxn, &event.t_zero.get_inner(), &event)?;
-    //     wtxn.commit()?;
-    //     Ok(())
-    // }
 }
 
 #[async_trait::async_trait]
@@ -195,7 +184,7 @@ impl Store for PersistentStore {
         &self,
         last_applied: T,
         self_event: u128,
-    ) -> Receiver<Result<Event, SyneviError>> {
+    ) -> Result<Receiver<Result<Event, SyneviError>>, SyneviError >{
         self.data
             .lock()
             .await
@@ -351,62 +340,14 @@ impl MutableData {
                 }
 
                 let last_t = self.last_applied;
-                let last_t0 = self
-                    .mappings
-                    .get(&self.last_applied)
-                    .cloned()
-                    .unwrap_or_default();
-
-                if last_t >= event.t {
-                    //                    println!(
-                    //                        "
-                    //NODE:       {:?}
-                    //TIME:       {:?}
-                    //T0:         {:?}
-                    //T:           {:?}
-                    //LAST_T0:    {:?}
-                    //LAST_T:      {:?}
-                    //
-                    //DEPS        {:?}
-                    //",
-                    //                        &self.node_serial,
-                    //                        std::time::SystemTime::now(),
-                    //                        &event.t_zero,
-                    //                        &event.t,
-                    //                        &last_t0,
-                    //                        &last_t,
-                    //                        event.dependencies,
-                    //                    );
-                    panic!("Should not happen");
-                }
+                // Safeguard
+                assert!(last_t < event.t);
 
                 self.last_applied = event.t;
                 let hashes = event.hash_event(self.latest_hash);
                 self.latest_hash = hashes.transaction_hash;
                 event.hashes = Some(hashes.clone());
-                //                println!(
-                //                    "
-                //NODE:       {:?}
-                //TIME:       {:?}
-                //T0:         {:?}
-                //T:           {:?}
-                //LAST_T0:    {:?}
-                //LAST_T:      {:?}
-                //PREV        {:?}
-                //TRANS       {:?}
-                //
-                //DEPS:       {:?}
-                //",
-                //                    &self.node_serial,
-                //                    std::time::SystemTime::now(),
-                //                    &event.t_zero,
-                //                    &event.t,
-                //                    &last_t0,
-                //                    &last_t,
-                //                    hex_encode(Some(hashes.previous_hash)),
-                //                    hex_encode(Some(hashes.transaction_hash)),
-                //                    event.dependencies,
-                //                );
+
                 events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
             } else {
                 events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
@@ -455,62 +396,13 @@ impl MutableData {
 
             if event.state == State::Applied {
                 let last_t = self.last_applied;
-                let last_t0 = self
-                    .mappings
-                    .get(&self.last_applied)
-                    .cloned()
-                    .unwrap_or_default();
-
-                if last_t >= event.t {
-                    //                    println!(
-                    //                        "
-                    //NODE:       {:?}
-                    //TIME:       {:?}
-                    //T0:         {:?}
-                    //T:           {:?}
-                    //LAST_T0:    {:?}
-                    //LAST_T:      {:?}
-                    //
-                    //DEPS        {:?}
-                    //",
-                    //                        &self.node_serial,
-                    //                        std::time::SystemTime::now(),
-                    //                        &event.t_zero,
-                    //                        &event.t,
-                    //                        &last_t0,
-                    //                        &last_t,
-                    //                        event.dependencies,
-                    //                    );
-                    panic!("Should not happen");
-                }
+                // Safeguard
+                assert!(last_t < event.t);
 
                 self.last_applied = event.t;
                 let hashes = event.hash_event(self.latest_hash);
                 self.latest_hash = hashes.transaction_hash;
                 event.hashes = Some(hashes.clone());
-                //                println!(
-                //                    "
-                //NODE:       {:?}
-                //TIME:       {:?}
-                //T0:         {:?}
-                //T:           {:?}
-                //LAST_T0:    {:?}
-                //LAST_T:      {:?}
-                //PREV        {:?}
-                //TRANS       {:?}
-                //
-                //DEPS        {:?}
-                //",
-                //                    &self.node_serial,
-                //                    std::time::SystemTime::now(),
-                //                    &event.t_zero,
-                //                    &event.t,
-                //                    &last_t0,
-                //                    &last_t,
-                //                    hex_encode(Some(hashes.previous_hash)),
-                //                    hex_encode(Some(hashes.transaction_hash)),
-                //                    event.dependencies,
-                //                );
             };
             events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
             write_txn.commit()?;
@@ -667,59 +559,31 @@ impl MutableData {
 
     async fn get_events_after(
         &self,
-        _last_applied: T,
+        last_applied: T,
         _self_event: u128,
-    ) -> Receiver<Result<Event, SyneviError>> {
+    ) -> Result<Receiver<Result<Event, SyneviError>>, SyneviError> {
         let (sdx, rcv) = tokio::sync::mpsc::channel(200);
         let db = self.db.clone();
+        let last_applied_t0 = self
+            .mappings
+            .get(&last_applied)
+            .ok_or_else(|| SyneviError::EventNotFound(last_applied.get_inner()))?.clone();
         tokio::task::spawn_blocking(move || {
             let read_txn = db.read_txn()?;
+            let range = last_applied_t0.get_inner()..;
             let events_db: EventDb = db
                 .open_database(&read_txn, Some(EVENT_DB_NAME))?
                 .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
 
-            for result in events_db.iter(&read_txn)? {
+            for result in events_db.range(&read_txn, &range)? {
                 let (_t0, event) = result?;
-                let (p, t, e) = if let Some(Hashes {
-                    previous_hash,
-                    transaction_hash,
-                    execution_hash,
-                }) = &event.hashes
-                {
-                    (
-                        Some(previous_hash),
-                        Some(transaction_hash),
-                        Some(execution_hash),
-                    )
-                } else {
-                    (None, None, None)
-                };
-//                 println!(
-//                     "replica store worker:
-// ID:         {:?}
-// T0:         {:?}
-// T:           {:?}
-// PREV:       {:?}
-// TRANS:      {:?}",
-//                     //DEPS        {:?}",
-//                     &event.id,
-//                     &event.t_zero,
-//                     &event.t,
-//                     p,
-//                     t, //&event.dependencies
-//                 );
-                //if event.id == self_event {
-                //    sdx.blocking_send(Ok(event))
-                //        .map_err(|e| SyneviError::SendError(e.to_string()))?;
-                //    break;
-                //}
                 sdx.blocking_send(Ok(event))
                     .map_err(|e| SyneviError::SendError(e.to_string()))?;
             }
             read_txn.commit()?;
             Ok::<(), SyneviError>(())
         });
-        rcv
+        Ok(rcv)
     }
 
     async fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError> {
@@ -775,18 +639,6 @@ impl MutableData {
             .hashes
             .ok_or_else(|| SyneviError::MissingExecutionHash)?;
         Ok((last, event.execution_hash))
-    }
-}
-
-fn hex_encode(bytes: Option<[u8; 32]>) -> String {
-    if let Some(bytes) = bytes {
-        let mut s = String::with_capacity(bytes.len() * 2);
-        for &b in &bytes {
-            write!(&mut s, "{:02x}", b).unwrap();
-        }
-        s
-    } else {
-        "NONE".to_string()
     }
 }
 

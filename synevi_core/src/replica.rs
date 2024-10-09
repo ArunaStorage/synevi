@@ -5,8 +5,6 @@ use sha3::{Digest, Sha3_256};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::time::sleep;
-use std::time::Duration;
 use synevi_network::configure_transport::{
     Config, GetEventRequest, GetEventResponse, JoinElectorateRequest, JoinElectorateResponse,
     ReadyElectorateRequest, ReadyElectorateResponse, ReportLastAppliedRequest,
@@ -66,7 +64,6 @@ where
     ) -> Result<Receiver<Option<(T0, State, BufferedMessage)>>, SyneviError> {
         let (sdx, rcv) = channel(100);
         let inner = self.buffer.clone();
-        let serial = self.node.info.serial;
         let node = self.node.clone();
         let configure_lock = self.configuring.clone();
         tokio::spawn(async move {
@@ -80,10 +77,7 @@ where
                         )
                     })?;
                 } else {
-                    //if serial == 6 {
-                    //    dbg!("BUFFER_CLOSED");
-                        node.set_ready();
-                    //}
+                    node.set_ready();
                     sdx.send(None).await.map_err(|_| {
                         SyneviError::SendError(
                             "Channel for receiving buffered messages closed".to_string(),
@@ -95,25 +89,6 @@ where
             Ok::<(), SyneviError>(())
         });
         Ok(rcv)
-    }
-
-    pub async fn dump_buffer(&self) -> () {
-        let buffer = self.buffer.lock().await.clone();
-        for msg in buffer {
-            match msg.1 {
-                BufferedMessage::Commit(req) => {
-                    let t0 = T0::try_from(req.timestamp_zero.as_slice()).unwrap();
-                    let id = u128::from_be_bytes(req.id.try_into().unwrap());
-                    dbg!("CommitBuffer", id, msg.0, t0);
-                }
-                BufferedMessage::Apply(req) => {
-                    let t0 = T0::try_from(req.timestamp_zero.as_slice()).unwrap();
-                    let id = u128::from_be_bytes(req.id.try_into().unwrap());
-                    dbg!("ApplyBuffer", id, msg.0, t0);
-                }
-            }
-        }
-        //panic!("Dumped buffer");
     }
 }
 
@@ -134,28 +109,16 @@ where
         _node_serial: u16,
         ready: bool,
     ) -> Result<PreAcceptResponse, SyneviError> {
-        // TODO: REMOVE AFTER DEBUGGING
         let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
 
         if !ready {
-            // self.node
-            //     .event_store
-            //     .upsert_tx(UpsertEvent {
-            //         id: request_id,
-            //         t_zero: t0,
-            //         t: T::try_from(request.timestamp_zero.as_slice())?,
-            //         state: State::PreAccepted,
-            //         transaction: Some(request.event),
-            //         ..Default::default()
-            //     })
-            //     .await?;
             return Ok(PreAcceptResponse::default());
         }
 
         trace!(?request_id, "Replica: PreAccept");
 
-        // TODO(perf): Remove the lock here
+        // TODO(performance): Remove the lock here
         // Creates contention on the event store
         if let Some(ballot) = self
             .node
@@ -200,33 +163,16 @@ where
         request: AcceptRequest,
         ready: bool,
     ) -> Result<AcceptResponse, SyneviError> {
-        // TODO: REMOVE AFTER DEBUGGING
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         let t = T::try_from(request.timestamp.as_slice())?;
         let request_ballot = Ballot::try_from(request.ballot.as_slice())?;
 
         if !ready {
-            // self.node
-            //     .event_store
-            //     .upsert_tx(UpsertEvent {
-            //         id: request_id,
-            //         t_zero,
-            //         t,
-            //         state: State::Accepted,
-            //         transaction: Some(request.event),
-            //         dependencies: Some(from_dependency(request.dependencies)?),
-            //         ballot: Some(request_ballot),
-            //         execution_hash: None,
-            //     })
-            //     .await?;
             return Ok(AcceptResponse::default());
         }
         trace!(?request_id, "Replica: Accept");
 
-        //println!("Accept: {:?} @ {:?}", t_zero, self.node_info.serial);
-
-        // TODO/WARNING: This was initially in one mutex lock, but does not look like it needs this
         let dependencies = {
             if let Some(ballot) = self
                 .node
@@ -274,7 +220,6 @@ where
         let t = T::try_from(request.timestamp.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         if !self.configuring.load(Ordering::SeqCst) && !ready {
-            //dbg!("Got buffer message", &request_id, &t_zero, &t);
             self.buffer
                 .lock()
                 .await
@@ -312,18 +257,7 @@ where
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         let t = T::try_from(request.timestamp.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
-//         if self.node.info.serial == 6 {
-//             println!(
-//                 "APPLYING
-// ID:     {:?}
-// T0:     {:?}
-// T:       {:?}
-// ",
-//                 request_id, t_zero, t
-//             );
-//         }
         if !self.configuring.load(Ordering::SeqCst) && !ready {
-            //dbg!("Got buffer message", &request_id, &t_zero, &t);
             self.buffer
                 .lock()
                 .await
@@ -334,7 +268,6 @@ where
 
         let transaction: TransactionPayload<<E as Executor>::Tx> =
             TransactionPayload::from_bytes(request.event)?;
-        //let transaction = <E as Executor>::Tx::from_bytes(request.event)?;
 
         let deps = from_dependency(request.dependencies)?;
         let (sx, rx) = tokio::sync::oneshot::channel();
@@ -360,9 +293,7 @@ where
             TransactionPayload::None => {
                 return Err(SyneviError::TransactionNotFound);
             }
-            TransactionPayload::External(tx) => {
-                self.node.executor.execute(tx).await
-            }
+            TransactionPayload::External(tx) => self.node.executor.execute(tx).await,
             TransactionPayload::Internal(request) => {
                 // TODO: Build special execution
                 let result = match &request {
@@ -386,8 +317,6 @@ where
                         if id != &self.node.info.id {
                             self.node.ready_member(*id, *serial).await
                         } else {
-                            // TODO: Maybe set self.node.is_ready = true here instead of inside
-                            // reconfiguration loop
                             Ok(())
                         }
                     }
@@ -407,53 +336,13 @@ where
             .event_store
             .get_and_update_hash(t_zero, hash.into())
             .await?;
-//        {
-//            Ok(hashes) => hashes,
-//            Err(err) => {}};
-//                dbg!("HASHES_ERR", err);
-//                println!(
-//                    "
-//NODE:   {:?},
-//ID:     {:?},
-//T0:     {:?},
-//T:       {:?},
-//",
-//                    self.node.info.serial, request_id, t_zero, t
-//                );
-//                panic!("hash error");
-//            }
-//        };
         if request.transaction_hash != hashes.transaction_hash
-            //|| request.execution_hash != hashes.execution_hash
-        {}
-//             println!(
-//                 "MISMATCHED HASHES
-// NODE:       {:?}
-// ID:         {:?}
-// T0:         {:?}
-// deps:       {:?}
-// 
-// TRANS       
-// EXPECTED    {:?}
-// GOT         {:?}
-// 
-// EXEC        
-// EXPECTED    {:?}
-// GOT         {:?}
-// ",
-//                 self.node.info.serial,
-//                 request_id,
-//                 t_zero,
-//                 deps,
-//                 request.transaction_hash,
-//                 hashes.transaction_hash,
-//                 request.execution_hash,
-//                 hashes.execution_hash
-//             );
-//             //panic!("Mismatched hashes")
-//         }
-
-        Ok(ApplyResponse {})
+            || request.execution_hash != hashes.execution_hash
+        {
+            Err(SyneviError::MismatchedHashes)
+        } else {
+            Ok(ApplyResponse {})
+        }
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -564,11 +453,6 @@ where
                 }),
             )
             .await?;
-        match _res {
-            ExecutorResult::External(_) => {}
-            ExecutorResult::Internal(_internal_execution) => {}
-        }
-
         Ok(JoinElectorateResponse {
             majority,
             self_event: self_event.to_bytes().to_vec(),
@@ -578,30 +462,15 @@ where
     async fn get_events(
         &self,
         request: GetEventRequest,
-    ) -> Receiver<Result<GetEventResponse, SyneviError>> {
+    ) -> Result<Receiver<Result<GetEventResponse, SyneviError>>, SyneviError> {
         if !self.ready.load(Ordering::SeqCst) {
-            todo!()
+            return Err(SyneviError::NotReady);
         }
         let (sdx, rcv) = tokio::sync::mpsc::channel(200);
-        let t = match request.last_applied.as_slice().try_into() {
-            Ok(t) => t,
-            Err(err) => {
-                sdx.send(Err(err)).await.unwrap();
-                return rcv;
-            }
-        };
-        let event_id = match request.self_event.as_slice().try_into() {
-            Ok(id) => u128::from_be_bytes(id),
-            Err(err) => {
-                sdx.send(Err(SyneviError::InvalidConversionSlice(err)))
-                    .await
-                    .unwrap();
-                return rcv;
-            }
-        };
-        let mut store_rcv = self.node.event_store.get_events_after(t, event_id).await;
+        let event_id = u128::from_be_bytes(request.self_event.as_slice().try_into()?);
+        let last_applied = T::try_from(request.last_applied.as_slice())?;
+        let mut store_rcv = self.node.event_store.get_events_after(last_applied, event_id).await?;
         tokio::spawn(async move {
-            //sleep(Duration::from_millis(100)).await;
             while let Some(Ok(event)) = store_rcv.recv().await {
                 let response = {
                     if let Some(hashes) = event.hashes {
@@ -619,9 +488,6 @@ where
                             execution_hash: hashes.execution_hash.to_vec(),
                         })
                     } else {
-                        //dbg!("MissingExecutionHash");
-                        // TODO: Upsert execution hash flow
-
                         Ok(GetEventResponse {
                             id: event.id.to_be_bytes().to_vec(),
                             t_zero: event.t_zero.into(),
@@ -642,7 +508,7 @@ where
         });
         println!("Returning streaming receiver");
         // Stream all events to member
-        rcv
+        Ok(rcv)
     }
 
     // Existing Node

@@ -68,7 +68,7 @@ pub trait Reconfiguration {
     async fn get_events(
         &self,
         request: GetEventRequest,
-    ) -> tokio::sync::mpsc::Receiver<Result<GetEventResponse, SyneviError>>;
+    ) -> Result<tokio::sync::mpsc::Receiver<Result<GetEventResponse, SyneviError>>, SyneviError>;
     async fn ready_electorate(
         &self,
         request: ReadyElectorateRequest,

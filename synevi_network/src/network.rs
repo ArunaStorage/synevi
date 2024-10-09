@@ -21,10 +21,9 @@ use crate::{
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use synevi_types::error::SyneviError;
-use synevi_types::{T, T0};
+use synevi_types::T;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
 use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
@@ -54,10 +53,6 @@ pub trait Network: Send + Sync + 'static {
         &self,
         replica_server: R,
     ) -> Result<(), SyneviError>;
-    // async fn spawn_init_server(
-    //     &self,
-    //     replica_buffer: Arc<ReplicaBuffer>,
-    // ) -> Result<(JoinSet<Result<(), SyneviError>>, oneshot::Sender<()>), SyneviError>;
     async fn get_interface(&self) -> Arc<Self::Ni>;
     async fn get_waiting_time(&self, node_serial: u16) -> u64;
     async fn get_member_len(&self) -> u32;
@@ -70,7 +65,7 @@ pub trait Network: Send + Sync + 'static {
     ) -> Result<(), SyneviError>;
     async fn get_stream_events(
         &self,
-        last_applied: T,
+        last_applied: Vec<u8>,
         self_event: Vec<u8>,
     ) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError>;
     async fn ready_electorate(&self) -> Result<(), SyneviError>;
@@ -99,8 +94,6 @@ where
         self.as_ref().add_member(id, serial, host, ready).await
     }
 
-    // TODO: Spawn onboarding server process
-
     async fn spawn_server<R: Replica + 'static + Reconfiguration>(
         &self,
         server: R,
@@ -119,18 +112,12 @@ where
     async fn get_member_len(&self) -> u32 {
         self.as_ref().get_member_len().await
     }
-    // async fn spawn_init_server(
-    //     &self,
-    //     replica_buffer: Arc<ReplicaBuffer>,
-    // ) -> Result<(JoinSet<Result<(), SyneviError>>, oneshot::Sender<()>), SyneviError> {
-    //     self.as_ref().spawn_init_server(replica_buffer).await
-    // }
     async fn broadcast_config(&self, host: String) -> Result<(u32, Vec<u8>), SyneviError> {
         self.as_ref().broadcast_config(host).await
     }
     async fn get_stream_events(
         &self,
-        last_applied: T,
+        last_applied: Vec<u8>,
         self_event: Vec<u8>,
     ) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError> {
         self.as_ref()
@@ -199,7 +186,6 @@ pub enum BroadcastRequest {
     Commit(CommitRequest),
     Apply(ApplyRequest),
     Recover(RecoverRequest),
-    // TODO: Recover
 }
 
 #[derive(Debug, Clone)]
@@ -209,7 +195,6 @@ pub enum BroadcastResponse {
     Commit(CommitResponse),
     Apply(ApplyResponse),
     Recover(RecoverResponse),
-    // TODO: Recover
 }
 
 #[derive(Debug)]
@@ -281,7 +266,7 @@ impl Network for GrpcNetwork {
                         info: NodeInfo { id, serial },
                         host,
                         channel,
-                        ready_electorate: ready, // TODO: Change this dynamically for reconfig and tests
+                        ready_electorate: ready,
                     }),
                     latency: AtomicU64::new(500),
                     skew: AtomicI64::new(0),
@@ -314,26 +299,6 @@ impl Network for GrpcNetwork {
         Ok(())
     }
 
-    // async fn spawn_init_server(
-    //     &self,
-    //     server: Arc<ReplicaBuffer>,
-    // ) -> Result<(JoinSet<Result<(), SyneviError>>, oneshot::Sender<()>), SyneviError> {
-    //     let addr = self.socket_addr;
-    //     let mut join_set = JoinSet::new();
-    //     let (sdx, rcv) = oneshot::channel();
-    //     join_set.spawn(async move {
-    //         let builder = Server::builder()
-    //             .add_service(ConsensusTransportServer::new(server.clone()))
-    //             .add_service(InitServiceServer::new(server));
-    //         builder.serve_with_shutdown(addr, rcv.map(drop)).await?;
-    //         Ok(())
-    //     });
-
-    //     let members = self.members.clone();
-    //     join_set.spawn(get_latency(members));
-    //     Ok((join_set, sdx))
-    // }
-
     async fn get_interface(&self) -> Arc<GrpcNetworkSet> {
         self.create_network_set().await
     }
@@ -356,7 +321,6 @@ impl Network for GrpcNetwork {
     }
 
     async fn get_member_len(&self) -> u32 {
-        // TODO: Impl electorates and calc majority for them
         (self.members.read().await.len() + 1) as u32
     }
 
@@ -366,11 +330,6 @@ impl Network for GrpcNetwork {
             node_id: self.self_info.0.id.to_bytes().to_vec(),
             host: self.self_info.1.clone(),
         };
-        // actual host
-        //let members = self.members.read().await;
-        //let Some(member) = members.first() else {
-        //    return Err(SyneviError::NoMembersFound);
-        //};
         let channel = Channel::from_shared(host)?.connect().await?;
         let request = tonic::Request::new(JoinElectorateRequest {
             config: Some(config),
@@ -405,7 +364,7 @@ impl Network for GrpcNetwork {
 
     async fn get_stream_events(
         &self,
-        last_applied: T,
+        last_applied: Vec<u8>,
         self_event: Vec<u8>,
     ) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError> {
         let lock = self.members.read().await;
@@ -415,35 +374,19 @@ impl Network for GrpcNetwork {
         };
         let channel = member.member.channel.clone();
         let request = GetEventRequest {
-            last_applied: last_applied.into(),
+            last_applied,
             self_event,
         };
 
         let (sdx, rcv) = tokio::sync::mpsc::channel(200);
         tokio::spawn(async move {
             let mut client = ReconfigurationServiceClient::new(channel);
-            println!("STREAMING CLIENT CREATED");
-            let response = client.get_events(tonic::Request::new(request)).await;
-            //let response = loop {
-            //    match tokio::time::timeout(
-            //        Duration::from_millis(300),
-            //        client.get_events(tonic::Request::new(request.clone())),
-            //    )
-            //    .await
-            //    {
-            //        Ok(res) => break (res),
-            //        Err(_) => {
-            //            dbg!("RETRY");
-            //            continue;
-            //        }
-            //    } //.await?;//.into_inner();
-            //};
-            println!("GOT RESPONSE");
-            let mut inner = response?.into_inner();
-            println!("GOT STREAM");
-            println!("STARTING STREAM LOOP");
+            let mut response = client
+                .get_events(tonic::Request::new(request))
+                .await?
+                .into_inner();
             loop {
-                let msg = inner.message().await;
+                let msg = response.message().await;
                 match msg {
                     Ok(Some(msg)) => {
                         sdx.send(msg).await.map_err(|_| {
@@ -501,28 +444,6 @@ impl NetworkInterface for GrpcNetworkSet {
         let mut responses: JoinSet<Result<(bool, BroadcastResponse), SyneviError>> = JoinSet::new();
         let mut result = Vec::new();
 
-        // let (state,id, t0) = match &request {
-        //     BroadcastRequest::PreAccept(request, _) => {
-        //         ("PreAccept",request.id.clone(), request.timestamp_zero.clone())
-        //     }
-        //     BroadcastRequest::Accept(request) => {
-        //         ("Accept", request.id.clone(), request.timestamp_zero.clone())
-        //     }
-        //     BroadcastRequest::Commit(request) => {
-        //         ("Commit", request.id.clone(), request.timestamp_zero.clone())
-        //     }
-        //     BroadcastRequest::Apply(request) => {
-        //         ("Apply", request.id.clone(), request.timestamp_zero.clone())
-        //     }
-        //     BroadcastRequest::Recover(request) => {
-        //         ("Recover", request.id.clone(), request.timestamp_zero.clone())
-        //     }
-        // };
-        // let (id, t0) = (
-        //     u128::from_be_bytes(id.as_slice().try_into()?),
-        //     T0::try_from(t0.as_slice())?,
-        // );
-        //dbg!("BROADCASTER:", &self.members, &id, &t0, state);
         // Send PreAccept request to every known member
         // Call match only once ...
         let mut await_majority = true;

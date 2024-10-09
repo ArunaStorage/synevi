@@ -1,6 +1,7 @@
 use ahash::RandomState;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
+use std::sync::Arc;
 use synevi_types::error::SyneviError;
 use synevi_types::traits::{Dependencies, Store};
 use synevi_types::types::RecoverEvent;
@@ -23,20 +24,20 @@ pub struct InternalStore {
 
 #[derive(Debug)]
 pub struct MemStore {
-    pub store: Mutex<InternalStore>,
+    pub store: Arc<Mutex<InternalStore>>,
 }
 
 impl MemStore {
     #[instrument(level = "trace")]
     pub fn new(node_serial: u16) -> Result<Self, SyneviError> {
-        let store = Mutex::new(InternalStore {
+        let store = Arc::new(Mutex::new(InternalStore {
             events: BTreeMap::default(),
             mappings: BTreeMap::default(),
             last_applied: T::default(),
             latest_t0: T0::default(),
             node_serial,
             latest_hash: [0; 32],
-        });
+        }));
         Ok(MemStore { store })
     }
 }
@@ -102,19 +103,16 @@ impl Store for MemStore {
         &self,
         last_applied: T,
         self_event: u128,
-    ) -> Receiver<Result<Event, SyneviError>> {
+    ) -> Result<Receiver<Result<Event, SyneviError>>, SyneviError> {
         let (sdx, rcv) = tokio::sync::mpsc::channel(100);
-        // TODO: Spawn in separate threads and remove the lock
-        if let Err(err) = self
-            .store
-            .lock()
-            .await
-            .get_events_until(last_applied, self_event, sdx)
-            .await
-        {
-            tracing::error!(?err);
-        };
-        rcv
+
+        let store = self.store.clone();
+        tokio::spawn(async move {
+            store.lock().await.get_events_until(last_applied, self_event, sdx).await?;
+            Ok::<(), SyneviError>(())
+        });
+
+        Ok(rcv)
     }
     async fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError> {
         Ok(self.store.lock().await.events.get(&t_zero).cloned())
@@ -254,9 +252,7 @@ impl InternalStore {
                         event.ballot = ballot;
                     }
                 }
-                if self.last_applied >= event.t {
-                    panic!("Should not happen");
-                }
+                assert!(self.last_applied < event.t);
                 self.last_applied = event.t;
                 let hashes = event.hash_event(self.latest_hash);
                 self.latest_hash = hashes.transaction_hash;
@@ -285,7 +281,6 @@ impl InternalStore {
             return Ok(());
         }
 
-        //TODO: Apply changes from database.rs
         if event.is_update(&upsert_event) {
             if let Some(old_t) = event.update_t(upsert_event.t) {
                 self.mappings.remove(&old_t);
@@ -307,9 +302,7 @@ impl InternalStore {
             }
 
             if event.state == State::Applied {
-                if self.last_applied >= event.t {
-                    panic!("Should not happen");
-                }
+                assert!(self.last_applied < event.t);
                 self.last_applied = event.t;
                 let hashes = event.hash_event(self.latest_hash);
                 self.latest_hash = hashes.transaction_hash;
@@ -424,12 +417,15 @@ impl InternalStore {
 
     async fn get_events_until(
         &self,
-        _last_applied: T,
-        self_event: u128,
+        last_applied: T,
+        _self_event: u128,
         sdx: Sender<Result<Event, SyneviError>>,
     ) -> Result<(), SyneviError> {
-        //todo!()
-        for (_, event) in &self.events {
+        let last_applied_t0 = self
+            .mappings
+            .get(&last_applied)
+            .ok_or_else(|| SyneviError::EventNotFound(last_applied.get_inner()))?;
+        for (_, event) in self.events.range(last_applied_t0..) {
             sdx.send(Ok(event.clone()))
                 .await
                 .map_err(|e| SyneviError::SendError(e.to_string()))?;

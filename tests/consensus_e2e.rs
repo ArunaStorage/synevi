@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests {
     use rand::Rng;
-    //use tokio::io::AsyncWriteExt;
     use std::collections::BTreeMap;
     use std::fmt::Write;
     use std::net::SocketAddr;
@@ -14,7 +13,6 @@ mod tests {
     use synevi_persistence::database::PersistentStore;
     use synevi_persistence::mem_store::MemStore;
     use tokio::fs;
-    use tokio::io::{AsyncWrite, AsyncWriteExt};
     use tokio::runtime::Builder;
     use ulid::Ulid;
 

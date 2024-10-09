@@ -66,6 +66,8 @@ pub enum SyneviError {
     NoMembersFound,
     #[error("Not ready for transactions")]
     NotReady,
+    #[error("Mismatched hashes")]
+    MismatchedHashes,
 }
 
 impl Serialize for SyneviError {

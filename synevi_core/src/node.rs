@@ -1,6 +1,5 @@
 use crate::coordinator::Coordinator;
 use crate::replica::ReplicaConfig;
-use crate::utils::from_dependency;
 use crate::wait_handler::WaitHandler;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,8 +12,8 @@ use synevi_network::reconfiguration::{BufferedMessage, Report};
 use synevi_network::replica::Replica;
 use synevi_persistence::mem_store::MemStore;
 use synevi_types::traits::Store;
-use synevi_types::types::{SyneviResult, TransactionPayload, UpsertEvent};
-use synevi_types::{Executor, State, SyneviError, T, T0};
+use synevi_types::types::{SyneviResult, TransactionPayload};
+use synevi_types::{Executor, State, SyneviError, T};
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
@@ -243,16 +242,13 @@ where
         ready: Arc<AtomicBool>,
     ) -> Result<(), SyneviError> {
         // 1. Broadcast self_config to other member
-        dbg!("Broadcast");
         let (all_members, self_id) = self.network.broadcast_config(member_host).await?;
 
         // 2. wait for JoinElectorate responses with expected majority and config from others
-        dbg!("Join");
         self.join_electorate(config_receiver, all_members, self_id, &replica)
             .await?;
 
         // 3. Send ReadyJoinElectorate && set myself to ready
-        dbg!("Ready");
         ready.store(true, Ordering::Relaxed);
         self.network.ready_electorate().await?;
         Ok(())
@@ -266,48 +262,29 @@ where
         replica: &ReplicaConfig<N, E, S>,
     ) -> Result<(), SyneviError> {
         let mut member_count = 0;
-        let mut highest_applied = T::default();
-        let mut last_applied: [u8; 32] = [0; 32];
         while let Some(report) = receiver.recv().await {
             self.add_member(report.node_id, report.node_serial, report.node_host, true)
                 .await?;
-            if report.last_applied > highest_applied {
-                highest_applied = report.last_applied;
-                last_applied = report.last_applied_hash;
-            }
             member_count += 1;
             if member_count >= all_members {
                 break;
             }
         }
 
-        dbg!("Sync");
+        let (last_applied, _) = self.event_store.last_applied().await;
+
         // 2.1 if majority replies with 0 events -> skip to 2.4.
-        self.sync_events(highest_applied, last_applied, self_id, &replica)
+        self.sync_events(last_applied, self_id, &replica)
             .await?;
 
         // 2.4 Apply buffered commits & applies
-        if self.info.serial == 6 {
-            dbg!("Apply buffered");
-            //replica.dump_buffer().await;
-        }
         let mut rcv = replica.send_buffered().await?;
         let mut join_set = JoinSet::new();
-        while let Some((t0, _, request)) = rcv
+        while let Some((_t0, _, request)) = rcv
             .recv()
             .await
             .ok_or_else(|| SyneviError::ReceiveError("Channel closed".to_string()))?
         {
-             if self.info.serial == 6 {
- //                println!(
- //                    "
- //BUFFER WORKER
- //T0:         {:?}",
- //req:        {:?}
- //",
- //                    t0, //request
- //                );
-            }
             match request {
                 BufferedMessage::Commit(req) => {
                     let clone = replica.clone();
@@ -325,47 +302,28 @@ where
                 }
             }
         }
-        let len = join_set.len();
-        let mut errs = 0;
         for task in join_set.join_all().await {
-            if let Err(err) = task {
-                errs += 1;
-                dbg!(err);
-            };
-        }
-        if errs != 0 {
-            dbg!(len, errs);
-            replica.dump_buffer().await;
-            panic!("Replica panicked");
+            task?;
         }
         Ok(())
     }
 
     async fn sync_events(
         &self,
-        highest_applied: T,
-        _last_applied: [u8; 32],
+        last_applied: T,
         self_id: Vec<u8>,
         replica: &ReplicaConfig<N, E, S>,
     ) -> Result<(), SyneviError> {
-        let mut last_applied_t_zero = T0::default();
-        let mut last_applied_id = u128::default();
-        if highest_applied != T::default() {
             // 2.2 else Request stream with events until last_applied (highest t of JoinElectorate)
             let mut rcv = self
                 .network
-                .get_stream_events(highest_applied, self_id)
+                .get_stream_events(last_applied.into(),self_id)
                 .await?;
             while let Some(event) = rcv.recv().await {
-                last_applied_t_zero = event.t_zero.as_slice().try_into()?;
-                last_applied_id = u128::from_be_bytes(event.id.as_slice().try_into()?);
                 let state: State = event.state.into();
-                if self.info.serial == 6 {
-                    dbg!("Got event", &last_applied_id, &last_applied_t_zero, &state);
-                }
                 match state {
                     State::Applied => {
-                        let res = replica
+                        replica
                             .apply(
                                 ApplyRequest {
                                     id: event.id,
@@ -378,11 +336,10 @@ where
                                 },
                                 false,
                             )
-                            .await;
-                        //dbg!(&res);
+                            .await?;
                     }
                     State::Commited => {
-                        let res = replica
+                        replica
                             .commit(
                                 CommitRequest {
                                     id: event.id,
@@ -393,31 +350,11 @@ where
                                 },
                                 false,
                             )
-                            .await;
-                        //dbg!(&res);
+                            .await?;
                     }
-                    _ => {
-                        // self.event_store
-                        //     .upsert_tx(UpsertEvent {
-                        //         id: u128::from_be_bytes(event.id.as_slice().try_into()?),
-                        //         t_zero: last_applied_t_zero,
-                        //         t: event.t.as_slice().try_into()?,
-                        //         state,
-                        //         transaction: Some(event.transaction.clone()),
-                        //         dependencies: Some(from_dependency(event.dependencies.clone())?),
-                        //         ballot: Some(event.ballot.as_slice().try_into()?),
-                        //         execution_hash: None,
-                        //     })
-                        //     .await?;
-                    }
+                    _ => (),
                 }
             }
-            //dbg!(
-            //    "LAST APPLIED STREAMED EVENT:",
-            //    last_applied_id,
-            //    last_applied_t_zero
-            //);
-        }
         Ok(())
     }
 }
