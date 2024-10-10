@@ -119,7 +119,7 @@ where
         match node
             .transaction(
                 u128::from_be_bytes(id.to_bytes()),
-                synevi_types::types::TransactionPayload::External(transaction),
+                transaction,
             )
             .await?
         {

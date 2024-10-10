@@ -30,9 +30,14 @@ async fn prepare() -> (
     for (i, name) in node_names.iter().enumerate() {
         for (i2, node) in nodes.iter_mut().enumerate() {
             if i != i2 {
-                node.add_member(*name, i as u16, format!("http://localhost:{}", 10000 + i), true)
-                    .await
-                    .unwrap();
+                node.add_member(
+                    *name,
+                    i as u16,
+                    format!("http://localhost:{}", 10000 + i),
+                    true,
+                )
+                .await
+                .unwrap();
             }
         }
     }
@@ -47,12 +52,7 @@ async fn parallel_execution(coordinator: Arc<Node<GrpcNetwork, DummyExecutor, Me
         let coordinator = coordinator.clone();
         joinset.spawn(async move {
             coordinator
-                .transaction(
-                    i,
-                    synevi_types::types::TransactionPayload::External(Vec::from(
-                        "This is a transaction",
-                    )),
-                )
+                .transaction(i, Vec::from("This is a transaction"))
                 .await
         });
     }
@@ -76,12 +76,7 @@ async fn contention_execution(coordinators: Vec<Arc<Node<GrpcNetwork, DummyExecu
             let coordinator = coordinator.clone();
             joinset.spawn(async move {
                 coordinator
-                    .transaction(
-                        i,
-                        synevi_types::types::TransactionPayload::External(Vec::from(
-                            "This is a transaction",
-                        )),
-                    )
+                    .transaction(i, Vec::from("This is a transaction"))
                     .await
             });
         }
@@ -107,14 +102,7 @@ async fn _bigger_payloads_execution(
     for i in 0..10 {
         let coordinator = coordinator.clone();
         let payload = payload.clone();
-        joinset.spawn(async move {
-            coordinator
-                .transaction(
-                    i,
-                    synevi_types::types::TransactionPayload::External(payload),
-                )
-                .await
-        });
+        joinset.spawn(async move { coordinator.transaction(i, payload).await });
     }
     while let Some(res) = joinset.join_next().await {
         match res.unwrap().unwrap() {

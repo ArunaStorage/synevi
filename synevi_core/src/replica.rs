@@ -444,7 +444,7 @@ where
         let majority = self.node.network.get_member_len().await;
         let self_event = Ulid::new();
         let _res = node
-            .transaction(
+            .internal_transaction(
                 self_event.0,
                 TransactionPayload::Internal(InternalExecution::JoinElectorate {
                     id: Ulid::from_bytes(node_id.as_slice().try_into()?),
@@ -526,7 +526,7 @@ where
         } = request;
         let node = self.node.clone();
         //dbg!("Before ready transaction");
-        node.transaction(
+        node.internal_transaction(
             Ulid::new().0,
             TransactionPayload::Internal(InternalExecution::ReadyElectorate {
                 id: Ulid::from_bytes(node_id.as_slice().try_into()?),

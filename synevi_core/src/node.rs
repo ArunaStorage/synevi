@@ -191,7 +191,19 @@ where
     }
 
     #[instrument(level = "trace", skip(self, transaction))]
-    pub async fn transaction(
+    pub async fn transaction(self: Arc<Self>, id: u128, transaction: E::Tx) -> SyneviResult<E> {
+        if !self.has_members.load(std::sync::atomic::Ordering::Relaxed) {
+            tracing::warn!("Consensus omitted: No members in the network");
+        } else if !self.is_ready.load(Ordering::Relaxed) {
+            return Err(SyneviError::NotReady);
+        };
+        let _permit = self.semaphore.acquire().await?;
+        let mut coordinator =
+            Coordinator::new(self.clone(), TransactionPayload::External(transaction), id).await;
+        coordinator.run().await
+    }
+
+    pub(super) async fn internal_transaction(
         self: Arc<Self>,
         id: u128,
         transaction: TransactionPayload<E::Tx>,
@@ -202,7 +214,8 @@ where
             return Err(SyneviError::NotReady);
         };
         let _permit = self.semaphore.acquire().await?;
-        let mut coordinator = Coordinator::new(self.clone(), transaction, id).await;
+        let mut coordinator =
+            Coordinator::new(self.clone(), transaction, id).await;
         coordinator.run().await
     }
 
@@ -274,8 +287,7 @@ where
         let (last_applied, _) = self.event_store.last_applied().await;
 
         // 2.1 if majority replies with 0 events -> skip to 2.4.
-        self.sync_events(last_applied, self_id, &replica)
-            .await?;
+        self.sync_events(last_applied, self_id, &replica).await?;
 
         // 2.4 Apply buffered commits & applies
         let mut rcv = replica.send_buffered().await?;
@@ -314,47 +326,47 @@ where
         self_id: Vec<u8>,
         replica: &ReplicaConfig<N, E, S>,
     ) -> Result<(), SyneviError> {
-            // 2.2 else Request stream with events until last_applied (highest t of JoinElectorate)
-            let mut rcv = self
-                .network
-                .get_stream_events(last_applied.into(),self_id)
-                .await?;
-            while let Some(event) = rcv.recv().await {
-                let state: State = event.state.into();
-                match state {
-                    State::Applied => {
-                        replica
-                            .apply(
-                                ApplyRequest {
-                                    id: event.id,
-                                    event: event.transaction,
-                                    timestamp_zero: event.t_zero,
-                                    timestamp: event.t,
-                                    dependencies: event.dependencies,
-                                    execution_hash: event.execution_hash,
-                                    transaction_hash: event.transaction_hash,
-                                },
-                                false,
-                            )
-                            .await?;
-                    }
-                    State::Commited => {
-                        replica
-                            .commit(
-                                CommitRequest {
-                                    id: event.id,
-                                    event: event.transaction,
-                                    timestamp_zero: event.t_zero,
-                                    timestamp: event.t,
-                                    dependencies: event.dependencies,
-                                },
-                                false,
-                            )
-                            .await?;
-                    }
-                    _ => (),
+        // 2.2 else Request stream with events until last_applied (highest t of JoinElectorate)
+        let mut rcv = self
+            .network
+            .get_stream_events(last_applied.into(), self_id)
+            .await?;
+        while let Some(event) = rcv.recv().await {
+            let state: State = event.state.into();
+            match state {
+                State::Applied => {
+                    replica
+                        .apply(
+                            ApplyRequest {
+                                id: event.id,
+                                event: event.transaction,
+                                timestamp_zero: event.t_zero,
+                                timestamp: event.t,
+                                dependencies: event.dependencies,
+                                execution_hash: event.execution_hash,
+                                transaction_hash: event.transaction_hash,
+                            },
+                            false,
+                        )
+                        .await?;
                 }
+                State::Commited => {
+                    replica
+                        .commit(
+                            CommitRequest {
+                                id: event.id,
+                                event: event.transaction,
+                                timestamp_zero: event.t_zero,
+                                timestamp: event.t,
+                                dependencies: event.dependencies,
+                            },
+                            false,
+                        )
+                        .await?;
+                }
+                _ => (),
             }
+        }
         Ok(())
     }
 }
@@ -370,7 +382,7 @@ mod tests {
     use synevi_network::network::GrpcNetwork;
     use synevi_network::network::Network;
     use synevi_types::traits::Store;
-    use synevi_types::types::{ExecutorResult, TransactionPayload};
+    use synevi_types::types::ExecutorResult;
     use synevi_types::{Executor, State, SyneviError, T, T0};
     use ulid::Ulid;
 
@@ -439,7 +451,7 @@ mod tests {
             .clone()
             .transaction(
                 2,
-                synevi_types::types::TransactionPayload::External(Vec::from("F")),
+                Vec::from("F"),
             )
             .await
             .unwrap();
@@ -502,7 +514,7 @@ mod tests {
             .clone()
             .transaction(
                 0,
-                synevi_types::types::TransactionPayload::External(Vec::from("last transaction")),
+                Vec::from("last transaction"),
             )
             .await
             .unwrap()
@@ -578,7 +590,7 @@ mod tests {
         .unwrap();
 
         let result = match node
-            .transaction(0, TransactionPayload::External(vec![127u8]))
+            .transaction(0, vec![127u8])
             .await
             .unwrap()
         {

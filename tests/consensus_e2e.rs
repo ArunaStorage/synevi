@@ -59,7 +59,7 @@ mod tests {
                 coordinator
                     .transaction(
                         i,
-                        synevi::TransactionPayload::External(Vec::from("This is a transaction")),
+                        Vec::from("This is a transaction"),
                     )
                     .await
             });
@@ -196,7 +196,7 @@ mod tests {
                     coordinator1
                         .transaction(
                             u128::from_be_bytes(Ulid::new().to_bytes()),
-                            synevi::TransactionPayload::External(Vec::from("C1")),
+                            Vec::from("C1"),
                         )
                         .await
                 });
@@ -204,7 +204,7 @@ mod tests {
                     coordinator2
                         .transaction(
                             u128::from_be_bytes(Ulid::new().to_bytes()),
-                            synevi::TransactionPayload::External(Vec::from("C2")),
+                            Vec::from("C2"),
                         )
                         .await
                 });
@@ -212,7 +212,7 @@ mod tests {
                     coordinator3
                         .transaction(
                             u128::from_be_bytes(Ulid::new().to_bytes()),
-                            synevi::TransactionPayload::External(Vec::from("C3")),
+                            Vec::from("C3"),
                         )
                         .await
                 });
@@ -220,7 +220,7 @@ mod tests {
                     coordinator4
                         .transaction(
                             u128::from_be_bytes(Ulid::new().to_bytes()),
-                            synevi::TransactionPayload::External(Vec::from("C4")),
+                            Vec::from("C4"),
                         )
                         .await
                 });
@@ -228,7 +228,7 @@ mod tests {
                     coordinator5
                         .transaction(
                             u128::from_be_bytes(Ulid::new().to_bytes()),
-                            synevi::TransactionPayload::External(Vec::from("C5")),
+                            Vec::from("C5"),
                         )
                         .await
                 });
@@ -390,7 +390,7 @@ mod tests {
                     .clone()
                     .transaction(
                         i,
-                        synevi::TransactionPayload::External(Vec::from("This is a transaction")),
+                        Vec::from("This is a transaction"),
                     )
                     .await
                     .unwrap()
@@ -504,9 +504,9 @@ mod tests {
                     coordinator
                         .transaction(
                             i,
-                            synevi::TransactionPayload::External(Vec::from(
+                            Vec::from(
                                 "This is a transaction",
-                            )),
+                            ),
                         )
                         .await
                 });
