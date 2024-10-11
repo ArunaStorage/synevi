@@ -46,6 +46,12 @@ pub trait Replica: Send + Sync {
         ready: bool,
     ) -> Result<RecoverResponse, SyneviError>;
 
+    async fn try_recover(
+        &self,
+        request: TryRecoverRequest,
+        ready: bool,
+    ) -> Result<TryRecoverResponse, SyneviError>;
+
     fn is_ready(&self) -> bool;
 }
 
@@ -185,6 +191,15 @@ where
         Ok(Response::new(
             self.inner
                 .recover(request.into_inner(), self.inner.is_ready())
+                .await
+                .map_err(|e| tonic::Status::internal(e.to_string()))?,
+        ))
+    }
+
+    async fn try_recover(&self, request: Request<TryRecoverRequest>) -> Result<Response<TryRecoverResponse>, Status> {
+        Ok(Response::new(
+            self.inner
+                .try_recover(request.into_inner(), self.inner.is_ready())
                 .await
                 .map_err(|e| tonic::Status::internal(e.to_string()))?,
         ))

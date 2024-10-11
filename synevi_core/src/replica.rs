@@ -1,3 +1,4 @@
+use crate::coordinator::Coordinator;
 use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
 use crate::wait_handler::WaitAction;
@@ -12,7 +13,8 @@ use synevi_network::configure_transport::{
 };
 use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
-    PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse,
+    PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse, TryRecoverRequest,
+    TryRecoverResponse,
 };
 use synevi_network::network::Network;
 use synevi_network::reconfiguration::{BufferedMessage, Reconfiguration, Report};
@@ -413,6 +415,21 @@ where
             nack: Ballot::default().into(),
         })
     }
+
+    #[instrument(level = "trace", skip(self))]
+    async fn try_recover(
+        &self,
+        request: TryRecoverRequest,
+        ready: bool,
+    ) -> Result<TryRecoverResponse, SyneviError> {
+        if ready {
+            let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
+            if self.node.event_store.get_event(t0).await?.is_some() {
+                Coordinator::recover(self.node.clone(), t0).await?;
+            }
+        }
+        Ok(TryRecoverResponse {})
+    }
 }
 
 #[async_trait::async_trait]
@@ -469,7 +486,11 @@ where
         let (sdx, rcv) = tokio::sync::mpsc::channel(200);
         let event_id = u128::from_be_bytes(request.self_event.as_slice().try_into()?);
         let last_applied = T::try_from(request.last_applied.as_slice())?;
-        let mut store_rcv = self.node.event_store.get_events_after(last_applied, event_id).await?;
+        let mut store_rcv = self
+            .node
+            .event_store
+            .get_events_after(last_applied, event_id)
+            .await?;
         tokio::spawn(async move {
             while let Some(Ok(event)) = store_rcv.recv().await {
                 let response = {

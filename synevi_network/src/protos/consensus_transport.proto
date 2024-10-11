@@ -8,6 +8,7 @@ service ConsensusTransport {
   rpc Accept(AcceptRequest) returns (AcceptResponse) {}
   rpc Apply(ApplyRequest) returns (ApplyResponse) {}
   rpc Recover(RecoverRequest) returns (RecoverResponse) {}
+  rpc TryRecover(TryRecoverRequest) returns (TryRecoverResponse) {}
 }
 
 message PreAcceptRequest {
@@ -86,3 +87,9 @@ message RecoverResponse {
   bytes timestamp = 5;
   bytes nack = 6;
 }
+
+message TryRecoverRequest {
+    bytes timestamp_zero = 1;
+}
+
+message TryRecoverResponse {}

@@ -16,6 +16,7 @@ pub mod tests {
     use synevi_types::Executor;
     use synevi_types::SyneviError;
     use synevi_types::T;
+    use synevi_types::T0;
     use tokio::sync::mpsc::Receiver;
     use tokio::sync::Mutex;
     use ulid::Ulid;
@@ -39,6 +40,11 @@ pub mod tests {
         ) -> Result<Vec<BroadcastResponse>, SyneviError> {
             self.got_requests.lock().await.push(request);
             Ok(vec![])
+        }
+        async fn broadcast_recovery(
+            &self, _t0: T0
+        ) -> Result<(), SyneviError> {
+            Ok(())
         }
     }
 

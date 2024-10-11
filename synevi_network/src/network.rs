@@ -7,7 +7,7 @@ use crate::configure_transport::{
     Config, GetEventRequest, GetEventResponse, JoinElectorateRequest, ReadyElectorateRequest,
     ReportLastAppliedRequest,
 };
-use crate::consensus_transport::{RecoverRequest, RecoverResponse};
+use crate::consensus_transport::{RecoverRequest, RecoverResponse, TryRecoverRequest};
 use crate::latency_service::get_latency;
 use crate::reconfiguration::Reconfiguration;
 use crate::{
@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::{net::SocketAddr, sync::Arc};
 use synevi_types::error::SyneviError;
-use synevi_types::T;
+use synevi_types::{T, T0};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
 use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
@@ -36,6 +36,7 @@ pub trait NetworkInterface: Send + Sync {
         &self,
         request: BroadcastRequest,
     ) -> Result<Vec<BroadcastResponse>, SyneviError>;
+    async fn broadcast_recovery(&self, t0: T0) -> Result<(), SyneviError>; // All members
 }
 
 #[async_trait::async_trait]
@@ -155,6 +156,9 @@ where
         request: BroadcastRequest,
     ) -> Result<Vec<BroadcastResponse>, SyneviError> {
         self.as_ref().broadcast(request).await
+    }
+    async fn broadcast_recovery(&self, t0: T0) -> Result<(), SyneviError> {
+        self.as_ref().broadcast_recovery(t0).await
     }
 }
 
@@ -339,6 +343,7 @@ impl Network for GrpcNetwork {
         let response = response.into_inner();
         Ok((response.majority, response.self_event))
     }
+
 
     async fn report_config(
         &self,
@@ -615,5 +620,21 @@ impl NetworkInterface for GrpcNetworkSet {
             return Err(SyneviError::MajorityNotReached);
         }
         Ok(result)
+    }
+
+    async fn broadcast_recovery(&self, t0: T0) -> Result<(), SyneviError> {
+        let mut responses: JoinSet<Result<(), SyneviError>> = JoinSet::new();
+        let inner_request = TryRecoverRequest { timestamp_zero: t0.into() };
+        for replica in &self.members {
+            let channel = replica.channel.clone();
+            let request = tonic::Request::new(inner_request.clone());
+            responses.spawn(async move {
+                let mut client = ConsensusTransportClient::new(channel);
+                client.try_recover(request).await?;
+                Ok(())
+            });
+        }
+        tokio::spawn(async move { responses.join_all().await });
+        Ok(())
     }
 }

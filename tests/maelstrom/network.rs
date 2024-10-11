@@ -418,6 +418,9 @@ impl NetworkInterface for MaelstromNetwork {
 
         Ok(result)
     }
+    async fn broadcast_recovery(&self, _t0: T0) -> Result<(), SyneviError> {
+        todo!()
+    }
 }
 
 pub(crate) async fn replica_dispatch<R: Replica + 'static>(
