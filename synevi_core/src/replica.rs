@@ -424,8 +424,13 @@ where
     ) -> Result<TryRecoverResponse, SyneviError> {
         if ready {
             let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
-            if self.node.event_store.get_event(t0).await?.is_some() {
-                Coordinator::recover(self.node.clone(), t0).await?;
+            if let Some(recover_event) = self
+                .node
+                .event_store
+                .recover_event(&t0, self.node.get_info().serial)
+                .await?
+            {
+                Coordinator::recover(self.node.clone(), recover_event).await?;
             }
         }
         Ok(TryRecoverResponse {})

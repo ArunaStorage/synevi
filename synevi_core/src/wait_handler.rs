@@ -9,7 +9,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use synevi_network::network::Network;
+use synevi_network::network::{Network, NetworkInterface};
 use synevi_types::traits::Store;
 use synevi_types::types::UpsertEvent;
 use synevi_types::{Executor, State, SyneviError, T, T0};
@@ -100,7 +100,6 @@ where
     }
 
     pub async fn run(self: Arc<Self>) -> Result<(), SyneviError> {
-
         let mut waiter_state = WaiterState::new();
         let mut recovering = BTreeSet::new();
 
@@ -201,7 +200,11 @@ where
                         recovering.insert(t0_recover);
                         let recover_t0 = recovering.pop_first().unwrap_or(t0_recover);
                         let wait_handler = self.clone();
-                        wait_handler.recover(recover_t0, &mut waiter_state).await;
+                        if let Err(err) = wait_handler.recover(recover_t0, &mut waiter_state).await
+                        {
+                            tracing::error!("Error recovering event: {:?}", err);
+                            println!("Error recovering event: {:?}", err);
+                        };
                     }
                 }
             }
@@ -265,17 +268,33 @@ where
         Ok(())
     }
 
-    async fn recover(self: Arc<Self>, t0_recover: T0, waiter_state: &mut WaiterState) {
+    async fn recover(
+        self: Arc<Self>,
+        t0_recover: T0,
+        waiter_state: &mut WaiterState,
+    ) -> Result<(), SyneviError> {
         if let Some(event) = waiter_state.events.get_mut(&t0_recover) {
             event.started_at = Instant::now();
         }
-        let node = self.node.clone();
-        tokio::spawn(async move {
-            if let Err(err) = Coordinator::recover(node, t0_recover).await {
-                tracing::error!("Error recovering event: {:?}", err);
-                println!("Error recovering event: {:?}", err);
-            }
-        });
+        if let Some(recover_event) = self
+            .node
+            .event_store
+            .recover_event(&t0_recover, self.node.get_info().serial)
+            .await?
+        {
+            let node = self.node.clone();
+            tokio::spawn(async move {
+                if let Err(err) = Coordinator::recover(node, recover_event).await {
+                    tracing::error!("Error recovering event: {:?}", err);
+                    println!("Error recovering event: {:?}", err);
+                }
+            });
+        } else {
+            let interface = self.node.network.get_interface().await;
+            interface.broadcast_recovery(t0_recover).await?;
+            todo!()
+        };
+        Ok(())
     }
 
     fn check_recovery(&self, waiter_state: &mut WaiterState) -> Option<T0> {

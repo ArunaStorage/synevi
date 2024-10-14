@@ -89,7 +89,7 @@ pub trait Store: Send + Sync + Sized + 'static {
         &self,
         t_zero_recover: &T0,
         node_serial: u16,
-    ) -> Result<RecoverEvent, SyneviError>;
+    ) -> Result<Option<RecoverEvent>, SyneviError>;
     // Check and update the ballot for a transaction
     // Returns true if the ballot was accepted (current <= ballot)
     async fn accept_tx_ballot(&self, t_zero: &T0, ballot: Ballot) -> Option<Ballot>;

@@ -72,7 +72,7 @@ impl Store for MemStore {
         &self,
         t_zero_recover: &T0,
         node_serial: u16,
-    ) -> Result<RecoverEvent, SyneviError> {
+    ) -> Result<Option<RecoverEvent>, SyneviError> {
         self.store
             .lock()
             .await
@@ -381,9 +381,9 @@ impl InternalStore {
         &mut self,
         t_zero_recover: &T0,
         node_serial: u16,
-    ) -> Result<RecoverEvent, SyneviError> {
+    ) -> Result<Option<RecoverEvent>, SyneviError> {
         let Some(state) = self.get_event_state(t_zero_recover) else {
-            return Err(SyneviError::EventNotFound(t_zero_recover.get_inner()));
+            return Ok(None);
         };
         if matches!(state, synevi_types::State::Undefined) {
             return Err(SyneviError::UndefinedRecovery);
@@ -392,7 +392,7 @@ impl InternalStore {
         if let Some(event) = self.events.get_mut(t_zero_recover) {
             event.ballot = Ballot(event.ballot.next_with_node(node_serial).into_time());
 
-            Ok(RecoverEvent {
+            Ok(Some(RecoverEvent {
                 id: event.id,
                 t_zero: event.t_zero,
                 t: event.t,
@@ -400,9 +400,9 @@ impl InternalStore {
                 transaction: event.transaction.clone(),
                 dependencies: event.dependencies.clone(),
                 ballot: event.ballot,
-            })
+            }))
         } else {
-            Err(SyneviError::EventNotFound(t_zero_recover.get_inner()))
+            Ok(None)
         }
     }
 

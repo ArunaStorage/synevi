@@ -15,7 +15,7 @@ use synevi_network::network::{BroadcastRequest, Network, NetworkInterface};
 use synevi_network::utils::IntoInner;
 use synevi_types::traits::Store;
 use synevi_types::types::{
-    ExecutorResult, Hashes, InternalExecution, RecoveryState, SyneviResult, TransactionPayload,
+    ExecutorResult, Hashes, InternalExecution, RecoverEvent, RecoveryState, SyneviResult, TransactionPayload
 };
 use synevi_types::{Ballot, Executor, State, SyneviError, Transaction, T, T0};
 use tracing::{instrument, trace};
@@ -363,14 +363,9 @@ where
     }
 
     #[instrument(level = "trace", skip(node))]
-    pub async fn recover(node: Arc<Node<N, E, S>>, t0_recover: T0) -> SyneviResult<E> {
+    pub async fn recover(node: Arc<Node<N, E, S>>, recover_event: RecoverEvent) ->  SyneviResult<E> {
         loop {
             let node = node.clone();
-            let recover_event = node
-                .event_store
-                .recover_event(&t0_recover, node.get_info().serial)
-                .await;
-            let recover_event = recover_event?;
 
             let network_interface = node.network.get_interface().await;
             let recover_responses = network_interface
@@ -378,20 +373,20 @@ where
                     id: recover_event.id.to_be_bytes().to_vec(),
                     ballot: recover_event.ballot.into(),
                     event: recover_event.transaction.clone(),
-                    timestamp_zero: t0_recover.into(),
+                    timestamp_zero: recover_event.t_zero.into(),
                 }))
                 .await?;
 
             let mut recover_coordinator = Coordinator::<N, E, S> {
                 node,
                 transaction: TransactionStateMachine {
-                    transaction: TransactionPayload::from_bytes(recover_event.transaction)?,
+                    transaction: TransactionPayload::from_bytes(recover_event.transaction.clone())?,
                     t_zero: recover_event.t_zero,
                     t: recover_event.t,
                     ballot: recover_event.ballot,
                     state: recover_event.state,
                     id: recover_event.id,
-                    dependencies: recover_event.dependencies,
+                    dependencies: recover_event.dependencies.clone(),
                 },
             };
 

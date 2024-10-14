@@ -161,7 +161,7 @@ impl Store for PersistentStore {
         &self,
         t_zero_recover: &T0,
         node_serial: u16,
-    ) -> Result<RecoverEvent, SyneviError> {
+    ) -> Result<Option<RecoverEvent>, SyneviError> {
         self.data
             .lock()
             .await
@@ -493,9 +493,9 @@ impl MutableData {
         &self,
         t_zero_recover: &T0,
         node_serial: u16,
-    ) -> Result<RecoverEvent, SyneviError> {
+    ) -> Result<Option<RecoverEvent>, SyneviError> {
         let Some(state) = self.get_event_state(t_zero_recover).await else {
-            return Err(SyneviError::EventNotFound(t_zero_recover.get_inner()));
+            return Ok(None);
         };
         if matches!(state, synevi_types::State::Undefined) {
             return Err(SyneviError::UndefinedRecovery);
@@ -513,7 +513,7 @@ impl MutableData {
             db.put(&mut write_txn, &t_zero_recover.get_inner(), &event)?;
             write_txn.commit()?;
 
-            Ok(RecoverEvent {
+            Ok(Some(RecoverEvent {
                 id: event.id,
                 t_zero: event.t_zero,
                 t: event.t,
@@ -521,9 +521,9 @@ impl MutableData {
                 transaction: event.transaction.clone(),
                 dependencies: event.dependencies.clone(),
                 ballot: event.ballot,
-            })
+            }))
         } else {
-            Err(SyneviError::EventNotFound(t_zero_recover.get_inner()))
+            Ok(None)
         }
     }
 
