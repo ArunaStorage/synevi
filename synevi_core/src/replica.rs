@@ -422,8 +422,10 @@ where
         request: TryRecoveryRequest,
         ready: bool,
     ) -> Result<TryRecoveryResponse, SyneviError> {
+
+        let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
+
         if ready {
-            let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
             if let Some(recover_event) = self
                 .node
                 .event_store
@@ -437,6 +439,8 @@ where
             }
         }
 
+        // This ensures that this t0 will not get a fast path in the future
+        self.node.event_store.inc_time_with_guard(t0).await?;
         Ok(TryRecoveryResponse {
             accepted: false,
         })

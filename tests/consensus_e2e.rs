@@ -10,7 +10,7 @@ mod tests {
     use synevi_core::node::Node;
     use synevi_core::tests::DummyExecutor;
     use synevi_network::network::GrpcNetwork;
-    use synevi_persistence::database::PersistentStore;
+    use synevi_persistence::lmdb_store::PersistentStore;
     use synevi_persistence::mem_store::MemStore;
     use tokio::fs;
     use tokio::runtime::Builder;

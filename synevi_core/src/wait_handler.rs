@@ -291,8 +291,37 @@ where
             });
         } else {
             let interface = self.node.network.get_interface().await;
-            interface.broadcast_recovery(t0_recover).await?;
-            todo!()
+            match interface.broadcast_recovery(t0_recover).await {
+                Ok(true) => (),
+                Ok(false) => {
+
+                    // Remove from
+                    // SAFETY: No majority has witnessed this Tx and no fast path is possible
+                    // -> Can be removed from waiter_state because a recovery will enforce a slow path / new t
+                    let mut to_apply = BTreeMap::new();
+                    waiter_state.remove_from_waiter_apply(&t0_recover, &mut to_apply);
+                    while let Some(mut apply) = to_apply.pop_first() {
+                        apply.1.action = WaitAction::ApplyAfter;
+                        if let Err(e) = self.upsert_event(&apply.1).await {
+                            tracing::error!("Error upserting event: {:?}", e);
+                            println!("Error upserting event: {:?}", e);
+                            continue;
+                        };
+                        waiter_state.applied.insert(apply.1.t_zero);
+                        if let Some(notify) = apply.1.notify.take() {
+                            let _ = notify.send(());
+                        }
+                        waiter_state
+                            .remove_from_waiter_apply(&apply.1.t_zero, &mut to_apply);
+                    }
+                
+                }
+                Err(err) => {
+                    tracing::error!("Error broadcasting recovery: {:?}", err);
+                    // TODO: Graceful restart ?
+                    panic!("Error broadcasting recovery: {:?}", err);
+                }
+            }
         };
         Ok(())
     }
