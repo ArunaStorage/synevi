@@ -110,4 +110,8 @@ pub trait Store: Send + Sync + Sized + 'static {
         t_zero: T0,
         execution_hash: [u8; 32],
     ) -> Result<Hashes, SyneviError>;
+
+    // Increases the max time to be above the specified guard
+    // Ensures that the guards t0 will not get a fast path afterwards
+    async fn inc_time_with_guard(&self, guard: T0) -> Result<(), SyneviError>;
 }

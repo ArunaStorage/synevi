@@ -1,4 +1,5 @@
 use ahash::RandomState;
+use monotime::MonoTime;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -17,7 +18,7 @@ pub struct InternalStore {
     pub events: BTreeMap<T0, Event>,      // Key: t0, value: Event
     pub(crate) mappings: BTreeMap<T, T0>, // Key: t, value t0
     pub last_applied: T,                  // t of last applied entry
-    pub(crate) latest_t0: T0,             // last created or recognized t0
+    pub(crate) latest_time: MonoTime,             // last created or recognized time
     pub node_serial: u16,
     latest_hash: [u8; 32],
 }
@@ -34,7 +35,7 @@ impl MemStore {
             events: BTreeMap::default(),
             mappings: BTreeMap::default(),
             last_applied: T::default(),
-            latest_t0: T0::default(),
+            latest_time: MonoTime::default(),
             node_serial,
             latest_hash: [0; 32],
         }));
@@ -156,14 +157,20 @@ impl Store for MemStore {
             .ok_or_else(|| SyneviError::MissingExecutionHash)?;
         Ok((last, hash.execution_hash))
     }
+
+    async fn inc_time_with_guard(&self, guard: T0) -> Result<(), SyneviError> {
+        let mut lock = self.store.lock().await;
+        lock.latest_time = lock.latest_time.next_with_guard_and_node(&guard, lock.node_serial).into_time();
+        Ok(())
+    }
 }
 
 impl InternalStore {
     #[instrument(level = "trace")]
     fn init_t_zero(&mut self, node_serial: u16) -> T0 {
-        let t0 = T0(self.latest_t0.next_with_node(node_serial).into_time());
-        self.latest_t0 = t0;
-        t0
+        let next_time = self.latest_time.next_with_node(node_serial).into_time();
+        self.latest_time = next_time;
+        T0(next_time)
     }
 
     #[instrument(level = "trace")]
@@ -174,18 +181,16 @@ impl InternalStore {
         transaction: Vec<u8>,
     ) -> Result<(T, HashSet<T0, RandomState>), SyneviError> {
         let (t, deps) = {
-            let t = T(if let Some((last_t, _)) = self.mappings.last_key_value() {
-                if **last_t > *t_zero {
-                    t_zero
-                        .next_with_guard_and_node(last_t, self.node_serial)
-                        .into_time()
-                } else {
-                    *t_zero
-                }
-            } else {
-                // No entries in the map -> insert the new event
-                *t_zero
-            });
+            let t = if self.latest_time > *t_zero {
+                let new_time_t = t_zero
+                        .next_with_guard_and_node(&self.latest_time, self.node_serial)
+                        .into_time();
+
+                self.latest_time = new_time_t;
+                T(new_time_t)
+            }else{
+                T(*t_zero)
+            };
             // This might not be necessary to re-use the write lock here
             let deps = self.get_tx_dependencies(&t, &t_zero);
             (t, deps)
@@ -238,6 +243,12 @@ impl InternalStore {
 
     #[instrument(level = "trace")]
     fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<(), SyneviError> {
+
+        // Update the latest time
+        if self.latest_time < *upsert_event.t {
+            self.latest_time = *upsert_event.t;
+        }
+
         let Some(event) = self.events.get_mut(&upsert_event.t_zero) else {
             let mut event = Event::from(upsert_event.clone());
             if matches!(event.state, State::Applied) {
@@ -269,11 +280,6 @@ impl InternalStore {
 
             return Ok(());
         };
-
-        // Update the latest t0
-        if self.latest_t0 < event.t_zero {
-            self.latest_t0 = event.t_zero;
-        }
 
         // Do not update to a "lower" state
         if upsert_event.state < event.state {

@@ -43,8 +43,8 @@ pub mod tests {
         }
         async fn broadcast_recovery(
             &self, _t0: T0
-        ) -> Result<(), SyneviError> {
-            Ok(())
+        ) -> Result<bool, SyneviError> {
+            Ok(true)
         }
     }
 
