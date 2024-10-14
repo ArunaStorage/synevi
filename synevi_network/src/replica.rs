@@ -48,9 +48,9 @@ pub trait Replica: Send + Sync {
 
     async fn try_recover(
         &self,
-        request: TryRecoverRequest,
+        request: TryRecoveryRequest,
         ready: bool,
-    ) -> Result<TryRecoverResponse, SyneviError>;
+    ) -> Result<TryRecoveryResponse, SyneviError>;
 
     fn is_ready(&self) -> bool;
 }
@@ -196,7 +196,7 @@ where
         ))
     }
 
-    async fn try_recover(&self, request: Request<TryRecoverRequest>) -> Result<Response<TryRecoverResponse>, Status> {
+    async fn try_recovery(&self, request: Request<TryRecoveryRequest>) -> Result<Response<TryRecoveryResponse>, Status> {
         Ok(Response::new(
             self.inner
                 .try_recover(request.into_inner(), self.inner.is_ready())

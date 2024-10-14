@@ -22,28 +22,6 @@ message GetTimeResponse {
 // Skew ~ LocalTimestamp - (Timestamp + RoundTripLatency / 2) -> Between Node Get and Node Respond
 
 
-service BroadcastService {
-    rpc RestartNode(RestartNodeRequest) returns (RestartNodeResponse) {}
-    rpc CustomBroadcast(CustomBroadcastRequest) returns (CustomBroadcastResponse) {}
-}
-
-message RestartNodeRequest {
-    bytes last_applied = 1; // if new T0::default, else last_applied
-    bytes last_applied_hash = 2;
-}
-
-message RestartNodeResponse {
-    bytes event = 1; // encoded events
-}
-
-message CustomBroadcastRequest {
-    bytes message = 1;
-}
-
-message CustomBroadcastResponse {}
-
-
-
 service ReconfigurationService {
     rpc JoinElectorate(JoinElectorateRequest) returns (JoinElectorateResponse) {}
     rpc GetEvents(GetEventRequest) returns (stream GetEventResponse) {}

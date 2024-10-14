@@ -8,7 +8,7 @@ license.workspace = true
 description.workspace = true
 
 [dependencies]
-prost = "0.13.0"
+prost = "0.13.3"
 tokio = {workspace = true}
 tokio-stream = {workspace = true}
 futures-util = "0.3.30"
@@ -23,4 +23,4 @@ synevi_types = { path = "../synevi_types", version = "0.1.0"}
 ahash = {workspace = true}
 
 [build-dependencies]
-tonic-build = "0.12.0"
+tonic-build = "0.12.3"

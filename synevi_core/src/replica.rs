@@ -13,8 +13,8 @@ use synevi_network::configure_transport::{
 };
 use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
-    PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse, TryRecoverRequest,
-    TryRecoverResponse,
+    PreAcceptRequest, PreAcceptResponse, RecoverRequest, RecoverResponse, TryRecoveryRequest,
+    TryRecoveryResponse,
 };
 use synevi_network::network::Network;
 use synevi_network::reconfiguration::{BufferedMessage, Reconfiguration, Report};
@@ -419,9 +419,9 @@ where
     #[instrument(level = "trace", skip(self))]
     async fn try_recover(
         &self,
-        request: TryRecoverRequest,
+        request: TryRecoveryRequest,
         ready: bool,
-    ) -> Result<TryRecoverResponse, SyneviError> {
+    ) -> Result<TryRecoveryResponse, SyneviError> {
         if ready {
             let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
             if let Some(recover_event) = self
@@ -430,10 +430,16 @@ where
                 .recover_event(&t0, self.node.get_info().serial)
                 .await?
             {
-                Coordinator::recover(self.node.clone(), recover_event).await?;
+                tokio::spawn(Coordinator::recover(self.node.clone(), recover_event));
+                return Ok(TryRecoveryResponse {
+                    accepted: true,
+                })
             }
         }
-        Ok(TryRecoverResponse {})
+
+        Ok(TryRecoveryResponse {
+            accepted: false,
+        })
     }
 }
 

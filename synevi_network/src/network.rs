@@ -7,7 +7,7 @@ use crate::configure_transport::{
     Config, GetEventRequest, GetEventResponse, JoinElectorateRequest, ReadyElectorateRequest,
     ReportLastAppliedRequest,
 };
-use crate::consensus_transport::{RecoverRequest, RecoverResponse, TryRecoverRequest};
+use crate::consensus_transport::{RecoverRequest, RecoverResponse, TryRecoveryRequest};
 use crate::latency_service::get_latency;
 use crate::reconfiguration::Reconfiguration;
 use crate::{
@@ -36,7 +36,7 @@ pub trait NetworkInterface: Send + Sync {
         &self,
         request: BroadcastRequest,
     ) -> Result<Vec<BroadcastResponse>, SyneviError>;
-    async fn broadcast_recovery(&self, t0: T0) -> Result<(), SyneviError>; // All members
+    async fn broadcast_recovery(&self, t0: T0) -> Result<bool, SyneviError>; // All members
 }
 
 #[async_trait::async_trait]
@@ -157,7 +157,7 @@ where
     ) -> Result<Vec<BroadcastResponse>, SyneviError> {
         self.as_ref().broadcast(request).await
     }
-    async fn broadcast_recovery(&self, t0: T0) -> Result<(), SyneviError> {
+    async fn broadcast_recovery(&self, t0: T0) -> Result<bool, SyneviError> {
         self.as_ref().broadcast_recovery(t0).await
     }
 }
@@ -622,19 +622,38 @@ impl NetworkInterface for GrpcNetworkSet {
         Ok(result)
     }
 
-    async fn broadcast_recovery(&self, t0: T0) -> Result<(), SyneviError> {
-        let mut responses: JoinSet<Result<(), SyneviError>> = JoinSet::new();
-        let inner_request = TryRecoverRequest { timestamp_zero: t0.into() };
+    async fn broadcast_recovery(&self, t0: T0) -> Result<bool, SyneviError> {
+        let mut responses: JoinSet<Result<bool, SyneviError>> = JoinSet::new();
+        let inner_request = TryRecoveryRequest { timestamp_zero: t0.into() };
         for replica in &self.members {
             let channel = replica.channel.clone();
             let request = tonic::Request::new(inner_request.clone());
             responses.spawn(async move {
                 let mut client = ConsensusTransportClient::new(channel);
-                client.try_recover(request).await?;
-                Ok(())
+                let result = client.try_recovery(request).await?.into_inner().accepted;
+                Ok(result)
             });
         }
-        tokio::spawn(async move { responses.join_all().await });
-        Ok(())
+
+        let mut counter = 0;
+        while let Some(result) = responses.join_next().await {
+            match result {
+                Ok(Ok(true)) => return Ok(true),
+                Ok(Ok(false)) => {
+                    counter += 1;
+                    continue
+                },
+                errors => {
+                    tracing::error!("Error in broadcast try_recovery: {:?}", errors);
+                    continue
+                },
+            }
+        }
+
+        if counter > (self.members.len() / 2) {
+            Ok(false)
+        }else{
+            Err(SyneviError::UnrecoverableTransaction)
+        }
     }
 }
