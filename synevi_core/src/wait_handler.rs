@@ -90,14 +90,19 @@ where
     pub fn commit(&self, t0_commit: &T0, t_commit: &T) {
         let mut waiter_lock = self.waiters.lock().expect("Locking waiters failed");
         waiter_lock.retain(|t0_waiting, waiter| {
-            let event = self.store.get_event(*t0_waiting).unwrap().unwrap(); // TODO: Remove unwrap
+            let Some(event) = self.store.get_event(*t0_waiting).ok().flatten() else {
+                tracing::error!(
+                    "Unexpected state in wait_handler: Event not found in store"
+                );
+                return true;
+            }; 
             if event.dependencies.contains(t0_commit) {
                 if t_commit > &event.t {
                     waiter.dependency_states += 1;
                     waiter.waited_since = Instant::now();
                     if waiter.dependency_states >= event.dependencies.len() as u64 {
                         for sdx in waiter.sender.drain(..) {
-                            sdx.send(()).unwrap(); // TODO: Remove unwrap
+                            let _ = sdx.send(());
                         }
                         return false;
                     }
@@ -110,13 +115,18 @@ where
     pub fn apply(&self, t0_commit: &T0) {
         let mut waiter_lock = self.waiters.lock().expect("Locking waiters failed");
         waiter_lock.retain(|t0_waiting, waiter| {
-            let event = self.store.get_event(*t0_waiting).unwrap().unwrap(); // TODO: Remove unwrap
+            let Some(event) = self.store.get_event(*t0_waiting).ok().flatten() else {
+                tracing::error!(
+                    "Unexpected state in wait_handler: Event not found in store"
+                );
+                return true;
+            }; 
             if event.dependencies.contains(t0_commit) {
                 waiter.dependency_states += 1;
                 waiter.waited_since = Instant::now();
                 if waiter.dependency_states >= event.dependencies.len() as u64 {
                     for sdx in waiter.sender.drain(..) {
-                        sdx.send(()).unwrap(); // TODO: Remove unwrap
+                        let _ = sdx.send(());
                     }
                     return false;
                 }
