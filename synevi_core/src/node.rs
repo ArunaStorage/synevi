@@ -1,13 +1,14 @@
 use crate::coordinator::Coordinator;
 use crate::replica::ReplicaConfig;
-use crate::wait_handler::WaitHandler;
+use crate::wait_handler::{CheckResult, WaitHandler};
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::RwLock;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::consensus_transport::{
     ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
 };
-use synevi_network::network::{Network, NodeInfo};
+use synevi_network::network::{Network, NetworkInterface, NodeInfo};
 use synevi_network::reconfiguration::{BufferedMessage, Report};
 use synevi_network::replica::Replica;
 use synevi_persistence::mem_store::MemStore;
@@ -46,6 +47,7 @@ where
     semaphore: Arc<tokio::sync::Semaphore>,
     has_members: AtomicBool,
     is_ready: Arc<AtomicBool>,
+    self_clone: RwLock<Option<Arc<Self>>>,
 }
 
 impl<N, E> Node<N, E, MemStore>
@@ -107,11 +109,19 @@ where
             executor,
             has_members: AtomicBool::new(false),
             is_ready: Arc::new(AtomicBool::new(true)),
+            self_clone: RwLock::new(None),
         });
+        node.self_clone
+            .write()
+            .expect("Locking self_clone failed")
+            .replace(node.clone());
 
         let ready = Arc::new(AtomicBool::new(true));
         let (replica, _) = ReplicaConfig::new(node.clone(), ready);
         node.network.spawn_server(replica).await?;
+
+        let node_clone = node.clone();
+        tokio::spawn(async move { node_clone.run_check_recovery().await });
 
         // If no config / persistence -> default
         Ok(node)
@@ -152,10 +162,18 @@ where
             executor,
             has_members: AtomicBool::new(false),
             is_ready: ready.clone(),
+            self_clone: RwLock::new(None),
         });
+
+        node.self_clone
+            .write()
+            .expect("Locking self_clone failed")
+            .replace(node.clone());
 
         let (replica, config_receiver) = ReplicaConfig::new(node.clone(), ready.clone());
         node.network.spawn_server(replica.clone()).await?;
+        let node_clone = node.clone();
+        tokio::spawn(async move { node_clone.run_check_recovery().await });
         node.reconfigure(replica, member_host, config_receiver, ready)
             .await?;
 
@@ -233,12 +251,9 @@ where
         let t0_commit = event.t_zero.clone();
         let t_commit = event.t.clone();
 
-        let prev_event = self
-            .event_store
-            .get_event(t0_commit)?
-            .ok_or_else(|| SyneviError::EventNotFound(event.id))?;
+        let prev_event = self.event_store.get_event(t0_commit)?;
 
-        if prev_event.state < State::Commited {
+        if !prev_event.is_some_and(|e| e.state > State::Commited) {
             self.event_store.upsert_tx(event)?;
             let waiter = self.wait_handler.get_waiter(&t0_commit);
             waiter.await.map_err(|e| {
@@ -251,15 +266,19 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    pub async fn apply(&self, event: UpsertEvent) -> Result<(), SyneviError> {
+    pub async fn apply(&self, mut event: UpsertEvent) -> Result<(), SyneviError> {
         let t0_apply = event.t_zero.clone();
 
-        let prev_event = self
-            .event_store
-            .get_event(t0_apply)?
-            .ok_or_else(|| SyneviError::EventNotFound(event.id))?;
+        let prev_event = self.event_store.get_event(t0_apply)?;
 
-        if prev_event.state < State::Applied {
+        let needs_wait = if let Some(prev_event) = prev_event {
+            prev_event.state < State::Applied
+        } else {
+            event.state = State::Commited;
+            self.commit(event.clone()).await?;
+            true
+        };
+        if needs_wait {
             let waiter = self.wait_handler.get_waiter(&t0_apply);
             waiter.await.map_err(|e| {
                 tracing::error!("Error waiting for commit: {:?}", e);
@@ -269,6 +288,48 @@ where
         }
         self.wait_handler.apply(&t0_apply);
         Ok(())
+    }
+
+    async fn run_check_recovery(&self) {
+        let self_clonable = self
+            .self_clone
+            .read()
+            .expect("Locking self_clone failed")
+            .clone()
+            .expect("Self clone is None");
+
+        loop {
+            match self.wait_handler.check_recovery() {
+                CheckResult::NoRecovery => (),
+                CheckResult::RecoverEvent(recover_event) => {
+                    let self_clone = self_clonable.clone();
+                    match tokio::spawn(Coordinator::recover(self_clone, recover_event)).await {
+                        Ok(Ok(_)) => (),
+                        Ok(Err(e)) => {
+                            tracing::error!("Error recovering event: {:?}", e);
+                        }
+                        Err(e) => {
+                            tracing::error!("JoinError recovering event: {:?}", e);
+                        }
+                    }
+                }
+                CheckResult::RecoverUnknown(t0_recover) => {
+                    let interface = self.network.get_interface().await;
+                    match interface.broadcast_recovery(t0_recover).await {
+                        Ok(true) => (),
+                        Ok(false) => {
+                            self.wait_handler.apply(&t0_recover);
+                        }
+                        Err(err) => {
+                            tracing::error!("Error broadcasting recovery: {:?}", err);
+                            panic!("Error broadcasting recovery: {:?}", err);
+                        }
+                    }
+                }
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
     }
 
     #[instrument(level = "trace", skip(self, replica))]

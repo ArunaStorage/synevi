@@ -7,9 +7,7 @@ use std::{
 use tokio::sync::mpsc::Receiver;
 
 use crate::{
-    types::{
-        Event, Hashes, RecoverDependencies, RecoverEvent, SyneviResult, UpsertEvent,
-    },
+    types::{Event, Hashes, RecoverDependencies, RecoverEvent, SyneviResult, UpsertEvent},
     Ballot, State, SyneviError, T, T0,
 };
 

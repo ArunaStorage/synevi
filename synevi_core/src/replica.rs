@@ -186,18 +186,16 @@ where
                 }
             }
 
-            self.node
-                .event_store
-                .upsert_tx(UpsertEvent {
-                    id: request_id,
-                    t_zero,
-                    t,
-                    state: State::Accepted,
-                    transaction: Some(request.event),
-                    dependencies: Some(from_dependency(request.dependencies)?),
-                    ballot: Some(request_ballot),
-                    execution_hash: None,
-                })?;
+            self.node.event_store.upsert_tx(UpsertEvent {
+                id: request_id,
+                t_zero,
+                t,
+                state: State::Accepted,
+                transaction: Some(request.event),
+                dependencies: Some(from_dependency(request.dependencies)?),
+                ballot: Some(request_ballot),
+                execution_hash: None,
+            })?;
 
             self.node.event_store.get_tx_dependencies(&t, &t_zero)
         };
@@ -228,18 +226,18 @@ where
 
         let deps = from_dependency(request.dependencies)?;
 
-        
-        
-        self.node.commit(UpsertEvent {
-            id: request_id,
-            t_zero,
-            t,
-            state: State::Commited,
-            transaction: Some(request.event),
-            dependencies: Some(deps),
-            ballot: None,
-            execution_hash: None,
-        }).await?;
+        self.node
+            .commit(UpsertEvent {
+                id: request_id,
+                t_zero,
+                t,
+                state: State::Commited,
+                transaction: Some(request.event),
+                dependencies: Some(deps),
+                ballot: None,
+                execution_hash: None,
+            })
+            .await?;
         Ok(CommitResponse {})
     }
 
@@ -266,16 +264,18 @@ where
 
         let deps = from_dependency(request.dependencies.clone())?;
 
-        self.node.apply(UpsertEvent {
-            id: request_id,
-            t_zero,
-            t,
-            state: State::Applied,
-            transaction: Some(request.event),
-            dependencies: Some(deps),
-            ballot: None,
-            execution_hash: None,
-        }).await?;
+        self.node
+            .apply(UpsertEvent {
+                id: request_id,
+                t_zero,
+                t,
+                state: State::Applied,
+                transaction: Some(request.event),
+                dependencies: Some(deps),
+                ballot: None,
+                execution_hash: None,
+            })
+            .await?;
 
         // TODO: Refactor in execute function
         let result = match transaction {

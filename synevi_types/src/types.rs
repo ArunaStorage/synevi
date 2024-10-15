@@ -432,6 +432,20 @@ impl From<UpsertEvent> for Event {
     }
 }
 
+impl From<Event> for RecoverEvent {
+    fn from(value: Event) -> Self {
+        RecoverEvent {
+            id: value.id,
+            t_zero: value.t_zero,
+            t: value.t,
+            state: value.state,
+            transaction: value.transaction,
+            dependencies: value.dependencies,
+            ballot: value.ballot,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::{types::TransactionPayload, Transaction};

@@ -284,7 +284,7 @@ where
     #[instrument(level = "trace", skip(self))]
     async fn execute_consensus(&mut self) -> Result<(SyneviResult<E>, Hashes), SyneviError> {
         self.transaction.state = State::Applied;
-        
+
         self.node.apply((&self.transaction).into()).await?;
 
         let result = match &self.transaction.transaction {
