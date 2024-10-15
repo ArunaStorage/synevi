@@ -274,6 +274,8 @@ where
         let deps = from_dependency(request.dependencies)?;
         let (sx, rx) = tokio::sync::oneshot::channel();
 
+        // self.node.event_store.get_waiter(&t_zero, APPLY).await?;
+
         self.node
             .get_wait_handler()
             .await?
@@ -291,6 +293,7 @@ where
         rx.await
             .map_err(|_| SyneviError::ReceiveError("Wait receiver closed".to_string()))?;
 
+        // TODO: Refactor in execute function
         let result = match transaction {
             TransactionPayload::None => {
                 return Err(SyneviError::TransactionNotFound);
