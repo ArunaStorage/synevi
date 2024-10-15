@@ -1,7 +1,6 @@
 use crate::coordinator::Coordinator;
 use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
-//use crate::wait_handler::WaitAction;
 use sha3::{Digest, Sha3_256};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -126,7 +125,6 @@ where
             .node
             .event_store
             .accept_tx_ballot(&t0, Ballot::default())
-            .await
         {
             if ballot != Ballot::default() {
                 return Ok(PreAcceptResponse {
@@ -143,8 +141,7 @@ where
         let (t, deps) = self
             .node
             .event_store
-            .pre_accept_tx(request_id, t0, request.event)
-            .await?;
+            .pre_accept_tx(request_id, t0, request.event)?;
 
         // self.reorder_buffer
         //      .send_msg(t0, sx, request.event, waiting_time)
@@ -180,7 +177,6 @@ where
                 .node
                 .event_store
                 .accept_tx_ballot(&t_zero, request_ballot)
-                .await
             {
                 if ballot != request_ballot {
                     return Ok(AcceptResponse {
@@ -201,10 +197,9 @@ where
                     dependencies: Some(from_dependency(request.dependencies)?),
                     ballot: Some(request_ballot),
                     execution_hash: None,
-                })
-                .await?;
+                })?;
 
-            self.node.event_store.get_tx_dependencies(&t, &t_zero).await
+            self.node.event_store.get_tx_dependencies(&t, &t_zero)
         };
         Ok(AcceptResponse {
             dependencies: into_dependency(&dependencies),
@@ -232,21 +227,19 @@ where
         trace!(?request_id, "Replica: Commit");
 
         let deps = from_dependency(request.dependencies)?;
-        let rx = self
-            .node
-            .event_store
-            .waiter_commit(UpsertEvent {
-                id: request_id,
-                t_zero,
-                t,
-                state: State::Commited,
-                transaction: Some(request.event),
-                dependencies: Some(deps),
-                ballot: None,
-                execution_hash: None,
-            })
-            .await?;
-        let _ = rx.await;
+
+        
+        
+        self.node.commit(UpsertEvent {
+            id: request_id,
+            t_zero,
+            t,
+            state: State::Commited,
+            transaction: Some(request.event),
+            dependencies: Some(deps),
+            ballot: None,
+            execution_hash: None,
+        }).await?;
         Ok(CommitResponse {})
     }
 
@@ -272,23 +265,17 @@ where
             TransactionPayload::from_bytes(request.event.clone())?;
 
         let deps = from_dependency(request.dependencies.clone())?;
-        let rx = self
-            .node
-            .event_store
-            .waiter_apply(UpsertEvent {
-                id: request_id,
-                t_zero,
-                t,
-                state: State::Applied,
-                transaction: Some(request.event),
-                dependencies: Some(deps),
-                ballot: None,
-                execution_hash: None,
-            })
-            .await?;
 
-        rx.await
-            .map_err(|_| SyneviError::ReceiveError("Wait receiver closed".to_string()))?;
+        self.node.apply(UpsertEvent {
+            id: request_id,
+            t_zero,
+            t,
+            state: State::Applied,
+            transaction: Some(request.event),
+            dependencies: Some(deps),
+            ballot: None,
+            execution_hash: None,
+        }).await?;
 
         // TODO: Refactor in execute function
         let result = match transaction {
@@ -305,7 +292,7 @@ where
                                 .node
                                 .add_member(*id, *serial, host.clone(), false)
                                 .await;
-                            let (t, hash) = self.node.event_store.last_applied_hash().await?;
+                            let (t, hash) = self.node.event_store.last_applied_hash()?;
                             self.node
                                 .network
                                 .report_config(t, hash, host.clone())
@@ -336,8 +323,7 @@ where
         let hashes = self
             .node
             .event_store
-            .get_and_update_hash(t_zero, hash.into())
-            .await?;
+            .get_and_update_hash(t_zero, hash.into())?;
         if request.transaction_hash != hashes.transaction_hash
             || request.execution_hash != hashes.execution_hash
         {
@@ -363,7 +349,7 @@ where
         // TODO/WARNING: This was initially in one Mutex lock
         //let mut event_store = self.node.event_store.lock().await;
 
-        if let Some(state) = self.node.event_store.get_event_state(&t_zero).await {
+        if let Some(state) = self.node.event_store.get_event_state(&t_zero) {
             // If another coordinator has started recovery with a higher ballot
             // Return NACK with the higher ballot number
             let request_ballot = Ballot::try_from(request.ballot.as_slice())?;
@@ -371,7 +357,6 @@ where
                 .node
                 .event_store
                 .accept_tx_ballot(&t_zero, request_ballot)
-                .await
             {
                 if request_ballot != ballot {
                     return Ok(RecoverResponse {
@@ -384,16 +369,14 @@ where
             if matches!(state, State::Undefined) {
                 self.node
                     .event_store
-                    .pre_accept_tx(request_id, t_zero, request.event)
-                    .await?;
+                    .pre_accept_tx(request_id, t_zero, request.event)?;
             };
         } else {
             self.node
                 .event_store
-                .pre_accept_tx(request_id, t_zero, request.event)
-                .await?;
+                .pre_accept_tx(request_id, t_zero, request.event)?;
         }
-        let recover_deps = self.node.event_store.get_recover_deps(&t_zero).await?;
+        let recover_deps = self.node.event_store.get_recover_deps(&t_zero)?;
 
         self.node
             .stats
@@ -404,7 +387,6 @@ where
             .node
             .event_store
             .get_event_state(&t_zero)
-            .await
             .ok_or_else(|| SyneviError::EventNotFound(t_zero.get_inner()))?;
         Ok(RecoverResponse {
             local_state: local_state.into(),
@@ -428,8 +410,7 @@ where
             if let Some(recover_event) = self
                 .node
                 .event_store
-                .recover_event(&t0, self.node.get_info().serial)
-                .await?
+                .recover_event(&t0, self.node.get_info().serial)?
             {
                 tokio::spawn(Coordinator::recover(self.node.clone(), recover_event));
                 return Ok(TryRecoveryResponse { accepted: true });
@@ -437,7 +418,7 @@ where
         }
 
         // This ensures that this t0 will not get a fast path in the future
-        self.node.event_store.inc_time_with_guard(t0).await?;
+        self.node.event_store.inc_time_with_guard(t0)?;
         Ok(TryRecoveryResponse { accepted: false })
     }
 }
@@ -499,8 +480,7 @@ where
         let mut store_rcv = self
             .node
             .event_store
-            .get_events_after(last_applied, event_id)
-            .await?;
+            .get_events_after(last_applied, event_id)?;
         tokio::spawn(async move {
             while let Some(Ok(event)) = store_rcv.recv().await {
                 let response = {

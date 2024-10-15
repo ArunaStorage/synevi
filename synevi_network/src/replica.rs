@@ -196,7 +196,10 @@ where
         ))
     }
 
-    async fn try_recovery(&self, request: Request<TryRecoveryRequest>) -> Result<Response<TryRecoveryResponse>, Status> {
+    async fn try_recovery(
+        &self,
+        request: Request<TryRecoveryRequest>,
+    ) -> Result<Response<TryRecoveryResponse>, Status> {
         Ok(Response::new(
             self.inner
                 .try_recover(request.into_inner(), self.inner.is_ready())

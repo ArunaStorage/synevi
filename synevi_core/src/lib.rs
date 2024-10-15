@@ -3,7 +3,7 @@ pub mod node;
 pub mod reorder_buffer;
 pub mod replica;
 pub mod utils;
-//mod wait_handler;
+mod wait_handler;
 
 pub mod tests {
     use std::sync::Arc;
@@ -41,9 +41,7 @@ pub mod tests {
             self.got_requests.lock().await.push(request);
             Ok(vec![])
         }
-        async fn broadcast_recovery(
-            &self, _t0: T0
-        ) -> Result<bool, SyneviError> {
+        async fn broadcast_recovery(&self, _t0: T0) -> Result<bool, SyneviError> {
             Ok(true)
         }
     }

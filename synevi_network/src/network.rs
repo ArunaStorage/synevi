@@ -344,7 +344,6 @@ impl Network for GrpcNetwork {
         Ok((response.majority, response.self_event))
     }
 
-
     async fn report_config(
         &self,
         last_applied: T,
@@ -624,7 +623,9 @@ impl NetworkInterface for GrpcNetworkSet {
 
     async fn broadcast_recovery(&self, t0: T0) -> Result<bool, SyneviError> {
         let mut responses: JoinSet<Result<bool, SyneviError>> = JoinSet::new();
-        let inner_request = TryRecoveryRequest { timestamp_zero: t0.into() };
+        let inner_request = TryRecoveryRequest {
+            timestamp_zero: t0.into(),
+        };
         for replica in &self.members {
             let channel = replica.channel.clone();
             let request = tonic::Request::new(inner_request.clone());
@@ -641,18 +642,18 @@ impl NetworkInterface for GrpcNetworkSet {
                 Ok(Ok(true)) => return Ok(true),
                 Ok(Ok(false)) => {
                     counter += 1;
-                    continue
-                },
+                    continue;
+                }
                 errors => {
                     tracing::error!("Error in broadcast try_recovery: {:?}", errors);
-                    continue
-                },
+                    continue;
+                }
             }
         }
 
         if counter > (self.members.len() / 2) {
             Ok(false)
-        }else{
+        } else {
             Err(SyneviError::UnrecoverableTransaction)
         }
     }

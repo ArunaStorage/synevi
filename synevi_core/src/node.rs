@@ -1,5 +1,6 @@
 use crate::coordinator::Coordinator;
 use crate::replica::ReplicaConfig;
+use crate::wait_handler::WaitHandler;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{atomic::AtomicU64, Arc};
@@ -11,7 +12,7 @@ use synevi_network::reconfiguration::{BufferedMessage, Report};
 use synevi_network::replica::Replica;
 use synevi_persistence::mem_store::MemStore;
 use synevi_types::traits::Store;
-use synevi_types::types::{SyneviResult, TransactionPayload};
+use synevi_types::types::{SyneviResult, TransactionPayload, UpsertEvent};
 use synevi_types::{Executor, State, SyneviError, T};
 use tokio::sync::mpsc::Receiver;
 use tokio::task::JoinSet;
@@ -41,7 +42,7 @@ where
     pub executor: E,
     pub event_store: Arc<S>,
     pub stats: Stats,
-    //pub wait_handler: RwLock<Option<Arc<WaitHandler<N, E, S>>>>,
+    pub wait_handler: WaitHandler<S>,
     semaphore: Arc<tokio::sync::Semaphore>,
     has_members: AtomicBool,
     is_ready: Arc<AtomicBool>,
@@ -92,9 +93,14 @@ where
         //     reorder_clone.run().await.unwrap();
         // });
 
+        let arc_store = Arc::new(store);
+
+        let wait_handler = WaitHandler::new(arc_store.clone());
+
         let node = Arc::new(Node {
             info: node_name,
-            event_store: Arc::new(store),
+            event_store: arc_store,
+            wait_handler,
             network,
             stats,
             semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
@@ -102,7 +108,6 @@ where
             has_members: AtomicBool::new(false),
             is_ready: Arc::new(AtomicBool::new(true)),
         });
-
 
         let ready = Arc::new(AtomicBool::new(true));
         let (replica, _) = ReplicaConfig::new(node.clone(), ready);
@@ -133,18 +138,21 @@ where
             total_recovers: AtomicU64::new(0),
         };
 
+        let arc_store = Arc::new(store);
+        let wait_handler = WaitHandler::new(arc_store.clone());
+
         let ready = Arc::new(AtomicBool::new(false));
         let node = Arc::new(Node {
             info: node_name,
-            event_store: Arc::new(store),
+            event_store: arc_store,
             network,
+            wait_handler,
             stats,
             semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
             executor,
             has_members: AtomicBool::new(false),
             is_ready: ready.clone(),
         });
-
 
         let (replica, config_receiver) = ReplicaConfig::new(node.clone(), ready.clone());
         node.network.spawn_server(replica.clone()).await?;
@@ -198,8 +206,7 @@ where
             return Err(SyneviError::NotReady);
         };
         let _permit = self.semaphore.acquire().await?;
-        let mut coordinator =
-            Coordinator::new(self.clone(), transaction, id).await;
+        let mut coordinator = Coordinator::new(self.clone(), transaction, id).await;
         coordinator.run().await
     }
 
@@ -219,6 +226,49 @@ where
 
     pub fn get_info(&self) -> NodeInfo {
         self.info.clone()
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    pub async fn commit(&self, event: UpsertEvent) -> Result<(), SyneviError> {
+        let t0_commit = event.t_zero.clone();
+        let t_commit = event.t.clone();
+
+        let prev_event = self
+            .event_store
+            .get_event(t0_commit)?
+            .ok_or_else(|| SyneviError::EventNotFound(event.id))?;
+
+        if prev_event.state < State::Commited {
+            self.event_store.upsert_tx(event)?;
+            let waiter = self.wait_handler.get_waiter(&t0_commit);
+            waiter.await.map_err(|e| {
+                tracing::error!("Error waiting for commit: {:?}", e);
+                SyneviError::ReceiveError(format!("Error waiting for commit"))
+            })?;
+        }
+        self.wait_handler.commit(&t0_commit, &t_commit);
+        Ok(())
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    pub async fn apply(&self, event: UpsertEvent) -> Result<(), SyneviError> {
+        let t0_apply = event.t_zero.clone();
+
+        let prev_event = self
+            .event_store
+            .get_event(t0_apply)?
+            .ok_or_else(|| SyneviError::EventNotFound(event.id))?;
+
+        if prev_event.state < State::Applied {
+            let waiter = self.wait_handler.get_waiter(&t0_apply);
+            waiter.await.map_err(|e| {
+                tracing::error!("Error waiting for commit: {:?}", e);
+                SyneviError::ReceiveError(format!("Error waiting for commit"))
+            })?;
+            self.event_store.upsert_tx(event)?;
+        }
+        self.wait_handler.apply(&t0_apply);
+        Ok(())
     }
 
     #[instrument(level = "trace", skip(self, replica))]
@@ -259,7 +309,7 @@ where
             }
         }
 
-        let (last_applied, _) = self.event_store.last_applied().await;
+        let (last_applied, _) = self.event_store.last_applied();
 
         // 2.1 if majority replies with 0 events -> skip to 2.4.
         self.sync_events(last_applied, self_id, &replica).await?;
@@ -424,17 +474,14 @@ mod tests {
 
         let _result = coordinator
             .clone()
-            .transaction(
-                2,
-                Vec::from("F"),
-            )
+            .transaction(2, Vec::from("F"))
             .await
             .unwrap();
 
-        let coord = coordinator.event_store.get_event_store().await;
+        let coord = coordinator.event_store.get_event_store();
         for node in nodes {
             assert_eq!(
-                node.event_store.get_event_store().await,
+                node.event_store.get_event_store(),
                 coord,
                 "Node: {:?}",
                 node.get_info()
@@ -487,10 +534,7 @@ mod tests {
         }
         match coordinator
             .clone()
-            .transaction(
-                0,
-                Vec::from("last transaction"),
-            )
+            .transaction(0, Vec::from("last transaction"))
             .await
             .unwrap()
         {
@@ -501,14 +545,12 @@ mod tests {
         let coordinator_store: BTreeMap<T0, T> = coordinator
             .event_store
             .get_event_store()
-            .await
             .into_values()
             .map(|e| (e.t_zero, e.t))
             .collect();
         assert!(coordinator
             .event_store
             .get_event_store()
-            .await
             .iter()
             .all(|(_, e)| e.state == State::Applied));
 
@@ -517,14 +559,12 @@ mod tests {
             let node_store: BTreeMap<T0, T> = node
                 .event_store
                 .get_event_store()
-                .await
                 .into_values()
                 .map(|e| (e.t_zero, e.t))
                 .collect();
             assert!(node
                 .event_store
                 .get_event_store()
-                .await
                 .clone()
                 .iter()
                 .all(|(_, e)| e.state == State::Applied));
@@ -564,11 +604,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = match node
-            .transaction(0, vec![127u8])
-            .await
-            .unwrap()
-        {
+        let result = match node.transaction(0, vec![127u8]).await.unwrap() {
             ExecutorResult::External(e) => e.unwrap(),
             _ => panic!(),
         };

@@ -117,10 +117,7 @@ where
     async fn transaction(&self, id: Ulid, transaction: Transaction) -> Result<String, KVError> {
         let node = self.node.clone();
         match node
-            .transaction(
-                u128::from_be_bytes(id.to_bytes()),
-                transaction,
-            )
+            .transaction(u128::from_be_bytes(id.to_bytes()), transaction)
             .await?
         {
             ExecutorResult::External(result) => result,

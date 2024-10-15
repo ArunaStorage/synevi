@@ -1,6 +1,5 @@
 use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
-//use crate::wait_handler::WaitAction;
 use ahash::RandomState;
 use serde::Serialize;
 use sha3::{Digest, Sha3_256};
@@ -67,7 +66,7 @@ where
         id: u128,
     ) -> Self {
         trace!(?id, "Coordinator: New");
-        let t0 = node.event_store.init_t_zero(node.info.serial).await;
+        let t0 = node.event_store.init_t_zero(node.info.serial);
         Coordinator {
             node,
             transaction: TransactionStateMachine {
@@ -97,7 +96,7 @@ where
             .fetch_add(1, Ordering::Relaxed);
 
         let last_applied = {
-            let (t, _) = self.node.event_store.last_applied().await;
+            let (t, _) = self.node.event_store.last_applied();
             t.into()
         };
 
@@ -140,7 +139,7 @@ where
         responses: &[PreAcceptResponse],
     ) -> Result<(), SyneviError> {
         // Collect deps by t_zero and only keep the max t
-        let (_, last_applied_t0) = self.node.event_store.last_applied().await;
+        let (_, last_applied_t0) = self.node.event_store.last_applied();
         if last_applied_t0 != T0::default() {
             self.transaction.dependencies.insert(last_applied_t0);
         }
@@ -157,8 +156,7 @@ where
         // Upsert store
         self.node
             .event_store
-            .upsert_tx((&self.transaction).into())
-            .await?;
+            .upsert_tx((&self.transaction).into())?;
 
         Ok(())
     }
@@ -176,7 +174,7 @@ where
                 .total_accepts
                 .fetch_add(1, Ordering::Relaxed);
             let last_applied = {
-                let (t, _) = self.node.event_store.last_applied().await;
+                let (t, _) = self.node.event_store.last_applied();
                 t.into()
             };
             let accepted_request = AcceptRequest {
@@ -224,8 +222,7 @@ where
         self.transaction.state = State::Accepted;
         self.node
             .event_store
-            .upsert_tx((&self.transaction).into())
-            .await?;
+            .upsert_tx((&self.transaction).into())?;
         Ok(())
     }
 
@@ -256,14 +253,7 @@ where
     #[instrument(level = "trace", skip(self))]
     async fn commit_consensus(&mut self) -> Result<(), SyneviError> {
         self.transaction.state = State::Commited;
-
-        let rx = self
-            .node
-            .event_store
-            .waiter_commit((&self.transaction).into())
-            .await?;
-        let _ = rx.await;
-
+        self.node.commit((&self.transaction).into()).await?;
         Ok(())
     }
 
@@ -294,14 +284,8 @@ where
     #[instrument(level = "trace", skip(self))]
     async fn execute_consensus(&mut self) -> Result<(SyneviResult<E>, Hashes), SyneviError> {
         self.transaction.state = State::Applied;
-        let rx = self
-            .node
-            .event_store
-            .waiter_apply((&self.transaction).into())
-            .await?;
-
-        rx.await
-            .map_err(|_| SyneviError::ReceiveError("Wait handle sender closed".to_string()))?;
+        
+        self.node.apply((&self.transaction).into()).await?;
 
         let result = match &self.transaction.transaction {
             TransactionPayload::None => Err(SyneviError::TransactionNotFound),
@@ -313,7 +297,7 @@ where
                             .node
                             .add_member(*id, *serial, host.clone(), false)
                             .await;
-                        let (t, hash) = self.node.event_store.last_applied_hash().await?; // TODO: Remove ?
+                        let (t, hash) = self.node.event_store.last_applied_hash()?; // TODO: Remove ?
                         self.node
                             .network
                             .report_config(t, hash, host.clone())
@@ -337,8 +321,7 @@ where
         let hashes = self
             .node
             .event_store
-            .get_and_update_hash(self.transaction.t_zero, hash.into())
-            .await?;
+            .get_and_update_hash(self.transaction.t_zero, hash.into())?;
         Ok((result, hashes))
     }
 
@@ -479,8 +462,7 @@ where
         if let Some(ballot) = highest_ballot {
             self.node
                 .event_store
-                .accept_tx_ballot(&self.transaction.t_zero, ballot)
-                .await;
+                .accept_tx_ballot(&self.transaction.t_zero, ballot);
             return Ok(RecoveryState::CompetingCoordinator);
         }
 
@@ -554,7 +536,7 @@ pub mod tests {
                 .fetch_add(1, Ordering::Relaxed);
 
             let last_applied = {
-                let (t, _) = self.node.event_store.last_applied().await;
+                let (t, _) = self.node.event_store.last_applied();
                 t.into()
             };
 

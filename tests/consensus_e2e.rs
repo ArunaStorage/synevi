@@ -57,10 +57,7 @@ mod tests {
             let coordinator = coordinator.clone();
             joinset.spawn(async move {
                 coordinator
-                    .transaction(
-                        i,
-                        Vec::from("This is a transaction"),
-                    )
+                    .transaction(i, Vec::from("This is a transaction"))
                     .await
             });
         }
@@ -89,7 +86,6 @@ mod tests {
         let coordinator_store: BTreeMap<T0, (T, Option<[u8; 32]>)> = coordinator
             .event_store
             .get_event_store()
-            .await
             .into_values()
             .map(|e| (e.t_zero, (e.t, e.get_latest_hash())))
             .collect();
@@ -97,7 +93,6 @@ mod tests {
         assert!(coordinator
             .event_store
             .get_event_store()
-            .await
             .iter()
             .all(|(_, e)| e.state == State::Applied));
 
@@ -106,14 +101,12 @@ mod tests {
             let node_store: BTreeMap<T0, (T, Option<[u8; 32]>)> = node
                 .event_store
                 .get_event_store()
-                .await
                 .into_values()
                 .map(|e| (e.t_zero, (e.t, e.get_latest_hash())))
                 .collect();
             assert!(
                 node.event_store
                     .get_event_store()
-                    .await
                     .iter()
                     .all(|(_, e)| e.state == State::Applied),
                 "Not all applied @ {:?}",
@@ -194,42 +187,27 @@ mod tests {
                 let coordinator5 = coordinator5.clone();
                 joinset.spawn(async move {
                     coordinator1
-                        .transaction(
-                            u128::from_be_bytes(Ulid::new().to_bytes()),
-                            Vec::from("C1"),
-                        )
+                        .transaction(u128::from_be_bytes(Ulid::new().to_bytes()), Vec::from("C1"))
                         .await
                 });
                 joinset.spawn(async move {
                     coordinator2
-                        .transaction(
-                            u128::from_be_bytes(Ulid::new().to_bytes()),
-                            Vec::from("C2"),
-                        )
+                        .transaction(u128::from_be_bytes(Ulid::new().to_bytes()), Vec::from("C2"))
                         .await
                 });
                 joinset.spawn(async move {
                     coordinator3
-                        .transaction(
-                            u128::from_be_bytes(Ulid::new().to_bytes()),
-                            Vec::from("C3"),
-                        )
+                        .transaction(u128::from_be_bytes(Ulid::new().to_bytes()), Vec::from("C3"))
                         .await
                 });
                 joinset.spawn(async move {
                     coordinator4
-                        .transaction(
-                            u128::from_be_bytes(Ulid::new().to_bytes()),
-                            Vec::from("C4"),
-                        )
+                        .transaction(u128::from_be_bytes(Ulid::new().to_bytes()), Vec::from("C4"))
                         .await
                 });
                 joinset.spawn(async move {
                     coordinator5
-                        .transaction(
-                            u128::from_be_bytes(Ulid::new().to_bytes()),
-                            Vec::from("C5"),
-                        )
+                        .transaction(u128::from_be_bytes(Ulid::new().to_bytes()), Vec::from("C5"))
                         .await
                 });
             }
@@ -295,7 +273,6 @@ mod tests {
             let coordinator_store: BTreeMap<T0, (T, Option<[u8; 32]>)> = coordinator1
                 .event_store
                 .get_event_store()
-                .await
                 .into_values()
                 .map(|e| (e.t_zero, (e.t, e.get_latest_hash())))
                 .collect();
@@ -310,14 +287,12 @@ mod tests {
                 let node_store: BTreeMap<T0, (T, Option<[u8; 32]>)> = node
                     .event_store
                     .get_event_store()
-                    .await
                     .into_values()
                     .map(|e| (e.t_zero, (e.t, e.get_latest_hash())))
                     .collect();
                 assert!(node
                     .event_store
                     .get_event_store()
-                    .await
                     .iter()
                     .all(|(_, e)| e.state == State::Applied));
                 assert_eq!(coordinator_store.len(), node_store.len());
@@ -388,10 +363,7 @@ mod tests {
             for i in 0..1000 {
                 match coordinator
                     .clone()
-                    .transaction(
-                        i,
-                        Vec::from("This is a transaction"),
-                    )
+                    .transaction(i, Vec::from("This is a transaction"))
                     .await
                     .unwrap()
                 {
@@ -502,12 +474,7 @@ mod tests {
                 let coordinator = coordinator.clone();
                 joinset.spawn(async move {
                     coordinator
-                        .transaction(
-                            i,
-                            Vec::from(
-                                "This is a transaction",
-                            ),
-                        )
+                        .transaction(i, Vec::from("This is a transaction"))
                         .await
                 });
             }
@@ -547,7 +514,6 @@ mod tests {
         let coordinator_store: BTreeMap<T0, (T, String)> = coordinator
             .event_store
             .get_event_store()
-            .await
             .into_values()
             .map(|e| {
                 (
@@ -560,7 +526,6 @@ mod tests {
         assert!(coordinator
             .event_store
             .get_event_store()
-            .await
             .iter()
             .all(|(_, e)| e.state == State::Applied));
 
@@ -571,7 +536,6 @@ mod tests {
             let node_store: BTreeMap<T0, (T, String)> = node
                 .event_store
                 .get_event_store()
-                .await
                 .into_values()
                 .map(|e| {
                     (
@@ -584,7 +548,6 @@ mod tests {
             assert!(
                 node.event_store
                     .get_event_store()
-                    .await
                     .iter()
                     .all(|(_, e)| e.state == State::Applied),
                 "Not all applied @ {:?}",

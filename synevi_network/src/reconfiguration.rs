@@ -1,12 +1,10 @@
 use crate::{
     configure_transport::{
-        GetEventRequest, GetEventResponse,
-        JoinElectorateRequest, JoinElectorateResponse, ReadyElectorateRequest,
-        ReadyElectorateResponse, ReportLastAppliedRequest, ReportLastAppliedResponse,
+        GetEventRequest, GetEventResponse, JoinElectorateRequest, JoinElectorateResponse,
+        ReadyElectorateRequest, ReadyElectorateResponse, ReportLastAppliedRequest,
+        ReportLastAppliedResponse,
     },
-    consensus_transport::{
-        ApplyRequest, CommitRequest,
-    },
+    consensus_transport::{ApplyRequest, CommitRequest},
 };
 use std::{collections::BTreeMap, sync::Arc};
 use synevi_types::{SyneviError, T, T0};

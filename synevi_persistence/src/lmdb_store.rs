@@ -5,30 +5,33 @@ use heed::{
     Database, Env, EnvOpenOptions,
 };
 use monotime::MonoTime;
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::{Arc, Mutex},
+};
 use synevi_types::{
     error::SyneviError,
     traits::Store,
     types::{Event, Hashes, RecoverDependencies, RecoverEvent, UpsertEvent},
     Ballot, State, T, T0,
 };
-use tokio::sync::{mpsc::Receiver, oneshot, Mutex};
+use tokio::sync::mpsc::Receiver;
 use tracing::instrument;
 
 const EVENT_DB_NAME: &str = "events";
 type EventDb = Database<U128<BigEndian>, SerdeBincode<Event>>;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PersistentStore {
-    data: Mutex<MutableData>,
+    data: Arc<Mutex<InternalData>>,
 }
 
 #[derive(Clone, Debug)]
-struct MutableData {
+struct InternalData {
     db: Env,
     pub(crate) mappings: BTreeMap<T, T0>, // Key: t, value t0
     pub last_applied: T,                  // t of last applied entry
-    pub(crate) latest_time: MonoTime,             // last created or recognized t0
+    pub(crate) latest_time: MonoTime,     // last created or recognized t0
     pub node_serial: u16,
     latest_hash: [u8; 32],
 }
@@ -78,43 +81,45 @@ impl PersistentStore {
                 write_txn.commit()?;
                 Ok(PersistentStore {
                     //db: env_clone,
-                    data: Mutex::new(MutableData {
+                    data: Arc::new(Mutex::new(InternalData {
                         db: env_clone,
                         mappings,
                         last_applied,
                         latest_time,
                         node_serial,
                         latest_hash,
-                    }),
+                    })),
                 })
             }
             None => {
                 let _: EventDb = env.create_database(&mut write_txn, Some(EVENT_DB_NAME))?;
                 write_txn.commit()?;
                 Ok(PersistentStore {
-                    data: Mutex::new(MutableData {
+                    data: Arc::new(Mutex::new(InternalData {
                         db: env_clone,
                         mappings: BTreeMap::default(),
                         last_applied: T::default(),
                         latest_time: MonoTime::default(),
                         node_serial,
                         latest_hash: [0; 32],
-                    }),
+                    })),
                 })
             }
         }
     }
 }
 
-#[async_trait::async_trait]
 impl Store for PersistentStore {
     #[instrument(level = "trace")]
-    async fn init_t_zero(&self, node_serial: u16) -> T0 {
-        self.data.lock().await.init_t_zero(node_serial).await
+    fn init_t_zero(&self, node_serial: u16) -> T0 {
+        self.data
+            .lock()
+            .expect("poisoned lock, aborting")
+            .init_t_zero(node_serial)
     }
 
     #[instrument(level = "trace")]
-    async fn pre_accept_tx(
+    fn pre_accept_tx(
         &self,
         id: u128,
         t_zero: T0,
@@ -122,128 +127,137 @@ impl Store for PersistentStore {
     ) -> Result<(T, HashSet<T0, RandomState>), SyneviError> {
         self.data
             .lock()
-            .await
+            .expect("poisoned lock, aborting")
             .pre_accept_tx(id, t_zero, transaction)
-            .await
     }
 
     #[instrument(level = "trace")]
-    async fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> HashSet<T0, RandomState> {
-        self.data.lock().await.get_tx_dependencies(t, t_zero).await
-    }
-
-    #[instrument(level = "trace")]
-    async fn accept_tx_ballot(&self, t_zero: &T0, ballot: Ballot) -> Option<Ballot> {
+    fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> HashSet<T0, RandomState> {
         self.data
             .lock()
-            .await
+            .expect("poisoned lock, aborting")
+            .get_tx_dependencies(t, t_zero)
+    }
+
+    #[instrument(level = "trace")]
+    fn accept_tx_ballot(&self, t_zero: &T0, ballot: Ballot) -> Option<Ballot> {
+        self.data
+            .lock()
+            .expect("poisoned lock, aborting")
             .accept_tx_ballot(t_zero, ballot)
-            .await
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn upsert_tx(&self, upsert_event: UpsertEvent) -> Result<(), SyneviError> {
-        self.data.lock().await.upsert_tx(upsert_event).await
+    fn upsert_tx(&self, upsert_event: UpsertEvent) -> Result<(), SyneviError> {
+        self.data
+            .lock()
+            .expect("poisoned lock, aborting")
+            .upsert_tx(upsert_event)
     }
 
     #[instrument(level = "trace")]
-    async fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, SyneviError> {
-        self.data.lock().await.get_recover_deps(t_zero).await
+    fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, SyneviError> {
+        self.data
+            .lock()
+            .expect("poisoned lock, aborting")
+            .get_recover_deps(t_zero)
     }
 
     #[instrument(level = "trace")]
-    async fn get_event_state(&self, t_zero: &T0) -> Option<State> {
-        self.data.lock().await.get_event_state(t_zero).await
+    fn get_event_state(&self, t_zero: &T0) -> Option<State> {
+        self.data
+            .lock()
+            .expect("poisoned lock, aborting")
+            .get_event_state(t_zero)
     }
 
     #[instrument(level = "trace")]
-    async fn recover_event(
+    fn recover_event(
         &self,
         t_zero_recover: &T0,
         node_serial: u16,
     ) -> Result<Option<RecoverEvent>, SyneviError> {
         self.data
             .lock()
-            .await
+            .expect("poisoned lock, aborting")
             .recover_event(t_zero_recover, node_serial)
-            .await
     }
 
     #[instrument(level = "trace")]
-    async fn get_event_store(&self) -> BTreeMap<T0, Event> {
-        self.data.lock().await.get_event_store().await
+    fn get_event_store(&self) -> BTreeMap<T0, Event> {
+        self.data
+            .lock()
+            .expect("poisoned lock, aborting")
+            .get_event_store()
     }
 
     #[instrument(level = "trace")]
-    async fn last_applied(&self) -> (T, T0) {
-        self.data.lock().await.last_applied().await
+    fn last_applied(&self) -> (T, T0) {
+        self.data
+            .lock()
+            .expect("poisoned lock, aborting")
+            .last_applied()
     }
 
     #[instrument(level = "trace")]
-    async fn get_events_after(
+    fn get_events_after(
         &self,
         last_applied: T,
         self_event: u128,
     ) -> Result<Receiver<Result<Event, SyneviError>>, SyneviError> {
         self.data
             .lock()
-            .await
+            .expect("poisoned lock, aborting")
             .get_events_after(last_applied, self_event)
-            .await
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError> {
-        self.data.lock().await.get_event(t_zero).await
+    fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError> {
+        self.data
+            .lock()
+            .expect("poisoned lock, aborting")
+            .get_event(t_zero)
     }
 
-    async fn get_and_update_hash(
+    fn get_and_update_hash(
         &self,
         t_zero: T0,
         execution_hash: [u8; 32],
     ) -> Result<Hashes, SyneviError> {
         self.data
             .lock()
-            .await
+            .expect("poisoned lock, aborting")
             .get_and_update_hash(t_zero, execution_hash)
-            .await
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError> {
-        self.data.lock().await.last_applied_hash().await
+    fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError> {
+        self.data
+            .lock()
+            .expect("poisoned lock, aborting")
+            .last_applied_hash()
     }
 
-    async fn inc_time_with_guard(&self, guard: T0) -> Result<(), SyneviError> {
-        let mut lock = self.data.lock().await;
-        lock.latest_time = lock.latest_time.next_with_guard_and_node(&guard, lock.node_serial).into_time();
+    fn inc_time_with_guard(&self, guard: T0) -> Result<(), SyneviError> {
+        let mut lock = self.data.lock().expect("poisoned lock, aborting");
+        lock.latest_time = lock
+            .latest_time
+            .next_with_guard_and_node(&guard, lock.node_serial)
+            .into_time();
         Ok(())
     }
-
-    async fn waiter_commit(&self, upsert_event: UpsertEvent) -> Result<oneshot::Receiver<()>, SyneviError> {
-        let (sdx, rcv) = oneshot::channel();
-        todo!();
-
-        Ok(rcv)
-    }
-
-    async fn waiter_apply(&self, upsert_event: UpsertEvent) -> Result<oneshot::Receiver<()>, SyneviError> {
-        let (sdx, rcv) = oneshot::channel();
-        todo!();
-
-        Ok(rcv)
-    }
 }
-impl MutableData {
+
+impl InternalData {
     #[instrument(level = "trace")]
-    async fn init_t_zero(&mut self, node_serial: u16) -> T0 {
+    fn init_t_zero(&mut self, node_serial: u16) -> T0 {
         let next_time = self.latest_time.next_with_node(node_serial).into_time();
         self.latest_time = next_time;
         T0(next_time)
     }
 
     #[instrument(level = "trace")]
-    async fn pre_accept_tx(
+    fn pre_accept_tx(
         &mut self,
         id: u128,
         t_zero: T0,
@@ -252,16 +266,16 @@ impl MutableData {
         let (t, deps) = {
             let t = if self.latest_time > *t_zero {
                 let new_time_t = t_zero
-                        .next_with_guard_and_node(&self.latest_time, self.node_serial)
-                        .into_time();
+                    .next_with_guard_and_node(&self.latest_time, self.node_serial)
+                    .into_time();
 
                 self.latest_time = new_time_t;
                 T(new_time_t)
-            }else{
+            } else {
                 T(*t_zero)
             };
             // This might not be necessary to re-use the write lock here
-            let deps = self.get_tx_dependencies(&t, &t_zero).await;
+            let deps = self.get_tx_dependencies(&t, &t_zero);
             (t, deps)
         };
 
@@ -274,12 +288,12 @@ impl MutableData {
             dependencies: Some(deps.clone()),
             ..Default::default()
         };
-        self.upsert_tx(event).await?;
+        self.upsert_tx(event)?;
         Ok((t, deps))
     }
 
     #[instrument(level = "trace")]
-    async fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> HashSet<T0, RandomState> {
+    fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> HashSet<T0, RandomState> {
         if self.last_applied == *t {
             return HashSet::default();
         }
@@ -305,7 +319,7 @@ impl MutableData {
     }
 
     #[instrument(level = "trace")]
-    async fn accept_tx_ballot(&self, t_zero: &T0, ballot: Ballot) -> Option<Ballot> {
+    fn accept_tx_ballot(&self, t_zero: &T0, ballot: Ballot) -> Option<Ballot> {
         let mut write_txn = self.db.write_txn().ok()?;
         let events_db: EventDb = self
             .db
@@ -323,7 +337,7 @@ impl MutableData {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<(), SyneviError> {
+    fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<(), SyneviError> {
         //let db = self.db.clone();
 
         // Update the latest time
@@ -428,7 +442,7 @@ impl MutableData {
     }
 
     #[instrument(level = "trace")]
-    async fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, SyneviError> {
+    fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, SyneviError> {
         let read_txn = self.db.read_txn()?;
         let db: EventDb = self
             .db
@@ -487,7 +501,7 @@ impl MutableData {
         Ok(recover_deps)
     }
 
-    async fn get_event_state(&self, t_zero: &T0) -> Option<State> {
+    fn get_event_state(&self, t_zero: &T0) -> Option<State> {
         let read_txn = self.db.read_txn().ok()?;
         let db: EventDb = self
             .db
@@ -503,12 +517,12 @@ impl MutableData {
         Some(state)
     }
 
-    async fn recover_event(
+    fn recover_event(
         &self,
         t_zero_recover: &T0,
         node_serial: u16,
     ) -> Result<Option<RecoverEvent>, SyneviError> {
-        let Some(state) = self.get_event_state(t_zero_recover).await else {
+        let Some(state) = self.get_event_state(t_zero_recover) else {
             return Ok(None);
         };
         if matches!(state, synevi_types::State::Undefined) {
@@ -541,7 +555,7 @@ impl MutableData {
         }
     }
 
-    async fn get_event_store(&self) -> BTreeMap<T0, Event> {
+    fn get_event_store(&self) -> BTreeMap<T0, Event> {
         // TODO: Remove unwrap and change trait result
         let read_txn = self.db.read_txn().unwrap();
         let events_db: Database<U128<BigEndian>, SerdeBincode<Event>> = self
@@ -565,13 +579,13 @@ impl MutableData {
         result
     }
 
-    async fn last_applied(&self) -> (T, T0) {
+    fn last_applied(&self) -> (T, T0) {
         let t = self.last_applied.clone();
         let t0 = self.mappings.get(&t).cloned().unwrap_or(T0::default());
         (t, t0)
     }
 
-    async fn get_events_after(
+    fn get_events_after(
         &self,
         last_applied: T,
         _self_event: u128,
@@ -601,7 +615,7 @@ impl MutableData {
         Ok(rcv)
     }
 
-    async fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError> {
+    fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError> {
         let read_txn = self.db.read_txn()?;
         let db: EventDb = self
             .db
@@ -612,7 +626,7 @@ impl MutableData {
         Ok(event)
     }
 
-    async fn get_and_update_hash(
+    fn get_and_update_hash(
         &self,
         t_zero: T0,
         execution_hash: [u8; 32],
@@ -637,7 +651,7 @@ impl MutableData {
         Ok(hashes)
     }
 
-    async fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError> {
+    fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError> {
         let last = self.last_applied;
         let last_t0 = self
             .mappings

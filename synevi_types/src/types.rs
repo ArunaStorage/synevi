@@ -7,8 +7,9 @@ use sha3::{Digest, Sha3_256};
 use std::{
     collections::HashSet,
     ops::Deref,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::oneshot;
 use ulid::Ulid;
 
 pub type SyneviResult<E> = Result<
@@ -21,6 +22,12 @@ pub type SyneviResult<E> = Result<
 pub enum ExecutorResult<T: Transaction> {
     External(Result<T::TxOk, T::TxErr>),
     Internal(Result<InternalExecution, SyneviError>),
+}
+
+pub struct Waiter {
+    pub waited_since: Instant,
+    pub dependency_states: u64,
+    pub sender: Vec<oneshot::Sender<()>>,
 }
 
 #[derive(Default, PartialEq, PartialOrd, Ord, Eq, Clone, Debug, Serialize)]
@@ -349,7 +356,7 @@ impl Event {
         hasher.update(self.transaction.as_slice());
         hasher.update(previous_hash);
 
-        let event_hash: [u8;32] = hasher.finalize().into();
+        let event_hash: [u8; 32] = hasher.finalize().into();
         Hashes {
             previous_hash,
             transaction_hash: event_hash,
@@ -414,7 +421,7 @@ impl From<UpsertEvent> for Event {
             ballot: value.ballot.unwrap_or_default(),
             hashes: value.execution_hash.map(|hash| Hashes {
                 previous_hash: [0; 32],
-                transaction_hash:[0;32],
+                transaction_hash: [0; 32],
                 execution_hash: hash,
             }),
             last_updated: SystemTime::now()

@@ -101,11 +101,8 @@ where
                         if entry.key() <= &current_transaction.1 {
                             let (t0_buffer, (notify, event, id)) = entry.remove_entry();
 
-                            let (t, deps) = self
-                                .node
-                                .event_store
-                                .pre_accept_tx(id, t0_buffer, event)
-                                .await?;
+                            let (t, deps) =
+                                self.node.event_store.pre_accept_tx(id, t0_buffer, event)?;
                             let _ = notify.send((t, into_dependency(&deps)));
                         } else {
                             break;
@@ -122,11 +119,8 @@ where
                     if (current_transaction.0.elapsed().as_micros() as u64) > next_latency {
                         while let Some(entry) = buffer.first_entry() {
                             let (t0_buffer, (notify, event, id)) = entry.remove_entry();
-                            let (t, deps) = self
-                                .node
-                                .event_store
-                                .pre_accept_tx(id, t0_buffer, event)
-                                .await?;
+                            let (t, deps) =
+                                self.node.event_store.pre_accept_tx(id, t0_buffer, event)?;
                             let _ = notify.send((t, into_dependency(&deps)));
                         }
                     }

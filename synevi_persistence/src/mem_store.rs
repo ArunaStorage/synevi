@@ -2,30 +2,29 @@ use ahash::RandomState;
 use monotime::MonoTime;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use synevi_types::error::SyneviError;
 use synevi_types::traits::{Dependencies, Store};
-use synevi_types::types::RecoverEvent;
 use synevi_types::types::{Event, Hashes, RecoverDependencies, UpsertEvent};
+use synevi_types::types::RecoverEvent;
 use synevi_types::State;
 use synevi_types::{Ballot, T, T0};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::{oneshot, Mutex};
 use tracing::instrument;
 
-#[derive(Debug)]
-pub struct InternalStore {
+#[derive(Debug, Clone)]
+struct InternalStore {
     pub events: BTreeMap<T0, Event>,      // Key: t0, value: Event
     pub(crate) mappings: BTreeMap<T, T0>, // Key: t, value t0
     pub last_applied: T,                  // t of last applied entry
-    pub(crate) latest_time: MonoTime,             // last created or recognized time
+    pub(crate) latest_time: MonoTime,     // last created or recognized time
     pub node_serial: u16,
     latest_hash: [u8; 32],
 }
 
 #[derive(Debug)]
 pub struct MemStore {
-    pub store: Arc<Mutex<InternalStore>>,
+    store: Arc<Mutex<InternalStore>>,
 }
 
 impl MemStore {
@@ -43,13 +42,15 @@ impl MemStore {
     }
 }
 
-#[async_trait::async_trait]
 impl Store for MemStore {
-    async fn init_t_zero(&self, node_serial: u16) -> T0 {
-        self.store.lock().await.init_t_zero(node_serial)
+    fn init_t_zero(&self, node_serial: u16) -> T0 {
+        self.store
+            .lock()
+            .expect("poisoned lock, aborting")
+            .init_t_zero(node_serial)
     }
 
-    async fn pre_accept_tx(
+    fn pre_accept_tx(
         &self,
         id: u128,
         t_zero: T0,
@@ -57,50 +58,71 @@ impl Store for MemStore {
     ) -> Result<(T, Dependencies), SyneviError> {
         self.store
             .lock()
-            .await
+            .expect("poisoned lock, aborting")
             .pre_accept_tx(id, t_zero, transaction)
     }
 
-    async fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> Dependencies {
-        self.store.lock().await.get_tx_dependencies(t, t_zero)
+    fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> Dependencies {
+        self.store
+            .lock()
+            .expect("poisoned lock, aborting")
+            .get_tx_dependencies(t, t_zero)
     }
 
-    async fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, SyneviError> {
-        self.store.lock().await.get_recover_deps(t_zero)
+    fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, SyneviError> {
+        self.store
+            .lock()
+            .expect("poisoned lock, aborting")
+            .get_recover_deps(t_zero)
     }
 
-    async fn recover_event(
+    fn recover_event(
         &self,
         t_zero_recover: &T0,
         node_serial: u16,
     ) -> Result<Option<RecoverEvent>, SyneviError> {
         self.store
             .lock()
-            .await
+            .expect("poisoned lock, aborting")
             .recover_event(t_zero_recover, node_serial)
     }
 
-    async fn accept_tx_ballot(&self, t_zero: &T0, ballot: Ballot) -> Option<Ballot> {
-        self.store.lock().await.accept_tx_ballot(t_zero, ballot)
+    fn accept_tx_ballot(&self, t_zero: &T0, ballot: Ballot) -> Option<Ballot> {
+        self.store
+            .lock()
+            .expect("poisoned lock, aborting")
+            .accept_tx_ballot(t_zero, ballot)
     }
 
-    async fn upsert_tx(&self, upsert_event: UpsertEvent) -> Result<(), SyneviError> {
-        self.store.lock().await.upsert_tx(upsert_event)
+    fn upsert_tx(&self, upsert_event: UpsertEvent) -> Result<(), SyneviError> {
+        self.store
+            .lock()
+            .expect("poisoned lock, aborting")
+            .upsert_tx(upsert_event)
     }
 
-    async fn get_event_state(&self, t_zero: &T0) -> Option<State> {
-        self.store.lock().await.get_event_state(t_zero)
+    fn get_event_state(&self, t_zero: &T0) -> Option<State> {
+        self.store
+            .lock()
+            .expect("poisoned lock, aborting")
+            .get_event_state(t_zero)
     }
 
-    async fn get_event_store(&self) -> BTreeMap<T0, Event> {
-        self.store.lock().await.get_event_store()
+    fn get_event_store(&self) -> BTreeMap<T0, Event> {
+        self.store
+            .lock()
+            .expect("poisoned lock, aborting")
+            .get_event_store()
     }
 
-    async fn last_applied(&self) -> (T, T0) {
-        self.store.lock().await.last_applied()
+    fn last_applied(&self) -> (T, T0) {
+        self.store
+            .lock()
+            .expect("poisoned lock, aborting")
+            .last_applied()
     }
 
-    async fn get_events_after(
+    fn get_events_after(
         &self,
         last_applied: T,
         self_event: u128,
@@ -108,27 +130,32 @@ impl Store for MemStore {
         let (sdx, rcv) = tokio::sync::mpsc::channel(100);
 
         let store = self.store.clone();
-        tokio::spawn(async move {
+        tokio::task::spawn_blocking(move || {
             store
                 .lock()
-                .await
-                .get_events_until(last_applied, self_event, sdx)
-                .await?;
+                .expect("poisoned lock, aborting")
+                .get_events_until(last_applied, self_event, sdx)?;
             Ok::<(), SyneviError>(())
         });
 
         Ok(rcv)
     }
-    async fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError> {
-        Ok(self.store.lock().await.events.get(&t_zero).cloned())
+    fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError> {
+        Ok(self
+            .store
+            .lock()
+            .expect("poisoned lock, aborting")
+            .events
+            .get(&t_zero)
+            .cloned())
     }
 
-    async fn get_and_update_hash(
+    fn get_and_update_hash(
         &self,
         t_zero: T0,
         execution_hash: [u8; 32],
     ) -> Result<Hashes, SyneviError> {
-        let mut lock = self.store.lock().await;
+        let mut lock = self.store.lock().expect("poisoned lock, aborting");
         if let Some(event) = lock.events.get_mut(&t_zero) {
             let hashes = event
                 .hashes
@@ -141,8 +168,8 @@ impl Store for MemStore {
         }
     }
 
-    async fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError> {
-        let lock = self.store.lock().await;
+    fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError> {
+        let lock = self.store.lock().expect("poisoned lock, aborting");
         let last = lock.last_applied;
         let last_t0 = lock
             .mappings
@@ -158,24 +185,13 @@ impl Store for MemStore {
         Ok((last, hash.execution_hash))
     }
 
-    async fn inc_time_with_guard(&self, guard: T0) -> Result<(), SyneviError> {
-        let mut lock = self.store.lock().await;
-        lock.latest_time = lock.latest_time.next_with_guard_and_node(&guard, lock.node_serial).into_time();
+    fn inc_time_with_guard(&self, guard: T0) -> Result<(), SyneviError> {
+        let mut lock = self.store.lock().expect("poisoned lock, aborting");
+        lock.latest_time = lock
+            .latest_time
+            .next_with_guard_and_node(&guard, lock.node_serial)
+            .into_time();
         Ok(())
-    }
-
-    async fn waiter_commit(&self, upsert_event: UpsertEvent) -> Result<oneshot::Receiver<()>, SyneviError> {
-        let (sdx, rcv) = oneshot::channel();
-        todo!();
-
-        Ok(rcv)
-    }
-
-    async fn waiter_apply(&self, upsert_event: UpsertEvent) -> Result<oneshot::Receiver<()>, SyneviError> {
-        let (sdx, rcv) = oneshot::channel();
-        todo!();
-
-        Ok(rcv)
     }
 }
 
@@ -197,12 +213,12 @@ impl InternalStore {
         let (t, deps) = {
             let t = if self.latest_time > *t_zero {
                 let new_time_t = t_zero
-                        .next_with_guard_and_node(&self.latest_time, self.node_serial)
-                        .into_time();
+                    .next_with_guard_and_node(&self.latest_time, self.node_serial)
+                    .into_time();
 
                 self.latest_time = new_time_t;
                 T(new_time_t)
-            }else{
+            } else {
                 T(*t_zero)
             };
             // This might not be necessary to re-use the write lock here
@@ -257,7 +273,6 @@ impl InternalStore {
 
     #[instrument(level = "trace")]
     fn upsert_tx(&mut self, upsert_event: UpsertEvent) -> Result<(), SyneviError> {
-
         // Update the latest time
         if self.latest_time < *upsert_event.t {
             self.latest_time = *upsert_event.t;
@@ -439,7 +454,7 @@ impl InternalStore {
         (self.last_applied, t0)
     }
 
-    async fn get_events_until(
+    fn get_events_until(
         &self,
         last_applied: T,
         _self_event: u128,
@@ -451,8 +466,7 @@ impl InternalStore {
             _ => return Err(SyneviError::EventNotFound(last_applied.get_inner())),
         };
         for (_, event) in self.events.range(last_applied_t0..) {
-            sdx.send(Ok(event.clone()))
-                .await
+            sdx.blocking_send(Ok(event.clone()))
                 .map_err(|e| SyneviError::SendError(e.to_string()))?;
         }
         Ok(())

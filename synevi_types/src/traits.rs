@@ -4,10 +4,12 @@ use std::{
     collections::{BTreeMap, HashSet},
     sync::{Arc, Weak},
 };
-use tokio::sync::{mpsc::Receiver, oneshot};
+use tokio::sync::mpsc::Receiver;
 
 use crate::{
-    types::{Event, Hashes, RecoverDependencies, RecoverEvent, SyneviResult, UpsertEvent},
+    types::{
+        Event, Hashes, RecoverDependencies, RecoverEvent, SyneviResult, UpsertEvent,
+    },
     Ballot, State, SyneviError, T, T0,
 };
 
@@ -68,44 +70,47 @@ where
 
 pub type Dependencies = HashSet<T0, RandomState>;
 
-#[async_trait::async_trait]
 pub trait Store: Send + Sync + Sized + 'static {
     // fn new(node_serial: u16) -> Result<Self, SyneviError>;
     // Initialize a new t0
-    async fn init_t_zero(&self, node_serial: u16) -> T0;
+    fn init_t_zero(&self, node_serial: u16) -> T0;
     // Pre-accept a transaction
-    async fn pre_accept_tx(
+    fn pre_accept_tx(
         &self,
         id: u128,
         t_zero: T0,
         transaction: Vec<u8>,
     ) -> Result<(T, Dependencies), SyneviError>;
     // Get the dependencies for a transaction
-    async fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> Dependencies;
+    fn get_tx_dependencies(&self, t: &T, t_zero: &T0) -> Dependencies;
     // Get the recover dependencies for a transaction
-    async fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, SyneviError>;
+    fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, SyneviError>;
     // Tries to recover an unfinished event from the store
-    async fn recover_event(
+    fn recover_event(
         &self,
         t_zero_recover: &T0,
         node_serial: u16,
     ) -> Result<Option<RecoverEvent>, SyneviError>;
     // Check and update the ballot for a transaction
     // Returns true if the ballot was accepted (current <= ballot)
-    async fn accept_tx_ballot(&self, t_zero: &T0, ballot: Ballot) -> Option<Ballot>;
+    fn accept_tx_ballot(&self, t_zero: &T0, ballot: Ballot) -> Option<Ballot>;
     // Update or insert a transaction, returns the hash of the transaction if applied
-    async fn upsert_tx(&self, upsert_event: UpsertEvent) -> Result<(), SyneviError>;
+    fn upsert_tx(&self, upsert_event: UpsertEvent) -> Result<(), SyneviError>;
 
-    async fn get_event_state(&self, t_zero: &T0) -> Option<State>;
+    fn get_event_state(&self, t_zero: &T0) -> Option<State>;
 
-    async fn get_event_store(&self) -> BTreeMap<T0, Event>;
-    async fn last_applied(&self) -> (T, T0);
-    async fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError>;
+    fn get_event_store(&self) -> BTreeMap<T0, Event>;
+    fn last_applied(&self) -> (T, T0);
+    fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError>;
 
-    async fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError>;
-    async fn get_events_after(&self, last_applied: T, self_event: u128) -> Result<Receiver<Result<Event, SyneviError>>, SyneviError>;
+    fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError>;
+    fn get_events_after(
+        &self,
+        last_applied: T,
+        self_event: u128,
+    ) -> Result<Receiver<Result<Event, SyneviError>>, SyneviError>;
 
-    async fn get_and_update_hash(
+    fn get_and_update_hash(
         &self,
         t_zero: T0,
         execution_hash: [u8; 32],
@@ -113,7 +118,5 @@ pub trait Store: Send + Sync + Sized + 'static {
 
     // Increases the max time to be above the specified guard
     // Ensures that the guards t0 will not get a fast path afterwards
-    async fn inc_time_with_guard(&self, guard: T0) -> Result<(), SyneviError>;
-    async fn waiter_commit(&self, upsert_event: UpsertEvent) -> Result<oneshot::Receiver<()>, SyneviError>;
-    async fn waiter_apply(&self, upsert_event: UpsertEvent) -> Result<oneshot::Receiver<()>, SyneviError>;
+    fn inc_time_with_guard(&self, guard: T0) -> Result<(), SyneviError>;
 }
