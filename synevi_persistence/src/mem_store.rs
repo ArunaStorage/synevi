@@ -10,7 +10,7 @@ use synevi_types::types::{Event, Hashes, RecoverDependencies, UpsertEvent};
 use synevi_types::State;
 use synevi_types::{Ballot, T, T0};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 use tracing::instrument;
 
 #[derive(Debug)]
@@ -162,6 +162,20 @@ impl Store for MemStore {
         let mut lock = self.store.lock().await;
         lock.latest_time = lock.latest_time.next_with_guard_and_node(&guard, lock.node_serial).into_time();
         Ok(())
+    }
+
+    async fn waiter_commit(&self, upsert_event: UpsertEvent) -> Result<oneshot::Receiver<()>, SyneviError> {
+        let (sdx, rcv) = oneshot::channel();
+        todo!();
+
+        Ok(rcv)
+    }
+
+    async fn waiter_apply(&self, upsert_event: UpsertEvent) -> Result<oneshot::Receiver<()>, SyneviError> {
+        let (sdx, rcv) = oneshot::channel();
+        todo!();
+
+        Ok(rcv)
     }
 }
 

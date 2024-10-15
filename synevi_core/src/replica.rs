@@ -1,7 +1,7 @@
 use crate::coordinator::Coordinator;
 use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
-use crate::wait_handler::WaitAction;
+//use crate::wait_handler::WaitAction;
 use sha3::{Digest, Sha3_256};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -232,19 +232,19 @@ where
         trace!(?request_id, "Replica: Commit");
 
         let deps = from_dependency(request.dependencies)?;
-        let (sx, rx) = tokio::sync::oneshot::channel();
-        self.node
-            .get_wait_handler()
-            .await?
-            .send_msg(
+        let rx = self
+            .node
+            .event_store
+            .waiter_commit(UpsertEvent {
+                id: request_id,
                 t_zero,
                 t,
-                deps,
-                request.event,
-                WaitAction::CommitBefore,
-                sx,
-                request_id,
-            )
+                state: State::Commited,
+                transaction: Some(request.event),
+                dependencies: Some(deps),
+                ballot: None,
+                execution_hash: None,
+            })
             .await?;
         let _ = rx.await;
         Ok(CommitResponse {})
@@ -269,25 +269,22 @@ where
         trace!(?request_id, "Replica: Apply");
 
         let transaction: TransactionPayload<<E as Executor>::Tx> =
-            TransactionPayload::from_bytes(request.event)?;
+            TransactionPayload::from_bytes(request.event.clone())?;
 
-        let deps = from_dependency(request.dependencies)?;
-        let (sx, rx) = tokio::sync::oneshot::channel();
-
-        // self.node.event_store.get_waiter(&t_zero, APPLY).await?;
-
-        self.node
-            .get_wait_handler()
-            .await?
-            .send_msg(
+        let deps = from_dependency(request.dependencies.clone())?;
+        let rx = self
+            .node
+            .event_store
+            .waiter_apply(UpsertEvent {
+                id: request_id,
                 t_zero,
                 t,
-                deps.clone(),
-                transaction.as_bytes(),
-                WaitAction::ApplyAfter,
-                sx,
-                request_id,
-            )
+                state: State::Applied,
+                transaction: Some(request.event),
+                dependencies: Some(deps),
+                ballot: None,
+                execution_hash: None,
+            })
             .await?;
 
         rx.await
@@ -425,7 +422,6 @@ where
         request: TryRecoveryRequest,
         ready: bool,
     ) -> Result<TryRecoveryResponse, SyneviError> {
-
         let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
 
         if ready {
@@ -436,17 +432,13 @@ where
                 .await?
             {
                 tokio::spawn(Coordinator::recover(self.node.clone(), recover_event));
-                return Ok(TryRecoveryResponse {
-                    accepted: true,
-                })
+                return Ok(TryRecoveryResponse { accepted: true });
             }
         }
 
         // This ensures that this t0 will not get a fast path in the future
         self.node.event_store.inc_time_with_guard(t0).await?;
-        Ok(TryRecoveryResponse {
-            accepted: false,
-        })
+        Ok(TryRecoveryResponse { accepted: false })
     }
 }
 

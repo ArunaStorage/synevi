@@ -4,7 +4,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     sync::{Arc, Weak},
 };
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::{mpsc::Receiver, oneshot};
 
 use crate::{
     types::{Event, Hashes, RecoverDependencies, RecoverEvent, SyneviResult, UpsertEvent},
@@ -114,4 +114,6 @@ pub trait Store: Send + Sync + Sized + 'static {
     // Increases the max time to be above the specified guard
     // Ensures that the guards t0 will not get a fast path afterwards
     async fn inc_time_with_guard(&self, guard: T0) -> Result<(), SyneviError>;
+    async fn waiter_commit(&self, upsert_event: UpsertEvent) -> Result<oneshot::Receiver<()>, SyneviError>;
+    async fn waiter_apply(&self, upsert_event: UpsertEvent) -> Result<oneshot::Receiver<()>, SyneviError>;
 }

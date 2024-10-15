@@ -1,6 +1,5 @@
 use crate::coordinator::Coordinator;
 use crate::replica::ReplicaConfig;
-use crate::wait_handler::WaitHandler;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{atomic::AtomicU64, Arc};
@@ -15,7 +14,6 @@ use synevi_types::traits::Store;
 use synevi_types::types::{SyneviResult, TransactionPayload};
 use synevi_types::{Executor, State, SyneviError, T};
 use tokio::sync::mpsc::Receiver;
-use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tracing::instrument;
 use ulid::Ulid;
@@ -43,7 +41,7 @@ where
     pub executor: E,
     pub event_store: Arc<S>,
     pub stats: Stats,
-    pub wait_handler: RwLock<Option<Arc<WaitHandler<N, E, S>>>>,
+    //pub wait_handler: RwLock<Option<Arc<WaitHandler<N, E, S>>>>,
     semaphore: Arc<tokio::sync::Semaphore>,
     has_members: AtomicBool,
     is_ready: Arc<AtomicBool>,
@@ -101,17 +99,10 @@ where
             stats,
             semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
             executor,
-            wait_handler: RwLock::new(None),
             has_members: AtomicBool::new(false),
             is_ready: Arc::new(AtomicBool::new(true)),
         });
 
-        let wait_handler = WaitHandler::new(node.clone());
-        let wait_handler_clone = wait_handler.clone();
-        tokio::spawn(async move {
-            wait_handler_clone.run().await.unwrap();
-        });
-        *node.wait_handler.write().await = Some(wait_handler);
 
         let ready = Arc::new(AtomicBool::new(true));
         let (replica, _) = ReplicaConfig::new(node.clone(), ready);
@@ -150,17 +141,10 @@ where
             stats,
             semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
             executor,
-            wait_handler: RwLock::new(None),
             has_members: AtomicBool::new(false),
             is_ready: ready.clone(),
         });
 
-        let wait_handler = WaitHandler::new(node.clone());
-        let wait_handler_clone = wait_handler.clone();
-        tokio::spawn(async move {
-            wait_handler_clone.run().await.unwrap();
-        });
-        *node.wait_handler.write().await = Some(wait_handler);
 
         let (replica, config_receiver) = ReplicaConfig::new(node.clone(), ready.clone());
         node.network.spawn_server(replica.clone()).await?;
@@ -217,15 +201,6 @@ where
         let mut coordinator =
             Coordinator::new(self.clone(), transaction, id).await;
         coordinator.run().await
-    }
-
-    pub async fn get_wait_handler(&self) -> Result<Arc<WaitHandler<N, E, S>>, SyneviError> {
-        let lock = self.wait_handler.read().await;
-        let handler = lock
-            .as_ref()
-            .ok_or_else(|| SyneviError::MissingWaitHandler)?
-            .clone();
-        Ok(handler)
     }
 
     pub fn get_stats(&self) -> (u64, u64, u64) {

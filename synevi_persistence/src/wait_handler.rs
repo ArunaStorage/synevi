@@ -1,4 +1,26 @@
+use std::collections::HashMap;
+use ahash::RandomState;
+use synevi_types::T0;
+use tokio::{sync::oneshot, time::Instant};
 
+pub struct Waiter {
+    waited_since: Instant,
+    dependency_states: u64,
+    sender: Vec<oneshot::Sender<()>>,
+}
+
+pub struct WaitHandler {
+    waiters: HashMap<T0, Waiter, RandomState>,
+}
+
+
+impl WaitHandler {
+
+    pub fn run() {
+
+        loop {}
+    }
+}
 
 // Tx1 = dep[Tx0]
 
@@ -9,33 +31,9 @@
 //        -> n -> increase dep_state +1 
 //           -> if dep_state == dep.len() -> send signal to waiter 
 //  
-
-
-
-pub struct Waiter {
-    waited_since: Instant,
-    dependency_states: u64,
-    sender: Vec<oneshot::Sender<()>>,
-}
-
+//
 //loop {
 //  if waiter.waited_since > 10s -> Find inital tx everyone is waiting for -> 
 // 
 //}
 
-
-
-
-pub struct WaitHandler {
-    waiters: HashMap<T0, Waiter>,
-}
-
-
-
-impl WaitHandler {
-
-    pub fn run() {
-
-        for 
-    }
-}

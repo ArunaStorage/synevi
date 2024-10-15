@@ -3,7 +3,7 @@ pub mod node;
 pub mod reorder_buffer;
 pub mod replica;
 pub mod utils;
-mod wait_handler;
+//mod wait_handler;
 
 pub mod tests {
     use std::sync::Arc;

@@ -12,7 +12,7 @@ use synevi_types::{
     types::{Event, Hashes, RecoverDependencies, RecoverEvent, UpsertEvent},
     Ballot, State, T, T0,
 };
-use tokio::sync::{mpsc::Receiver, Mutex};
+use tokio::sync::{mpsc::Receiver, oneshot, Mutex};
 use tracing::instrument;
 
 const EVENT_DB_NAME: &str = "events";
@@ -218,6 +218,20 @@ impl Store for PersistentStore {
         let mut lock = self.data.lock().await;
         lock.latest_time = lock.latest_time.next_with_guard_and_node(&guard, lock.node_serial).into_time();
         Ok(())
+    }
+
+    async fn waiter_commit(&self, upsert_event: UpsertEvent) -> Result<oneshot::Receiver<()>, SyneviError> {
+        let (sdx, rcv) = oneshot::channel();
+        todo!();
+
+        Ok(rcv)
+    }
+
+    async fn waiter_apply(&self, upsert_event: UpsertEvent) -> Result<oneshot::Receiver<()>, SyneviError> {
+        let (sdx, rcv) = oneshot::channel();
+        todo!();
+
+        Ok(rcv)
     }
 }
 impl MutableData {

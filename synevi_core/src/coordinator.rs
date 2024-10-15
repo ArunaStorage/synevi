@@ -1,6 +1,6 @@
 use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
-use crate::wait_handler::WaitAction;
+//use crate::wait_handler::WaitAction;
 use ahash::RandomState;
 use serde::Serialize;
 use sha3::{Digest, Sha3_256};
@@ -15,7 +15,8 @@ use synevi_network::network::{BroadcastRequest, Network, NetworkInterface};
 use synevi_network::utils::IntoInner;
 use synevi_types::traits::Store;
 use synevi_types::types::{
-    ExecutorResult, Hashes, InternalExecution, RecoverEvent, RecoveryState, SyneviResult, TransactionPayload
+    ExecutorResult, Hashes, InternalExecution, RecoverEvent, RecoveryState, SyneviResult,
+    TransactionPayload,
 };
 use synevi_types::{Ballot, Executor, State, SyneviError, Transaction, T, T0};
 use tracing::{instrument, trace};
@@ -256,22 +257,10 @@ where
     async fn commit_consensus(&mut self) -> Result<(), SyneviError> {
         self.transaction.state = State::Commited;
 
-        let (sx, rx) = tokio::sync::oneshot::channel();
-        self.node
-            .wait_handler
-            .read()
-            .await
-            .as_ref()
-            .ok_or_else(|| SyneviError::MissingWaitHandler)?
-            .send_msg(
-                self.transaction.t_zero,
-                self.transaction.t,
-                self.transaction.dependencies.clone(),
-                self.transaction.get_transaction_bytes(),
-                WaitAction::CommitBefore,
-                sx,
-                self.transaction.id,
-            )
+        let rx = self
+            .node
+            .event_store
+            .waiter_commit((&self.transaction).into())
             .await?;
         let _ = rx.await;
 
@@ -305,19 +294,10 @@ where
     #[instrument(level = "trace", skip(self))]
     async fn execute_consensus(&mut self) -> Result<(SyneviResult<E>, Hashes), SyneviError> {
         self.transaction.state = State::Applied;
-        let (sx, rx) = tokio::sync::oneshot::channel();
-        self.node
-            .get_wait_handler()
-            .await?
-            .send_msg(
-                self.transaction.t_zero,
-                self.transaction.t,
-                self.transaction.dependencies.clone(),
-                self.transaction.get_transaction_bytes(),
-                WaitAction::ApplyAfter,
-                sx,
-                self.transaction.id,
-            )
+        let rx = self
+            .node
+            .event_store
+            .waiter_apply((&self.transaction).into())
             .await?;
 
         rx.await
@@ -363,7 +343,7 @@ where
     }
 
     #[instrument(level = "trace", skip(node))]
-    pub async fn recover(node: Arc<Node<N, E, S>>, recover_event: RecoverEvent) ->  SyneviResult<E> {
+    pub async fn recover(node: Arc<Node<N, E, S>>, recover_event: RecoverEvent) -> SyneviResult<E> {
         loop {
             let node = node.clone();
 
