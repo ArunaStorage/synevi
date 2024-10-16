@@ -75,27 +75,52 @@ where
         }
     }
 
-    pub fn get_waiter(&self, t0: &T0) -> oneshot::Receiver<()> {
+    pub fn get_waiter(&self, t0: &T0) -> Option<oneshot::Receiver<()>> {
         let (sdx, rcv) = oneshot::channel();
         let mut waiter_lock = self.waiters.lock().expect("Locking waiters failed");
+
+        let Some(event) = self.store.get_event(*t0).ok().flatten() else {
+            tracing::error!("Unexpected state in wait_handler: Event not found in store");
+            return None;
+        };
+
+        let mut counter = 0;
+        for dep_t0 in event.dependencies.iter() {
+            let Some(dep_event) = self.store.get_event(*dep_t0).ok().flatten() else {
+                continue;
+            };
+
+            match dep_event.state {
+                State::Commited if dep_event.t > event.t => {
+                    counter += 1;
+                }
+                State::Applied => {
+                    counter += 1;
+                }
+                _ => {}
+            }
+        }
+
+        if counter >= event.dependencies.len() as u64 {
+            return None;
+        }
+
         let waiter = waiter_lock.entry(*t0).or_insert(Waiter {
             waited_since: Instant::now(),
-            dependency_states: 0,
+            dependency_states: counter,
             sender: Vec::new(),
         });
         waiter.sender.push(sdx);
-        rcv
+        Some(rcv)
     }
 
-    pub fn commit(&self, t0_commit: &T0, t_commit: &T) {
+    pub fn notify_commit(&self, t0_commit: &T0, t_commit: &T) {
         let mut waiter_lock = self.waiters.lock().expect("Locking waiters failed");
         waiter_lock.retain(|t0_waiting, waiter| {
             let Some(event) = self.store.get_event(*t0_waiting).ok().flatten() else {
-                tracing::error!(
-                    "Unexpected state in wait_handler: Event not found in store"
-                );
+                tracing::error!("Unexpected state in wait_handler: Event not found in store");
                 return true;
-            }; 
+            };
             if event.dependencies.contains(t0_commit) {
                 if t_commit > &event.t {
                     waiter.dependency_states += 1;
@@ -112,15 +137,13 @@ where
         });
     }
 
-    pub fn apply(&self, t0_commit: &T0) {
+    pub fn notify_apply(&self, t0_commit: &T0) {
         let mut waiter_lock = self.waiters.lock().expect("Locking waiters failed");
         waiter_lock.retain(|t0_waiting, waiter| {
             let Some(event) = self.store.get_event(*t0_waiting).ok().flatten() else {
-                tracing::error!(
-                    "Unexpected state in wait_handler: Event not found in store"
-                );
+                tracing::error!("Unexpected state in wait_handler: Event not found in store");
                 return true;
-            }; 
+            };
             if event.dependencies.contains(t0_commit) {
                 waiter.dependency_states += 1;
                 waiter.waited_since = Instant::now();

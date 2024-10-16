@@ -252,21 +252,22 @@ where
         let t_commit = event.t.clone();
 
         let prev_event = self.event_store.get_event(t0_commit)?;
+        self.event_store.upsert_tx(event)?;
+        self.wait_handler.notify_commit(&t0_commit, &t_commit);
 
-        if !prev_event.is_some_and(|e| e.state > State::Commited) {
-            self.event_store.upsert_tx(event)?;
-            let waiter = self.wait_handler.get_waiter(&t0_commit);
-            waiter.await.map_err(|e| {
-                tracing::error!("Error waiting for commit: {:?}", e);
-                SyneviError::ReceiveError(format!("Error waiting for commit"))
-            })?;
+        if !prev_event.is_some_and(|e| e.state > State::Commited && e.dependencies.is_empty()) {
+            if let Some(waiter) = self.wait_handler.get_waiter(&t0_commit) {
+                waiter.await.map_err(|e| {
+                    tracing::error!("Error waiting for commit: {:?}", e);
+                    SyneviError::ReceiveError(format!("Error waiting for commit"))
+                })?
+            };
         }
-        self.wait_handler.commit(&t0_commit, &t_commit);
         Ok(())
     }
 
     #[instrument(level = "trace", skip(self))]
-    pub async fn apply(&self, mut event: UpsertEvent) -> Result<(), SyneviError> {
+    pub async fn apply(&self, event: UpsertEvent) -> Result<(), SyneviError> {
         let t0_apply = event.t_zero.clone();
 
         let prev_event = self.event_store.get_event(t0_apply)?;
@@ -274,19 +275,26 @@ where
         let needs_wait = if let Some(prev_event) = prev_event {
             prev_event.state < State::Applied
         } else {
-            event.state = State::Commited;
-            self.commit(event.clone()).await?;
+            let mut commit_event = event.clone();
+            commit_event.state = State::Commited;
+            self.commit(commit_event).await?;
             true
         };
-        if needs_wait {
-            let waiter = self.wait_handler.get_waiter(&t0_apply);
-            waiter.await.map_err(|e| {
-                tracing::error!("Error waiting for commit: {:?}", e);
-                SyneviError::ReceiveError(format!("Error waiting for commit"))
-            })?;
-            self.event_store.upsert_tx(event)?;
+        if event
+            .dependencies
+            .as_ref()
+            .is_some_and(|deps| !deps.is_empty())
+            && needs_wait
+        {
+            if let Some(waiter) = self.wait_handler.get_waiter(&t0_apply) {
+                waiter.await.map_err(|e| {
+                    tracing::error!("Error waiting for commit: {:?}", e);
+                    SyneviError::ReceiveError(format!("Error waiting for commit"))
+                })?;
+            }
         }
-        self.wait_handler.apply(&t0_apply);
+        self.event_store.upsert_tx(event)?;
+        self.wait_handler.notify_apply(&t0_apply);
         Ok(())
     }
 
@@ -318,7 +326,8 @@ where
                     match interface.broadcast_recovery(t0_recover).await {
                         Ok(true) => (),
                         Ok(false) => {
-                            self.wait_handler.apply(&t0_recover);
+                            println!("Unknown recovery failed");
+                            self.wait_handler.notify_apply(&t0_recover);
                         }
                         Err(err) => {
                             tracing::error!("Error broadcasting recovery: {:?}", err);
