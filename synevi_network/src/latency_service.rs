@@ -19,7 +19,7 @@ use crate::{
 const LATENCY_INTERVAL: u64 = 10;
 
 pub async fn get_latency(
-    members: Arc<RwLock<HashMap<Ulid, MemberWithLatency, ahash::RandomState>>>,
+    members: Arc<RwLock<HashMap<Ulid, Arc<MemberWithLatency>, ahash::RandomState>>>,
 ) -> Result<(), SyneviError> {
     loop {
         for (_, member) in members.read().await.iter() {

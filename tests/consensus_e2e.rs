@@ -103,11 +103,11 @@ mod tests {
                     .iter()
                     .all(|(_, e)| e.state == State::Applied),
                 "Not all applied @ {:?}",
-                node.get_info()
+                node.get_serial()
             );
             assert_eq!(coordinator_store.len(), node_store.len());
             if coordinator_store != node_store {
-                println!("Node: {:?}", node.get_info());
+                println!("Node: {:?}", node.get_serial());
                 let mut node_store_iter = node_store.iter();
                 for (k, v) in coordinator_store.iter() {
                     if let Some(next) = node_store_iter.next() {
@@ -283,7 +283,7 @@ mod tests {
                     .all(|(_, e)| e.state == State::Applied));
                 assert_eq!(coordinator_store.len(), node_store.len());
                 if coordinator_store != node_store {
-                    println!("Node: {:?}", node.get_info());
+                    println!("Node: {:?}", node.get_serial());
                     let mut node_store_iter = node_store.iter();
                     for (k, v) in coordinator_store.iter() {
                         if let Some(next) = node_store_iter.next() {
@@ -523,11 +523,11 @@ mod tests {
                     .iter()
                     .all(|(_, e)| e.state == State::Applied),
                 "Not all applied @ {:?}",
-                node.get_info()
+                node.get_serial()
             );
             assert_eq!(coordinator_store.len(), node_store.len());
             if coordinator_store != node_store {
-                println!("Node: {:?}", node.get_info());
+                println!("Node: {:?}", node.get_serial());
                 let mut node_store_iter = node_store.iter();
                 for (k, v) in coordinator_store.iter() {
                     if let Some(next) = node_store_iter.next() {

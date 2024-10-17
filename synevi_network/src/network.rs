@@ -20,7 +20,7 @@ use crate::{
     replica::{Replica, ReplicaBox},
 };
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::{net::SocketAddr, sync::Arc};
 use synevi_types::error::SyneviError;
 use synevi_types::T0;
@@ -56,13 +56,13 @@ pub trait Network: Send + Sync + 'static {
     ) -> Result<(), SyneviError>;
     async fn get_interface(&self) -> Arc<Self::Ni>;
     async fn get_waiting_time(&self, node_serial: u16) -> u64;
-    async fn get_member_len(&self) -> u32;
+    async fn get_members(&self) -> Vec<Arc<MemberWithLatency>>;
+    fn get_node_status(&self) -> Arc<NodeStatus>;
     async fn join_electorate(&self, host: String) -> Result<u32, SyneviError>; // All members
     async fn report_config(&self, host: String) -> Result<(), SyneviError>;
     async fn get_stream_events(
         &self,
         last_applied: Vec<u8>,
-        self_event: Vec<u8>,
     ) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError>;
     async fn ready_electorate(&self) -> Result<(), SyneviError>;
     async fn ready_member(&self, id: Ulid, serial: u16) -> Result<(), SyneviError>;
@@ -105,19 +105,23 @@ where
         self.as_ref().get_waiting_time(node_serial).await
     }
 
-    async fn get_member_len(&self) -> u32 {
-        self.as_ref().get_member_len().await
+    async fn get_members(&self) -> Vec<Arc<MemberWithLatency>> {
+        self.as_ref().get_members().await
     }
+
+    fn get_node_status(&self) -> Arc<NodeStatus> {
+        self.as_ref().get_node_status()
+    }
+
     async fn join_electorate(&self, host: String) -> Result<u32, SyneviError> {
         self.as_ref().join_electorate(host).await
     }
     async fn get_stream_events(
         &self,
         last_applied: Vec<u8>,
-        self_event: Vec<u8>,
     ) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError> {
         self.as_ref()
-            .get_stream_events(last_applied, self_event)
+            .get_stream_events(last_applied)
             .await
     }
 
@@ -150,15 +154,22 @@ where
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct NodeInfo {
     pub id: Ulid,
     pub serial: u16,
     pub host: String,
-    pub ready: Arc<AtomicBool>,
+    pub ready: AtomicBool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
+pub struct NodeStatus {
+    pub info: NodeInfo,
+    pub members_responded: AtomicU32,
+    pub has_members: AtomicBool,
+}
+
+#[derive(Debug)]
 pub struct Member {
     pub info: NodeInfo,
     pub channel: Channel,
@@ -166,7 +177,7 @@ pub struct Member {
 
 #[derive(Debug)]
 pub struct MemberWithLatency {
-    pub member: Arc<Member>,
+    pub member: Member,
     pub latency: AtomicU64,
     pub skew: AtomicI64,
 }
@@ -192,27 +203,30 @@ pub enum BroadcastResponse {
 #[derive(Debug)]
 pub struct GrpcNetwork {
     pub socket_addr: SocketAddr,
-    pub self_info: NodeInfo,
-    pub members: Arc<RwLock<HashMap<Ulid, MemberWithLatency, ahash::RandomState>>>,
+    pub self_status: Arc<NodeStatus>,
+    pub members: Arc<RwLock<HashMap<Ulid, Arc<MemberWithLatency>, ahash::RandomState>>>,
     join_set: Mutex<JoinSet<Result<(), SyneviError>>>,
 }
 
 #[derive(Debug)]
 pub struct GrpcNetworkSet {
-    members: Vec<Arc<Member>>,
+    members: Vec<Arc<MemberWithLatency>>,
 }
 
 impl GrpcNetwork {
-    pub fn new(socket_addr: SocketAddr, host: String, node_id: Ulid, node_serial: u16, ready: Arc<AtomicBool>) -> Self {
+    pub fn new(socket_addr: SocketAddr, host: String, node_id: Ulid, node_serial: u16) -> Self {
         Self {
             socket_addr,
-            self_info: 
-                NodeInfo {
+            self_status: Arc::new(NodeStatus {
+                info: NodeInfo {
                     id: node_id,
                     serial: node_serial,
                     host,
-                    ready,
+                    ready: AtomicBool::new(false),
                 },
+                members_responded: AtomicU32::new(0),
+                has_members: AtomicBool::new(false),
+            }),
             members: Arc::new(RwLock::new(HashMap::default())),
             join_set: Mutex::new(JoinSet::new()),
         }
@@ -220,13 +234,7 @@ impl GrpcNetwork {
 
     pub async fn create_network_set(&self) -> Arc<GrpcNetworkSet> {
         Arc::new(GrpcNetworkSet {
-            members: self
-                .members
-                .read()
-                .await
-                .iter()
-                .map(|(_, e)| e.member.clone())
-                .collect(),
+            members: self.members.read().await.values().cloned().collect(),
         })
     }
 }
@@ -253,16 +261,22 @@ impl Network for GrpcNetwork {
         if writer.get(&id).is_none() {
             writer.insert(
                 id,
-                MemberWithLatency {
-                    member: Arc::new(Member {
-                        info: NodeInfo { id, serial, host, ready: Arc::new(AtomicBool::new(ready)) },
+                Arc::new(MemberWithLatency {
+                    member: Member {
+                        info: NodeInfo {
+                            id,
+                            serial,
+                            host,
+                            ready: AtomicBool::new(ready),
+                        },
                         channel,
-                    }),
+                    },
                     latency: AtomicU64::new(500),
                     skew: AtomicI64::new(0),
-                },
+                }),
             );
         }
+        self.self_status.has_members.store(true, Ordering::Relaxed);
         Ok(())
     }
 
@@ -310,16 +324,20 @@ impl Network for GrpcNetwork {
         (max_latency) - (node_latency / 2)
     }
 
-    async fn get_member_len(&self) -> u32 {
-        (self.members.read().await.len() + 1) as u32
+    async fn get_members(&self) -> Vec<Arc<MemberWithLatency>> {
+        self.members.read().await.values().cloned().collect()
+    }
+
+    fn get_node_status(&self) -> Arc<NodeStatus> {
+        self.self_status.clone()
     }
 
     async fn join_electorate(&self, host: String) -> Result<u32, SyneviError> {
         let config = Config {
-            node_serial: self.self_info.serial as u32,
-            node_id: self.self_info.id.to_bytes().to_vec(),
-            host: self.self_info.host.clone(),
-            ready: self.self_info.ready.load(Ordering::Relaxed),
+            node_serial: self.self_status.info.serial as u32,
+            node_id: self.self_status.info.id.to_bytes().to_vec(),
+            host: self.self_status.info.host.clone(),
+            ready: self.self_status.info.ready.load(Ordering::Relaxed),
         };
         let channel = Channel::from_shared(host)?.connect().await?;
         let request = tonic::Request::new(JoinElectorateRequest {
@@ -328,15 +346,15 @@ impl Network for GrpcNetwork {
         let mut client = ReconfigurationServiceClient::new(channel);
         let response = client.join_electorate(request).await?;
         let response = response.into_inner();
-        Ok(response.majority)
+        Ok(response.member_count)
     }
 
     async fn report_config(&self, host: String) -> Result<(), SyneviError> {
         let config = Config {
-            node_serial: self.self_info.serial as u32,
-            node_id: self.self_info.id.to_bytes().to_vec(),
-            host: self.self_info.host.clone(),
-            ready: self.self_info.ready.load(Ordering::Relaxed),
+            node_serial: self.self_status.info.serial as u32,
+            node_id: self.self_status.info.id.to_bytes().to_vec(),
+            host: self.self_status.info.host.clone(),
+            ready: self.self_status.info.ready.load(Ordering::Relaxed),
         };
 
         let mut configs: Vec<_> = self
@@ -363,17 +381,16 @@ impl Network for GrpcNetwork {
     async fn get_stream_events(
         &self,
         last_applied: Vec<u8>,
-        self_event: Vec<u8>,
     ) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError> {
         let lock = self.members.read().await;
         let mut members = lock.iter();
-        let Some((_, member)) = members.find(|(_, m)| m.member.info.ready.load(Ordering::Relaxed)) else {
+        let Some((_, member)) = members.find(|(_, m)| m.member.info.ready.load(Ordering::Relaxed))
+        else {
             return Err(SyneviError::NoMembersFound);
         };
         let channel = member.member.channel.clone();
         let request = GetEventRequest {
             last_applied,
-            self_event,
         };
 
         let (sdx, rcv) = tokio::sync::mpsc::channel(200);
@@ -408,8 +425,8 @@ impl Network for GrpcNetwork {
         };
         let channel = member.member.channel.clone();
         let request = tonic::Request::new(ReadyElectorateRequest {
-            node_id: self.self_info.id.to_bytes().to_vec(),
-            node_serial: self.self_info.serial as u32,
+            node_id: self.self_status.info.id.to_bytes().to_vec(),
+            node_serial: self.self_status.info.serial as u32,
         });
         let mut client = ReconfigurationServiceClient::new(channel);
         let _res = client.ready_electorate(request).await?.into_inner();
@@ -417,14 +434,9 @@ impl Network for GrpcNetwork {
     }
 
     async fn ready_member(&self, id: Ulid, _serial: u16) -> Result<(), SyneviError> {
-        let mut lock = self.members.write().await;
-        if let Some(member) = lock.get_mut(&id) {
-            let new_member = Member {
-                info: member.member.info.clone(),
-                channel: member.member.channel.clone(),
-            };
-            new_member.info.ready.store(true, Ordering::Relaxed);
-            member.member = Arc::new(new_member);
+        let lock = self.members.read().await;
+        if let Some(member) = lock.get(&id) {
+            member.member.info.ready.store(true, Ordering::Relaxed);
         } else {
             return Err(SyneviError::NoMembersFound);
         }
@@ -449,8 +461,8 @@ impl NetworkInterface for GrpcNetworkSet {
             BroadcastRequest::PreAccept(req, serial) => {
                 // ... and then iterate over every member ...
                 for replica in &self.members {
-                    let ready = replica.info.ready.load(Ordering::Relaxed);
-                    let channel = replica.channel.clone();
+                    let ready = replica.member.info.ready.load(Ordering::Relaxed);
+                    let channel = replica.member.channel.clone();
                     let inner = req.clone();
                     let mut request = tonic::Request::new(inner);
                     request.metadata_mut().append(
@@ -471,8 +483,8 @@ impl NetworkInterface for GrpcNetworkSet {
             }
             BroadcastRequest::Accept(req) => {
                 for replica in &self.members {
-                    let ready = replica.info.ready.load(Ordering::Relaxed);
-                    let channel = replica.channel.clone();
+                    let ready = replica.member.info.ready.load(Ordering::Relaxed);
+                    let channel = replica.member.channel.clone();
                     let request = req.clone();
                     responses.spawn(async move {
                         let mut client = ConsensusTransportClient::new(channel);
@@ -485,8 +497,8 @@ impl NetworkInterface for GrpcNetworkSet {
             }
             BroadcastRequest::Commit(req) => {
                 for replica in &self.members {
-                    let ready = replica.info.ready.load(Ordering::Relaxed);
-                    let channel = replica.channel.clone();
+                    let ready = replica.member.info.ready.load(Ordering::Relaxed);
+                    let channel = replica.member.channel.clone();
                     let request = req.clone();
                     responses.spawn(async move {
                         let mut client = ConsensusTransportClient::new(channel);
@@ -500,8 +512,8 @@ impl NetworkInterface for GrpcNetworkSet {
             BroadcastRequest::Apply(req) => {
                 await_majority = false;
                 for replica in &self.members {
-                    let ready = replica.info.ready.load(Ordering::Relaxed);
-                    let channel = replica.channel.clone();
+                    let ready = replica.member.info.ready.load(Ordering::Relaxed);
+                    let channel = replica.member.channel.clone();
                     let request = req.clone();
                     responses.spawn(async move {
                         let mut client = ConsensusTransportClient::new(channel);
@@ -517,8 +529,8 @@ impl NetworkInterface for GrpcNetworkSet {
                 broadcast_all = true;
                 for replica in &self.members {
                     // TODO: Not sure if neccessary
-                    let ready = replica.info.ready.load(Ordering::Relaxed);
-                    let channel = replica.channel.clone();
+                    let ready = replica.member.info.ready.load(Ordering::Relaxed);
+                    let channel = replica.member.channel.clone();
                     let request = req.clone();
                     responses.spawn(async move {
                         let mut client = ConsensusTransportClient::new(channel);
@@ -534,7 +546,7 @@ impl NetworkInterface for GrpcNetworkSet {
         let all = self
             .members
             .iter()
-            .filter(|member| member.info.ready.load(Ordering::Relaxed))
+            .filter(|member| member.member.info.ready.load(Ordering::Relaxed))
             .count();
         let majority = if all == 0 { 0 } else { (all / 2) + 1 };
         let mut counter = 0_usize;
@@ -620,7 +632,7 @@ impl NetworkInterface for GrpcNetworkSet {
             timestamp_zero: t0.into(),
         };
         for replica in &self.members {
-            let channel = replica.channel.clone();
+            let channel = replica.member.channel.clone();
             let request = tonic::Request::new(inner_request.clone());
             responses.spawn(async move {
                 let mut client = ConsensusTransportClient::new(channel);

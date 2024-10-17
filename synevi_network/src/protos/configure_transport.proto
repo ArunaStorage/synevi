@@ -40,13 +40,11 @@ message Config {
 }
 
 message JoinElectorateResponse {
-    uint32 majority = 1;
-    bytes self_event = 2;
+    uint32 member_count = 1;
 }
 
 message GetEventRequest {
     bytes last_applied = 1;
-    bytes self_event = 2;
 }
 
 message GetEventResponse {

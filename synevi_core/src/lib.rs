@@ -6,10 +6,15 @@ pub mod utils;
 mod wait_handler;
 
 pub mod tests {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicU32;
     use std::sync::Arc;
     use synevi_network::configure_transport::GetEventResponse;
     use synevi_network::network::BroadcastResponse;
+    use synevi_network::network::MemberWithLatency;
     use synevi_network::network::NetworkInterface;
+    use synevi_network::network::NodeInfo;
+    use synevi_network::network::NodeStatus;
     use synevi_network::network::{BroadcastRequest, Network};
     use synevi_network::replica::Replica;
     use synevi_types::types::SyneviResult;
@@ -73,8 +78,21 @@ pub mod tests {
         async fn get_waiting_time(&self, _node_serial: u16) -> u64 {
             0
         }
-        async fn get_member_len(&self) -> u32 {
-            0
+        async fn get_members(&self) -> Vec<Arc<MemberWithLatency>> {
+            vec![]
+        }
+
+        fn get_node_status(&self) -> Arc<NodeStatus> {
+            Arc::new(NodeStatus {
+                info: NodeInfo {
+                    id: Ulid::new(),
+                    serial: 0,
+                    host: "localhost".to_string(),
+                    ready: AtomicBool::new(false),
+                },
+                members_responded: AtomicU32::new(0),
+                has_members: AtomicBool::new(false),
+            })
         }
 
         async fn join_electorate(&self, _host: String) -> Result<u32, SyneviError> {
@@ -82,7 +100,6 @@ pub mod tests {
         }
         async fn get_stream_events(
             &self,
-            _self_id: Vec<u8>,
             _last_applied: Vec<u8>,
         ) -> Result<Receiver<GetEventResponse>, SyneviError> {
             let (_, rcv) = tokio::sync::mpsc::channel(1);
@@ -96,10 +113,7 @@ pub mod tests {
             Ok(())
         }
 
-        async fn report_config(
-            &self,
-            _host: String,
-        ) -> Result<(), SyneviError> {
+        async fn report_config(&self, _host: String) -> Result<(), SyneviError> {
             Ok(())
         }
     }

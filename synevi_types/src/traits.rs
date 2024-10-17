@@ -105,7 +105,6 @@ pub trait Store: Send + Sync + Sized + 'static {
     fn get_events_after(
         &self,
         last_applied: T,
-        self_event: u128,
     ) -> Result<Receiver<Result<Event, SyneviError>>, SyneviError>;
 
     fn get_and_update_hash(

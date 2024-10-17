@@ -1,5 +1,6 @@
 use crate::messages::{Body, Message, MessageType};
 use async_trait::async_trait;
+use synevi_network::network::{MemberWithLatency, NodeStatus};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -9,7 +10,7 @@ use synevi::network::requests::{
     RecoverRequest, RecoverResponse,
 };
 use synevi::network::{Network, NetworkInterface, Replica};
-use synevi::{State, SyneviError, T, T0};
+use synevi::{State, SyneviError, T0};
 use synevi_network::configure_transport::GetEventResponse;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
@@ -68,6 +69,10 @@ impl Network for MaelstromNetwork {
         for (id, serial, host) in members {
             self.add_member(id, serial, host, true).await.unwrap()
         }
+    }
+
+    fn get_node_status(&self) -> Arc<NodeStatus> {
+        todo!()
     }
 
     async fn add_member(
@@ -179,23 +184,20 @@ impl Network for MaelstromNetwork {
     async fn get_stream_events(
         &self,
         _last_applied: Vec<u8>,
-        _self_event: Vec<u8>,
     ) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError> {
         todo!()
     }
 
-    async fn join_electorate(&self, _host: String) -> Result<(u32, Vec<u8>), SyneviError> {
+    async fn join_electorate(&self, _host: String) -> Result<u32, SyneviError> {
         todo!()
     }
 
-    async fn get_member_len(&self) -> u32 {
+    async fn get_members(&self) -> Vec<Arc<MemberWithLatency>> {
         todo!()
     }
 
     async fn report_config(
         &self,
-        _last_applied: T,
-        _last_applied_hash: [u8; 32],
         _host: String,
     ) -> Result<(), SyneviError> {
         todo!()

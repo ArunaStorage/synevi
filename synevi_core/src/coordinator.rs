@@ -66,7 +66,9 @@ where
         id: u128,
     ) -> Self {
         trace!(?id, "Coordinator: New");
-        let t0 = node.event_store.init_t_zero(node.info.serial);
+        let t0 = node
+            .event_store
+            .init_t_zero(node.get_serial());
         Coordinator {
             node,
             transaction: TransactionStateMachine {
@@ -112,7 +114,7 @@ where
         let pre_accepted_responses = network_interface
             .broadcast(BroadcastRequest::PreAccept(
                 pre_accepted_request,
-                self.node.info.serial,
+                self.node.get_serial(),
             ))
             .await?;
 
@@ -299,7 +301,11 @@ where
                 .map(|e| ExecutorResult::External(e)),
             TransactionPayload::Internal(request) => {
                 let result = match request {
-                    InternalExecution::JoinElectorate { id, serial, new_node_host } => {
+                    InternalExecution::JoinElectorate {
+                        id,
+                        serial,
+                        new_node_host,
+                    } => {
                         let res = self
                             .node
                             .add_member(*id, *serial, new_node_host.clone(), false)
@@ -561,7 +567,7 @@ pub mod tests {
             let pre_accepted_responses = network_interface
                 .broadcast(BroadcastRequest::PreAccept(
                     pre_accepted_request,
-                    self.node.info.serial,
+                    self.node.get_serial(),
                 ))
                 .await?;
 

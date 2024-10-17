@@ -2,11 +2,11 @@ use crate::coordinator::Coordinator;
 use crate::replica::ReplicaConfig;
 use crate::wait_handler::{CheckResult, WaitHandler};
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::RwLock;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::consensus_transport::{ApplyRequest, CommitRequest};
-use synevi_network::network::{Network, NetworkInterface, NodeInfo};
+use synevi_network::network::{Network, NetworkInterface};
 use synevi_network::replica::Replica;
 use synevi_persistence::mem_store::MemStore;
 use synevi_types::traits::Store;
@@ -70,7 +70,6 @@ where
         executor: E,
         store: S,
     ) -> Result<Arc<Self>, SyneviError> {
-
         let stats = Stats {
             total_requests: AtomicU64::new(0),
             total_accepts: AtomicU64::new(0),
@@ -94,8 +93,6 @@ where
             stats,
             semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
             executor,
-            has_members: AtomicBool::new(false),
-            members_responded: Arc::new(AtomicU64::new(0)),
             self_clone: RwLock::new(None),
         });
         node.self_clone
@@ -103,8 +100,9 @@ where
             .expect("Locking self_clone failed")
             .replace(node.clone());
 
-        let ready = Arc::new(AtomicBool::new(true));
-        let (replica, _) = ReplicaConfig::new(node.clone(), ready);
+        node.set_ready();
+
+        let replica = ReplicaConfig::new(node.clone());
         node.network.spawn_server(replica).await?;
 
         let node_clone = node.clone();
@@ -115,11 +113,34 @@ where
     }
 
     pub fn set_ready(&self) -> () {
-        self.is_ready.store(true, Ordering::Relaxed);
+        self.network
+            .get_node_status()
+            .info
+            .ready
+            .store(true, Ordering::Relaxed);
     }
 
     pub fn is_ready(&self) -> bool {
-        self.is_ready.load(Ordering::Relaxed)
+        self.network
+            .get_node_status()
+            .info
+            .ready
+            .load(Ordering::Relaxed)
+    }
+
+    pub fn has_members(&self) -> bool {
+        self.network
+            .get_node_status()
+            .has_members
+            .load(Ordering::Relaxed)
+    }
+
+    pub fn get_serial(&self) -> u16 {
+        self.network.get_node_status().info.serial
+    }
+
+    pub fn get_ulid(&self) -> Ulid {
+        self.network.get_node_status().info.id
     }
 
     #[instrument(level = "trace", skip(network, executor, store))]
@@ -131,8 +152,6 @@ where
         store: S,
         member_host: String,
     ) -> Result<Arc<Self>, SyneviError> {
-        let node_name = NodeInfo { id, serial };
-
         let stats = Stats {
             total_requests: AtomicU64::new(0),
             total_accepts: AtomicU64::new(0),
@@ -142,17 +161,13 @@ where
         let arc_store = Arc::new(store);
         let wait_handler = WaitHandler::new(arc_store.clone());
 
-        let ready = Arc::new(AtomicBool::new(false));
         let node = Arc::new(Node {
-            info: node_name,
             event_store: arc_store,
             network,
             wait_handler,
             stats,
             semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
             executor,
-            has_members: AtomicBool::new(false),
-            is_ready: ready.clone(),
             self_clone: RwLock::new(None),
         });
 
@@ -161,12 +176,11 @@ where
             .expect("Locking self_clone failed")
             .replace(node.clone());
 
-        let (replica, config_receiver) = ReplicaConfig::new(node.clone(), ready.clone());
+        let replica = ReplicaConfig::new(node.clone());
         node.network.spawn_server(replica.clone()).await?;
         let node_clone = node.clone();
         tokio::spawn(async move { node_clone.run_check_recovery().await });
-        node.reconfigure(replica, member_host, config_receiver, ready)
-            .await?;
+        node.reconfigure(replica, member_host).await?;
 
         Ok(node)
     }
@@ -180,8 +194,6 @@ where
         ready: bool,
     ) -> Result<(), SyneviError> {
         self.network.add_member(id, serial, host, ready).await?;
-        self.has_members
-            .store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -193,9 +205,9 @@ where
 
     #[instrument(level = "trace", skip(self, transaction))]
     pub async fn transaction(self: Arc<Self>, id: u128, transaction: E::Tx) -> SyneviResult<E> {
-        if !self.has_members.load(std::sync::atomic::Ordering::Relaxed) {
+        if !self.has_members() {
             tracing::warn!("Consensus omitted: No members in the network");
-        } else if !self.is_ready.load(Ordering::Relaxed) {
+        } else if !self.is_ready() {
             return Err(SyneviError::NotReady);
         };
         let _permit = self.semaphore.acquire().await?;
@@ -216,9 +228,7 @@ where
         id: u128,
         transaction: TransactionPayload<E::Tx>,
     ) -> InternalSyneviResult<E> {
-        if !self.has_members.load(std::sync::atomic::Ordering::Relaxed) {
-            tracing::warn!("Consensus omitted: No members in the network");
-        } else if !self.is_ready.load(Ordering::Relaxed) {
+        if !self.is_ready() {
             return Err(SyneviError::NotReady);
         };
         let _permit = self.semaphore.acquire().await?;
@@ -238,10 +248,6 @@ where
                 .total_recovers
                 .load(std::sync::atomic::Ordering::Relaxed),
         )
-    }
-
-    pub fn get_info(&self) -> NodeInfo {
-        self.info.clone()
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -293,7 +299,9 @@ where
         }
         println!(
             "[{:?}]Applied event: t0: {:?}, t: {:?}",
-            self.info.serial, event.t_zero, event.t
+            self.get_serial(),
+            event.t_zero,
+            event.t
         );
 
         self.event_store.upsert_tx(event)?;
@@ -349,23 +357,27 @@ where
         &self,
         replica: ReplicaConfig<N, E, S>,
         member_host: String,
-        ready: Arc<AtomicBool>,
     ) -> Result<(), SyneviError> {
         // 1. Broadcast self_config to other member
         let expected = self.network.join_electorate(member_host).await?;
 
         // 2. wait for JoinElectorate responses with expected majority and config from others
 
-        while self.members_responded.load(Ordering::Relaxed) < self.network.get_member_len().await as u64 {
+        while self
+            .network
+            .get_node_status()
+            .members_responded
+            .load(Ordering::Relaxed)
+            < (expected / 2) + 1
+        {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
 
-
         let (last_applied, _) = self.event_store.last_applied();
-        self.sync_events(last_applied, self_id, &replica).await?;
+        self.sync_events(last_applied, &replica).await?;
 
         // 3. Send ReadyJoinElectorate && set myself to ready
-        ready.store(true, Ordering::Relaxed);
+        self.set_ready();
         self.network.ready_electorate().await?;
         Ok(())
     }
@@ -378,7 +390,7 @@ where
         // 2.2 else Request stream with events until last_applied (highest t of JoinElectorate)
         let mut rcv = self
             .network
-            .get_stream_events(last_applied.into(), self_id)
+            .get_stream_events(last_applied.into())
             .await?;
         while let Some(event) = rcv.recv().await {
             let state: State = event.state.into();
@@ -501,7 +513,7 @@ mod tests {
                 node.event_store.get_event_store(),
                 coord,
                 "Node: {:?}",
-                node.get_info()
+                node.get_serial()
             );
         }
     }
@@ -584,7 +596,7 @@ mod tests {
                 .all(|(_, e)| e.state == State::Applied));
             assert_eq!(coordinator_store.len(), node_store.len());
             if coordinator_store != node_store {
-                println!("Node: {:?}", node.get_info());
+                println!("Node: {:?}", node.get_serial());
                 let mut node_store_iter = node_store.iter();
                 for (k, v) in coordinator_store.iter() {
                     if let Some(next) = node_store_iter.next() {

@@ -125,7 +125,6 @@ impl Store for MemStore {
     fn get_events_after(
         &self,
         last_applied: T,
-        self_event: u128,
     ) -> Result<Receiver<Result<Event, SyneviError>>, SyneviError> {
         let (sdx, rcv) = tokio::sync::mpsc::channel(100);
 
@@ -134,7 +133,7 @@ impl Store for MemStore {
             store
                 .lock()
                 .expect("poisoned lock, aborting")
-                .get_events_until(last_applied, self_event, sdx)?;
+                .get_events_after(last_applied, sdx)?;
             Ok::<(), SyneviError>(())
         });
 
@@ -454,10 +453,9 @@ impl InternalStore {
         (self.last_applied, t0)
     }
 
-    fn get_events_until(
+    fn get_events_after(
         &self,
         last_applied: T,
-        _self_event: u128,
         sdx: Sender<Result<Event, SyneviError>>,
     ) -> Result<(), SyneviError> {
         let last_applied_t0 = match self.mappings.get(&last_applied) {

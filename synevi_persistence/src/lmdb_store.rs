@@ -203,12 +203,11 @@ impl Store for PersistentStore {
     fn get_events_after(
         &self,
         last_applied: T,
-        self_event: u128,
     ) -> Result<Receiver<Result<Event, SyneviError>>, SyneviError> {
         self.data
             .lock()
             .expect("poisoned lock, aborting")
-            .get_events_after(last_applied, self_event)
+            .get_events_after(last_applied)
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -608,7 +607,6 @@ impl InternalData {
     fn get_events_after(
         &self,
         last_applied: T,
-        _self_event: u128,
     ) -> Result<Receiver<Result<Event, SyneviError>>, SyneviError> {
         let (sdx, rcv) = tokio::sync::mpsc::channel(200);
         let db = self.db.clone();

@@ -2,10 +2,12 @@ use crate::coordinator::Coordinator;
 use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
 use sha3::{Digest, Sha3_256};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use synevi_network::configure_transport::{
-    Config, GetEventRequest, GetEventResponse, JoinElectorateRequest, JoinElectorateResponse, ReadyElectorateRequest, ReadyElectorateResponse, ReportElectorateRequest, ReportElectorateResponse, ReportLastAppliedRequest, ReportLastAppliedResponse
+    Config, GetEventRequest, GetEventResponse, JoinElectorateRequest, JoinElectorateResponse,
+    ReadyElectorateRequest, ReadyElectorateResponse, ReportElectorateRequest,
+    ReportElectorateResponse,
 };
 use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
@@ -13,13 +15,13 @@ use synevi_network::consensus_transport::{
     TryRecoveryResponse,
 };
 use synevi_network::network::Network;
-use synevi_network::reconfiguration::{Reconfiguration, Report};
+use synevi_network::reconfiguration::Reconfiguration;
 use synevi_network::replica::Replica;
 use synevi_types::traits::Store;
 use synevi_types::types::{ExecutorResult, InternalExecution, TransactionPayload, UpsertEvent};
 use synevi_types::{Ballot, Executor, State, T, T0};
 use synevi_types::{SyneviError, Transaction};
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::Receiver;
 use tracing::{instrument, trace};
 use ulid::Ulid;
 
@@ -30,9 +32,6 @@ where
     S: Store,
 {
     node: Arc<Node<N, E, S>>,
-    notifier: Sender<Report>,
-    ready: Arc<AtomicBool>,
-    configuring: Arc<AtomicBool>,
 }
 
 impl<N, E, S> ReplicaConfig<N, E, S>
@@ -41,17 +40,8 @@ where
     E: Executor,
     S: Store,
 {
-    pub fn new(node: Arc<Node<N, E, S>>, ready: Arc<AtomicBool>) -> (Self, Receiver<Report>) {
-        let (notifier, receiver) = channel(10);
-        (
-            Self {
-                node,
-                notifier,
-                ready,
-                configuring: Arc::new(AtomicBool::new(false)),
-            },
-            receiver,
-        )
+    pub fn new(node: Arc<Node<N, E, S>>) -> Self {
+        Self { node }
     }
 }
 
@@ -229,19 +219,22 @@ where
                         serial,
                         new_node_host,
                     } => {
-                        if id != &self.node.info.id {
+                        if id != &self.node.get_ulid() {
                             let res = self
                                 .node
                                 .add_member(*id, *serial, new_node_host.clone(), false)
                                 .await;
-                            self.node.network.report_config(new_node_host.clone()).await?;
+                            self.node
+                                .network
+                                .report_config(new_node_host.clone())
+                                .await?;
                             res
                         } else {
                             Ok(())
                         }
                     }
                     InternalExecution::ReadyElectorate { id, serial } => {
-                        if id != &self.node.info.id {
+                        if id != &self.node.get_ulid() {
                             self.node.ready_member(*id, *serial).await
                         } else {
                             Ok(())
@@ -343,7 +336,7 @@ where
             if let Some(recover_event) = self
                 .node
                 .event_store
-                .recover_event(&t0, self.node.get_info().serial)?
+                .recover_event(&t0, self.node.get_serial())?
             {
                 tokio::spawn(Coordinator::recover(self.node.clone(), recover_event));
                 return Ok(TryRecoveryResponse { accepted: true });
@@ -367,13 +360,14 @@ where
         &self,
         request: JoinElectorateRequest,
     ) -> Result<JoinElectorateResponse, SyneviError> {
-        if !self.ready.load(Ordering::SeqCst) {
+        if !self.node.is_ready() {
             return Ok(JoinElectorateResponse::default());
         }
         let Some(Config {
             node_id,
             node_serial,
             host,
+            ..
         }) = request.config
         else {
             return Err(SyneviError::TonicStatusError(
@@ -382,7 +376,7 @@ where
         };
 
         let node = self.node.clone();
-        let majority = self.node.network.get_member_len().await;
+        let member_count = self.node.network.get_members().await.len() as u32;
         let self_event = Ulid::new();
         let _res = node
             .internal_transaction(
@@ -390,13 +384,12 @@ where
                 TransactionPayload::Internal(InternalExecution::JoinElectorate {
                     id: Ulid::from_bytes(node_id.as_slice().try_into()?),
                     serial: node_serial.try_into()?,
-                    host,
+                    new_node_host: host,
                 }),
             )
             .await?;
         Ok(JoinElectorateResponse {
-            majority,
-            self_event: self_event.to_bytes().to_vec(),
+            member_count,
         })
     }
 
@@ -404,16 +397,15 @@ where
         &self,
         request: GetEventRequest,
     ) -> Result<Receiver<Result<GetEventResponse, SyneviError>>, SyneviError> {
-        if !self.ready.load(Ordering::SeqCst) {
+        if !self.node.is_ready() {
             return Err(SyneviError::NotReady);
         }
         let (sdx, rcv) = tokio::sync::mpsc::channel(200);
-        let event_id = u128::from_be_bytes(request.self_event.as_slice().try_into()?);
         let last_applied = T::try_from(request.last_applied.as_slice())?;
         let mut store_rcv = self
             .node
             .event_store
-            .get_events_after(last_applied, event_id)?;
+            .get_events_after(last_applied)?;
         tokio::spawn(async move {
             while let Some(Ok(event)) = store_rcv.recv().await {
                 let response = {
@@ -460,7 +452,7 @@ where
         &self,
         request: ReadyElectorateRequest,
     ) -> Result<ReadyElectorateResponse, SyneviError> {
-        if !self.ready.load(Ordering::SeqCst) {
+        if !self.node.is_ready() {
             return Ok(ReadyElectorateResponse::default());
         }
         // Start ready electorate transaction with NewMemberUlid
@@ -487,20 +479,16 @@ where
         &self,
         request: ReportElectorateRequest,
     ) -> Result<ReportElectorateResponse, SyneviError> {
-        if self.ready.load(Ordering::Relaxed) {
-            return Ok(ReportLastAppliedResponse::default());
+        if self.node.is_ready() {
+            return Ok(ReportElectorateResponse::default());
         }
-        for member in request.config {
-            self.node.add_member(
-                member.node_id,
-                member.node_serial,
-                member.host,
-                true,
-            )
-            .await?;
+        for member in request.configs {
+            self.node
+                .add_member(Ulid::from_bytes(member.node_id.as_slice().try_into()?), member.node_serial as u16, member.host, member.ready)
+                .await?;
         }
-        self.node.members_responded.fetch_add(1, Ordering::Relaxed);
-        Ok(ReportLastAppliedResponse {})
+        self.node.network.get_node_status().members_responded.fetch_add(1, Ordering::Relaxed);
+        Ok(ReportElectorateResponse {})
     }
 }
 
@@ -513,9 +501,6 @@ where
     fn clone(&self) -> Self {
         Self {
             node: self.node.clone(),
-            notifier: self.notifier.clone(),
-            ready: self.ready.clone(),
-            configuring: self.configuring.clone(),
         }
     }
 }
