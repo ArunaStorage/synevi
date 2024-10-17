@@ -445,7 +445,6 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
                         last_applied: last_applied.clone(),
                     },
                     node as u16,
-                    true,
                 )
                 .await
                 .unwrap();
@@ -473,18 +472,15 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
             ref last_applied,
         } => {
             let response = replica
-                .accept(
-                    AcceptRequest {
-                        id: id.clone(),
-                        ballot: ballot.clone(),
-                        event: event.clone(),
-                        timestamp_zero: t0.clone(),
-                        timestamp: t.clone(),
-                        dependencies: deps.clone(),
-                        last_applied: last_applied.clone(),
-                    },
-                    true,
-                )
+                .accept(AcceptRequest {
+                    id: id.clone(),
+                    ballot: ballot.clone(),
+                    event: event.clone(),
+                    timestamp_zero: t0.clone(),
+                    timestamp: t.clone(),
+                    dependencies: deps.clone(),
+                    last_applied: last_applied.clone(),
+                })
                 .await?;
 
             let reply = msg.reply(Body {
@@ -507,16 +503,13 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
             ref deps,
         } => {
             replica
-                .commit(
-                    CommitRequest {
-                        id: id.clone(),
-                        event: event.clone(),
-                        timestamp_zero: t0.clone(),
-                        timestamp: t.clone(),
-                        dependencies: deps.clone(),
-                    },
-                    true,
-                )
+                .commit(CommitRequest {
+                    id: id.clone(),
+                    event: event.clone(),
+                    timestamp_zero: t0.clone(),
+                    timestamp: t.clone(),
+                    dependencies: deps.clone(),
+                })
                 .await?;
 
             let reply = msg.reply(Body {
@@ -538,18 +531,15 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
         } => {
             eprintln!("Replica dispatch apply {:?}", t0);
             replica
-                .apply(
-                    ApplyRequest {
-                        id: id.clone(),
-                        event: event.clone(),
-                        timestamp_zero: t0.clone(),
-                        timestamp: t.clone(),
-                        dependencies: deps.clone(),
-                        transaction_hash: transaction_hash.clone(),
-                        execution_hash: execution_hash.clone(),
-                    },
-                    true,
-                )
+                .apply(ApplyRequest {
+                    id: id.clone(),
+                    event: event.clone(),
+                    timestamp_zero: t0.clone(),
+                    timestamp: t.clone(),
+                    dependencies: deps.clone(),
+                    transaction_hash: transaction_hash.clone(),
+                    execution_hash: execution_hash.clone(),
+                })
                 .await?;
 
             let reply = msg.reply(Body {
@@ -567,15 +557,12 @@ pub(crate) async fn replica_dispatch<R: Replica + 'static>(
             ref t0,
         } => {
             let result = replica
-                .recover(
-                    RecoverRequest {
-                        id: id.clone(),
-                        ballot: ballot.clone(),
-                        event: event.clone(),
-                        timestamp_zero: t0.clone(),
-                    },
-                    true,
-                )
+                .recover(RecoverRequest {
+                    id: id.clone(),
+                    ballot: ballot.clone(),
+                    event: event.clone(),
+                    timestamp_zero: t0.clone(),
+                })
                 .await?;
 
             let reply = msg.reply(Body {

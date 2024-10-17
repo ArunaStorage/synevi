@@ -71,7 +71,7 @@ where
             node,
             transaction: TransactionStateMachine {
                 id,
-                state: State::Undefined,
+                state: State::PreAccepted,
                 transaction,
                 t_zero: t0,
                 t: T(*t0),
@@ -584,7 +584,7 @@ pub mod tests {
         )
         .await;
 
-        assert_eq!(coordinator.transaction.state, State::Undefined);
+        assert_eq!(coordinator.transaction.state, State::PreAccepted);
         assert_eq!(*coordinator.transaction.t_zero, *coordinator.transaction.t);
         assert_eq!(coordinator.transaction.t_zero.0.get_node(), 0);
         assert_eq!(coordinator.transaction.t_zero.0.get_seq(), 1);

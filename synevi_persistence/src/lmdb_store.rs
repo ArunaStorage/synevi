@@ -373,6 +373,14 @@ impl InternalData {
                 }
 
                 let last_t = self.last_applied;
+
+                // if last_t > event.t {
+                //     println!(
+                //         "Node: {:?}, store: {:?}",
+                //         self.node_serial,
+                //         self.get_event_store()
+                //     );
+                // }
                 // Safeguard
                 assert!(last_t < event.t);
 
@@ -424,6 +432,18 @@ impl InternalData {
 
             if event.state == State::Applied {
                 let last_t = self.last_applied;
+
+                if last_t > event.t {
+                    println!("last_t: {:?}, event.t: {:?}", last_t, event.t);
+                }
+                //     println!(
+                //         "Node: {:?}, last_t: {:?}, event_t: {:?}, store: {:?}",
+                //         self.node_serial,
+                //         last_t,
+                //         event.t,
+                //         self.get_event_store()
+                //     );
+                // }
                 // Safeguard
                 assert!(last_t < event.t);
 

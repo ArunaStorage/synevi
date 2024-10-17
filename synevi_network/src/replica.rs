@@ -22,37 +22,20 @@ pub trait Replica: Send + Sync {
         &self,
         request: PreAcceptRequest,
         node_serial: u16,
-        ready: bool,
     ) -> Result<PreAcceptResponse, SyneviError>;
 
-    async fn accept(
-        &self,
-        request: AcceptRequest,
-        ready: bool,
-    ) -> Result<AcceptResponse, SyneviError>;
+    async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse, SyneviError>;
 
-    async fn commit(
-        &self,
-        request: CommitRequest,
-        ready: bool,
-    ) -> Result<CommitResponse, SyneviError>;
+    async fn commit(&self, request: CommitRequest) -> Result<CommitResponse, SyneviError>;
 
-    async fn apply(&self, request: ApplyRequest, ready: bool)
-        -> Result<ApplyResponse, SyneviError>;
+    async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse, SyneviError>;
 
-    async fn recover(
-        &self,
-        request: RecoverRequest,
-        ready: bool,
-    ) -> Result<RecoverResponse, SyneviError>;
+    async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse, SyneviError>;
 
     async fn try_recover(
         &self,
         request: TryRecoveryRequest,
-        ready: bool,
     ) -> Result<TryRecoveryResponse, SyneviError>;
-
-    fn is_ready(&self) -> bool;
 }
 
 pub struct ReplicaBox<R>
@@ -142,7 +125,7 @@ where
 
         Ok(Response::new(
             self.inner
-                .pre_accept(request, serial, self.inner.is_ready())
+                .pre_accept(request, serial)
                 .await
                 .map_err(|e| Status::internal(e.to_string()))?,
         ))
@@ -154,7 +137,7 @@ where
     ) -> Result<Response<AcceptResponse>, Status> {
         Ok(Response::new(
             self.inner
-                .accept(request.into_inner(), self.inner.is_ready())
+                .accept(request.into_inner())
                 .await
                 .map_err(|e| tonic::Status::internal(e.to_string()))?,
         ))
@@ -166,7 +149,7 @@ where
     ) -> Result<Response<CommitResponse>, Status> {
         Ok(Response::new(
             self.inner
-                .commit(request.into_inner(), self.inner.is_ready())
+                .commit(request.into_inner())
                 .await
                 .map_err(|e| tonic::Status::internal(e.to_string()))?,
         ))
@@ -178,7 +161,7 @@ where
     ) -> Result<Response<ApplyResponse>, Status> {
         Ok(Response::new(
             self.inner
-                .apply(request.into_inner(), self.inner.is_ready())
+                .apply(request.into_inner())
                 .await
                 .map_err(|e| tonic::Status::internal(e.to_string()))?,
         ))
@@ -190,7 +173,7 @@ where
     ) -> Result<Response<RecoverResponse>, Status> {
         Ok(Response::new(
             self.inner
-                .recover(request.into_inner(), self.inner.is_ready())
+                .recover(request.into_inner())
                 .await
                 .map_err(|e| tonic::Status::internal(e.to_string()))?,
         ))
@@ -202,7 +185,7 @@ where
     ) -> Result<Response<TryRecoveryResponse>, Status> {
         Ok(Response::new(
             self.inner
-                .try_recover(request.into_inner(), self.inner.is_ready())
+                .try_recover(request.into_inner())
                 .await
                 .map_err(|e| tonic::Status::internal(e.to_string()))?,
         ))

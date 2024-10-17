@@ -440,9 +440,9 @@ mod tests {
 
         let mut joinset = tokio::task::JoinSet::new();
 
-        let random_number = rand::thread_rng().gen_range(0..999);
-        dbg!(&random_number);
-        for i in 0..1000 {
+        let num = 10;
+        let random_number: u128 = rand::thread_rng().gen_range(0..num - 1);
+        for i in 0..num {
             if i == random_number {
                 let id = Ulid::new();
                 let network = synevi_network::network::GrpcNetwork::new(

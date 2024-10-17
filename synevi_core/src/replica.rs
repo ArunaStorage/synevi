@@ -2,7 +2,6 @@ use crate::coordinator::Coordinator;
 use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
 use sha3::{Digest, Sha3_256};
-use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use synevi_network::configure_transport::{
@@ -16,14 +15,13 @@ use synevi_network::consensus_transport::{
     TryRecoveryResponse,
 };
 use synevi_network::network::Network;
-use synevi_network::reconfiguration::{BufferedMessage, Reconfiguration, Report};
+use synevi_network::reconfiguration::{Reconfiguration, Report};
 use synevi_network::replica::Replica;
 use synevi_types::traits::Store;
 use synevi_types::types::{ExecutorResult, InternalExecution, TransactionPayload, UpsertEvent};
 use synevi_types::{Ballot, Executor, State, T, T0};
 use synevi_types::{SyneviError, Transaction};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::sync::Mutex;
 use tracing::{instrument, trace};
 use ulid::Ulid;
 
@@ -34,7 +32,6 @@ where
     S: Store,
 {
     node: Arc<Node<N, E, S>>,
-    buffer: Arc<Mutex<BTreeMap<(T0, State), BufferedMessage>>>,
     notifier: Sender<Report>,
     ready: Arc<AtomicBool>,
     configuring: Arc<AtomicBool>,
@@ -51,45 +48,12 @@ where
         (
             Self {
                 node,
-                buffer: Arc::new(Mutex::new(BTreeMap::default())),
                 notifier,
                 ready,
                 configuring: Arc::new(AtomicBool::new(false)),
             },
             receiver,
         )
-    }
-
-    pub async fn send_buffered(
-        &self,
-    ) -> Result<Receiver<Option<(T0, State, BufferedMessage)>>, SyneviError> {
-        let (sdx, rcv) = channel(100);
-        let inner = self.buffer.clone();
-        let node = self.node.clone();
-        let configure_lock = self.configuring.clone();
-        tokio::spawn(async move {
-            configure_lock.store(true, Ordering::SeqCst);
-            loop {
-                let event = inner.lock().await.pop_first();
-                if let Some(((t0, state), event)) = event {
-                    sdx.send(Some((t0, state, event))).await.map_err(|_| {
-                        SyneviError::SendError(
-                            "Channel for receiving buffered messages closed".to_string(),
-                        )
-                    })?;
-                } else {
-                    node.set_ready();
-                    sdx.send(None).await.map_err(|_| {
-                        SyneviError::SendError(
-                            "Channel for receiving buffered messages closed".to_string(),
-                        )
-                    })?;
-                    break;
-                }
-            }
-            Ok::<(), SyneviError>(())
-        });
-        Ok(rcv)
     }
 }
 
@@ -100,22 +64,14 @@ where
     E: Executor + Send + Sync,
     S: Store + Send + Sync,
 {
-    fn is_ready(&self) -> bool {
-        self.ready.load(Ordering::SeqCst)
-    }
     #[instrument(level = "trace", skip(self, request))]
     async fn pre_accept(
         &self,
         request: PreAcceptRequest,
         _node_serial: u16,
-        ready: bool,
     ) -> Result<PreAcceptResponse, SyneviError> {
         let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
-
-        if !ready {
-            return Ok(PreAcceptResponse::default());
-        }
 
         trace!(?request_id, "Replica: PreAccept");
 
@@ -149,6 +105,10 @@ where
 
         // let (t, deps) = rx.await?;
 
+        if !self.node.is_ready() {
+            return Ok(PreAcceptResponse::default());
+        }
+
         Ok(PreAcceptResponse {
             timestamp: t.into(),
             dependencies: into_dependency(&deps),
@@ -157,19 +117,12 @@ where
     }
 
     #[instrument(level = "trace", skip(self, request))]
-    async fn accept(
-        &self,
-        request: AcceptRequest,
-        ready: bool,
-    ) -> Result<AcceptResponse, SyneviError> {
+    async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse, SyneviError> {
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         let t = T::try_from(request.timestamp.as_slice())?;
         let request_ballot = Ballot::try_from(request.ballot.as_slice())?;
 
-        if !ready {
-            return Ok(AcceptResponse::default());
-        }
         trace!(?request_id, "Replica: Accept");
 
         let dependencies = {
@@ -199,6 +152,10 @@ where
 
             self.node.event_store.get_tx_dependencies(&t, &t_zero)
         };
+
+        if !self.node.is_ready() {
+            return Ok(AcceptResponse::default());
+        }
         Ok(AcceptResponse {
             dependencies: into_dependency(&dependencies),
             nack: false,
@@ -206,21 +163,10 @@ where
     }
 
     #[instrument(level = "trace", skip(self, request))]
-    async fn commit(
-        &self,
-        request: CommitRequest,
-        ready: bool,
-    ) -> Result<CommitResponse, SyneviError> {
+    async fn commit(&self, request: CommitRequest) -> Result<CommitResponse, SyneviError> {
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         let t = T::try_from(request.timestamp.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
-        if !self.configuring.load(Ordering::SeqCst) && !ready {
-            self.buffer
-                .lock()
-                .await
-                .insert((t_zero, State::Commited), BufferedMessage::Commit(request));
-            return Ok(CommitResponse {});
-        }
 
         trace!(?request_id, "Replica: Commit");
 
@@ -242,21 +188,10 @@ where
     }
 
     #[instrument(level = "trace", skip(self, request))]
-    async fn apply(
-        &self,
-        request: ApplyRequest,
-        ready: bool,
-    ) -> Result<ApplyResponse, SyneviError> {
+    async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse, SyneviError> {
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         let t = T::try_from(request.timestamp.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
-        if !self.configuring.load(Ordering::SeqCst) && !ready {
-            self.buffer
-                .lock()
-                .await
-                .insert((t_zero, State::Applied), BufferedMessage::Apply(request));
-            return Ok(ApplyResponse {});
-        }
         trace!(?request_id, "Replica: Apply");
 
         let transaction: TransactionPayload<<E as Executor>::Tx> =
@@ -334,12 +269,8 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn recover(
-        &self,
-        request: RecoverRequest,
-        ready: bool,
-    ) -> Result<RecoverResponse, SyneviError> {
-        if !ready {
+    async fn recover(&self, request: RecoverRequest) -> Result<RecoverResponse, SyneviError> {
+        if !self.node.is_ready() {
             return Ok(RecoverResponse::default());
         }
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
@@ -402,11 +333,10 @@ where
     async fn try_recover(
         &self,
         request: TryRecoveryRequest,
-        ready: bool,
     ) -> Result<TryRecoveryResponse, SyneviError> {
         let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
 
-        if ready {
+        if !self.node.is_ready() {
             if let Some(recover_event) = self
                 .node
                 .event_store
@@ -595,7 +525,6 @@ where
     fn clone(&self) -> Self {
         Self {
             node: self.node.clone(),
-            buffer: self.buffer.clone(),
             notifier: self.notifier.clone(),
             ready: self.ready.clone(),
             configuring: self.configuring.clone(),

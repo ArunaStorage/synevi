@@ -5,18 +5,15 @@ use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
 use std::sync::{atomic::AtomicU64, Arc};
-use synevi_network::consensus_transport::{
-    ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
-};
+use synevi_network::consensus_transport::{ApplyRequest, CommitRequest};
 use synevi_network::network::{Network, NetworkInterface, NodeInfo};
-use synevi_network::reconfiguration::{BufferedMessage, Report};
+use synevi_network::reconfiguration::Report;
 use synevi_network::replica::Replica;
 use synevi_persistence::mem_store::MemStore;
 use synevi_types::traits::Store;
 use synevi_types::types::{SyneviResult, TransactionPayload, UpsertEvent};
 use synevi_types::{Executor, State, SyneviError, T};
 use tokio::sync::mpsc::Receiver;
-use tokio::task::JoinSet;
 use tracing::instrument;
 use ulid::Ulid;
 
@@ -25,11 +22,6 @@ pub struct Stats {
     pub total_requests: AtomicU64,
     pub total_accepts: AtomicU64,
     pub total_recovers: AtomicU64,
-}
-
-enum HelperResponse {
-    Commit(CommitResponse),
-    Apply(ApplyResponse),
 }
 
 pub struct Node<N, E, S = MemStore>
@@ -129,6 +121,10 @@ where
 
     pub fn set_ready(&self) -> () {
         self.is_ready.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.is_ready.load(Ordering::Relaxed)
     }
 
     #[instrument(level = "trace", skip(network, executor, store))]
@@ -293,6 +289,11 @@ where
                 })?;
             }
         }
+        println!(
+            "[{:?}]Applied event: t0: {:?}, t: {:?}",
+            self.info.serial, event.t_zero, event.t
+        );
+
         self.event_store.upsert_tx(event)?;
         self.wait_handler.notify_apply(&t0_apply);
         Ok(())
@@ -384,34 +385,6 @@ where
         // 2.1 if majority replies with 0 events -> skip to 2.4.
         self.sync_events(last_applied, self_id, &replica).await?;
 
-        // 2.4 Apply buffered commits & applies
-        let mut rcv = replica.send_buffered().await?;
-        let mut join_set = JoinSet::new();
-        while let Some((_t0, _, request)) = rcv
-            .recv()
-            .await
-            .ok_or_else(|| SyneviError::ReceiveError("Channel closed".to_string()))?
-        {
-            match request {
-                BufferedMessage::Commit(req) => {
-                    let clone = replica.clone();
-                    join_set.spawn(async move {
-                        let res = HelperResponse::Commit(clone.commit(req, true).await?);
-                        Ok::<HelperResponse, SyneviError>(res)
-                    });
-                }
-                BufferedMessage::Apply(req) => {
-                    let clone = replica.clone();
-                    join_set.spawn(async move {
-                        let res = HelperResponse::Apply(clone.apply(req, true).await?);
-                        Ok::<HelperResponse, SyneviError>(res)
-                    });
-                }
-            }
-        }
-        for task in join_set.join_all().await {
-            task?;
-        }
         Ok(())
     }
 
@@ -431,32 +404,26 @@ where
             match state {
                 State::Applied => {
                     replica
-                        .apply(
-                            ApplyRequest {
-                                id: event.id,
-                                event: event.transaction,
-                                timestamp_zero: event.t_zero,
-                                timestamp: event.t,
-                                dependencies: event.dependencies,
-                                execution_hash: event.execution_hash,
-                                transaction_hash: event.transaction_hash,
-                            },
-                            false,
-                        )
+                        .apply(ApplyRequest {
+                            id: event.id,
+                            event: event.transaction,
+                            timestamp_zero: event.t_zero,
+                            timestamp: event.t,
+                            dependencies: event.dependencies,
+                            execution_hash: event.execution_hash,
+                            transaction_hash: event.transaction_hash,
+                        })
                         .await?;
                 }
                 State::Commited => {
                     replica
-                        .commit(
-                            CommitRequest {
-                                id: event.id,
-                                event: event.transaction,
-                                timestamp_zero: event.t_zero,
-                                timestamp: event.t,
-                                dependencies: event.dependencies,
-                            },
-                            false,
-                        )
+                        .commit(CommitRequest {
+                            id: event.id,
+                            event: event.transaction,
+                            timestamp_zero: event.t_zero,
+                            timestamp: event.t,
+                            dependencies: event.dependencies,
+                        })
                         .await?;
                 }
                 _ => (),
