@@ -269,9 +269,22 @@ where
             .node
             .event_store
             .get_and_update_hash(t_zero, hash.into())?;
-        if request.transaction_hash != hashes.transaction_hash
-            || request.execution_hash != hashes.execution_hash
-        {
+        if request.transaction_hash != hashes.transaction_hash {
+            println!(
+                "{} | Mismatched transaction hash in Tx {:?}",
+                self.node.get_serial(),
+                t_zero
+            );
+            Err(SyneviError::MismatchedHashes)
+        } else if request.execution_hash != hashes.execution_hash {
+            println!(
+                "{} | Mismatched execution hash in Tx {:?} | expected: {:?} != {:?}",
+                self.node.get_serial(),
+                t_zero,
+                request.execution_hash,
+                hashes.execution_hash
+            );
+
             Err(SyneviError::MismatchedHashes)
         } else {
             Ok(ApplyResponse {})

@@ -62,18 +62,16 @@ where
 {
     waiters: Mutex<HashMap<T0, Waiter, RandomState>>,
     store: Arc<S>,
-    serial: u16,
 }
 
 impl<S> WaitHandler<S>
 where
     S: Store,
 {
-    pub fn new(store: Arc<S>, serial: u16) -> Self {
+    pub fn new(store: Arc<S>, _serial: u16) -> Self {
         Self {
             waiters: Mutex::new(HashMap::default()),
             store,
-            serial,
         }
     }
 
