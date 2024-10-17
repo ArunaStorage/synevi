@@ -62,16 +62,18 @@ where
 {
     waiters: Mutex<HashMap<T0, Waiter, RandomState>>,
     store: Arc<S>,
+    serial: u16,
 }
 
 impl<S> WaitHandler<S>
 where
     S: Store,
 {
-    pub fn new(store: Arc<S>) -> Self {
+    pub fn new(store: Arc<S>, serial: u16) -> Self {
         Self {
             waiters: Mutex::new(HashMap::default()),
             store,
+            serial,
         }
     }
 
@@ -107,9 +109,11 @@ where
 
         let waiter = waiter_lock.entry(*t0).or_insert(Waiter {
             waited_since: Instant::now(),
-            dependency_states: counter,
+            dependency_states: 0,
             sender: Vec::new(),
         });
+        waiter.waited_since = Instant::now();
+        waiter.dependency_states = counter;
         waiter.sender.push(sdx);
         Some(rcv)
     }
@@ -162,7 +166,7 @@ where
         let mut waiter_lock = self.waiters.lock().expect("Locking waiters failed");
         let mut smallest_hanging_dep = CheckResult::NoRecovery;
         for (t0, waiter) in waiter_lock.iter_mut() {
-            if waiter.waited_since.elapsed().as_millis() > 1000 {
+            if waiter.waited_since.elapsed().as_millis() > 100 {
                 // Get deps and find smallest dep that is not committed / applied
                 let Some(event) = self.store.get_event(*t0).ok().flatten() else {
                     tracing::error!(

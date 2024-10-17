@@ -388,9 +388,7 @@ where
                 }),
             )
             .await?;
-        Ok(JoinElectorateResponse {
-            member_count,
-        })
+        Ok(JoinElectorateResponse { member_count })
     }
 
     async fn get_events(
@@ -402,10 +400,7 @@ where
         }
         let (sdx, rcv) = tokio::sync::mpsc::channel(200);
         let last_applied = T::try_from(request.last_applied.as_slice())?;
-        let mut store_rcv = self
-            .node
-            .event_store
-            .get_events_after(last_applied)?;
+        let mut store_rcv = self.node.event_store.get_events_after(last_applied)?;
         tokio::spawn(async move {
             while let Some(Ok(event)) = store_rcv.recv().await {
                 let response = {
@@ -484,10 +479,19 @@ where
         }
         for member in request.configs {
             self.node
-                .add_member(Ulid::from_bytes(member.node_id.as_slice().try_into()?), member.node_serial as u16, member.host, member.ready)
+                .add_member(
+                    Ulid::from_bytes(member.node_id.as_slice().try_into()?),
+                    member.node_serial as u16,
+                    member.host,
+                    member.ready,
+                )
                 .await?;
         }
-        self.node.network.get_node_status().members_responded.fetch_add(1, Ordering::Relaxed);
+        self.node
+            .network
+            .get_node_status()
+            .members_responded
+            .fetch_add(1, Ordering::Relaxed);
         Ok(ReportElectorateResponse {})
     }
 }

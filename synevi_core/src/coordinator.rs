@@ -66,9 +66,7 @@ where
         id: u128,
     ) -> Self {
         trace!(?id, "Coordinator: New");
-        let t0 = node
-            .event_store
-            .init_t_zero(node.get_serial());
+        let t0 = node.event_store.init_t_zero(node.get_serial());
         Coordinator {
             node,
             transaction: TransactionStateMachine {

@@ -83,8 +83,8 @@ where
         // });
 
         let arc_store = Arc::new(store);
+        let wait_handler = WaitHandler::new(arc_store.clone(), network.get_node_status().info.serial);
 
-        let wait_handler = WaitHandler::new(arc_store.clone());
 
         let node = Arc::new(Node {
             event_store: arc_store,
@@ -95,6 +95,7 @@ where
             executor,
             self_clone: RwLock::new(None),
         });
+
         node.self_clone
             .write()
             .expect("Locking self_clone failed")
@@ -159,7 +160,7 @@ where
         };
 
         let arc_store = Arc::new(store);
-        let wait_handler = WaitHandler::new(arc_store.clone());
+        let wait_handler = WaitHandler::new(arc_store.clone(), network.get_node_status().info.serial);
 
         let node = Arc::new(Node {
             event_store: arc_store,
@@ -256,10 +257,10 @@ where
         let t_commit = event.t.clone();
 
         let prev_event = self.event_store.get_event(t0_commit)?;
+                
         self.event_store.upsert_tx(event)?;
         self.wait_handler.notify_commit(&t0_commit, &t_commit);
-
-        if !prev_event.is_some_and(|e| e.state > State::Commited && e.dependencies.is_empty()) {
+        if !prev_event.is_some_and(|e| e.state > State::Commited || e.dependencies.is_empty()) {
             if let Some(waiter) = self.wait_handler.get_waiter(&t0_commit) {
                 waiter.await.map_err(|e| {
                     tracing::error!("Error waiting for commit: {:?}", e);
@@ -298,10 +299,11 @@ where
             }
         }
         println!(
-            "[{:?}]Applied event: t0: {:?}, t: {:?}",
+            "[{:?}]Applied event: t0: {:?}, t: {:?}, deps: {:?}",
             self.get_serial(),
             event.t_zero,
-            event.t
+            event.t,
+            event.dependencies,
         );
 
         self.event_store.upsert_tx(event)?;
@@ -310,6 +312,10 @@ where
     }
 
     async fn run_check_recovery(&self) {
+        while !self.is_ready() {
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+
         let self_clonable = self
             .self_clone
             .read()
@@ -322,15 +328,14 @@ where
                 CheckResult::NoRecovery => (),
                 CheckResult::RecoverEvent(recover_event) => {
                     let self_clone = self_clonable.clone();
-                    match tokio::spawn(Coordinator::recover(self_clone, recover_event)).await {
-                        Ok(Ok(_)) => (),
-                        Ok(Err(e)) => {
-                            tracing::error!("Error recovering event: {:?}", e);
+                    tokio::spawn(async move {
+                        match Coordinator::recover(self_clone, recover_event).await {
+                            Ok(_) => (),
+                            Err(e) => {
+                                tracing::error!("JoinError recovering event: {:?}", e);
+                            }
                         }
-                        Err(e) => {
-                            tracing::error!("JoinError recovering event: {:?}", e);
-                        }
-                    }
+                    });
                 }
                 CheckResult::RecoverUnknown(t0_recover) => {
                     let interface = self.network.get_interface().await;
@@ -347,7 +352,6 @@ where
                     }
                 }
             }
-
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
     }
@@ -388,10 +392,7 @@ where
         replica: &ReplicaConfig<N, E, S>,
     ) -> Result<(), SyneviError> {
         // 2.2 else Request stream with events until last_applied (highest t of JoinElectorate)
-        let mut rcv = self
-            .network
-            .get_stream_events(last_applied.into())
-            .await?;
+        let mut rcv = self.network.get_stream_events(last_applied.into()).await?;
         while let Some(event) = rcv.recv().await {
             let state: State = event.state.into();
             match state {

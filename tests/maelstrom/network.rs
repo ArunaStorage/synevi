@@ -1,6 +1,5 @@
 use crate::messages::{Body, Message, MessageType};
 use async_trait::async_trait;
-use synevi_network::network::{MemberWithLatency, NodeStatus};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -12,6 +11,7 @@ use synevi::network::requests::{
 use synevi::network::{Network, NetworkInterface, Replica};
 use synevi::{State, SyneviError, T0};
 use synevi_network::configure_transport::GetEventResponse;
+use synevi_network::network::{MemberWithLatency, NodeStatus};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -196,10 +196,7 @@ impl Network for MaelstromNetwork {
         todo!()
     }
 
-    async fn report_config(
-        &self,
-        _host: String,
-    ) -> Result<(), SyneviError> {
+    async fn report_config(&self, _host: String) -> Result<(), SyneviError> {
         todo!()
     }
 }

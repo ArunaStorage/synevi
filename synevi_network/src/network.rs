@@ -120,9 +120,7 @@ where
         &self,
         last_applied: Vec<u8>,
     ) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError> {
-        self.as_ref()
-            .get_stream_events(last_applied)
-            .await
+        self.as_ref().get_stream_events(last_applied).await
     }
 
     async fn ready_electorate(&self) -> Result<(), SyneviError> {
@@ -389,9 +387,7 @@ impl Network for GrpcNetwork {
             return Err(SyneviError::NoMembersFound);
         };
         let channel = member.member.channel.clone();
-        let request = GetEventRequest {
-            last_applied,
-        };
+        let request = GetEventRequest { last_applied };
 
         let (sdx, rcv) = tokio::sync::mpsc::channel(200);
         tokio::spawn(async move {
