@@ -41,6 +41,3 @@ path = "maelstrom/echo.rs"
 [[bin]]
 name = "maelstrom_lin_kv"
 path = "maelstrom/lin_kv.rs"
-
-[profile.release]
-panic = "abort"

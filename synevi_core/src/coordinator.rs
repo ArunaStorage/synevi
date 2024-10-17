@@ -14,13 +14,13 @@ use synevi_network::network::{BroadcastRequest, Network, NetworkInterface};
 use synevi_network::utils::IntoInner;
 use synevi_types::traits::Store;
 use synevi_types::types::{
-    ExecutorResult, Hashes, InternalExecution, RecoverEvent, RecoveryState, SyneviResult,
+    ExecutorResult, Hashes, InternalExecution, InternalSyneviResult, RecoverEvent, RecoveryState,
     TransactionPayload,
 };
 use synevi_types::{Ballot, Executor, State, SyneviError, Transaction, T, T0};
 use tracing::{instrument, trace};
 
-type RecoverySyneviResult<E> =
+type RecoveryInternalSyneviResult<E> =
     Result<RecoveryState<ExecutorResult<<E as Executor>::Tx>>, SyneviError>;
 
 pub struct Coordinator<N, E, S>
@@ -82,12 +82,12 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    pub async fn run(&mut self) -> SyneviResult<E> {
+    pub async fn run(&mut self) -> InternalSyneviResult<E> {
         self.pre_accept().await
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn pre_accept(&mut self) -> SyneviResult<E> {
+    async fn pre_accept(&mut self) -> InternalSyneviResult<E> {
         trace!(id = ?self.transaction.id, "Coordinator: Preaccept");
 
         self.node
@@ -162,7 +162,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn accept(&mut self) -> SyneviResult<E> {
+    async fn accept(&mut self) -> InternalSyneviResult<E> {
         trace!(id = ?self.transaction.id, "Coordinator: Accept");
 
         // Safeguard: T0 <= T
@@ -227,7 +227,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn commit(&mut self) -> SyneviResult<E> {
+    async fn commit(&mut self) -> InternalSyneviResult<E> {
         trace!(id = ?self.transaction.id, "Coordinator: Commit");
 
         let committed_request = CommitRequest {
@@ -258,7 +258,7 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn apply(&mut self) -> SyneviResult<E> {
+    async fn apply(&mut self) -> InternalSyneviResult<E> {
         trace!(id = ?self.transaction.id, "Coordinator: Apply");
 
         let (synevi_result, hashes) = self.execute_consensus().await?;
@@ -282,14 +282,21 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn execute_consensus(&mut self) -> Result<(SyneviResult<E>, Hashes), SyneviError> {
+    async fn execute_consensus(
+        &mut self,
+    ) -> Result<(InternalSyneviResult<E>, Hashes), SyneviError> {
         self.transaction.state = State::Applied;
 
         self.node.apply((&self.transaction).into()).await?;
 
         let result = match &self.transaction.transaction {
             TransactionPayload::None => Err(SyneviError::TransactionNotFound),
-            TransactionPayload::External(tx) => self.node.executor.execute(tx.clone()).await,
+            TransactionPayload::External(tx) => self
+                .node
+                .executor
+                .execute(tx.clone())
+                .await
+                .map(|e| ExecutorResult::External(e)),
             TransactionPayload::Internal(request) => {
                 let result = match request {
                     InternalExecution::JoinElectorate { id, serial, host } => {
@@ -326,7 +333,10 @@ where
     }
 
     #[instrument(level = "trace", skip(node))]
-    pub async fn recover(node: Arc<Node<N, E, S>>, recover_event: RecoverEvent) -> SyneviResult<E> {
+    pub async fn recover(
+        node: Arc<Node<N, E, S>>,
+        recover_event: RecoverEvent,
+    ) -> InternalSyneviResult<E> {
         loop {
             let node = node.clone();
 
@@ -380,7 +390,7 @@ where
     async fn recover_consensus(
         &mut self,
         mut responses: Vec<RecoverResponse>,
-    ) -> RecoverySyneviResult<E> {
+    ) -> RecoveryInternalSyneviResult<E> {
         // Keep track of values to replace
         let mut highest_ballot: Option<Ballot> = None;
         let mut superseding = false;

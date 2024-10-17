@@ -11,7 +11,9 @@ use synevi_network::reconfiguration::Report;
 use synevi_network::replica::Replica;
 use synevi_persistence::mem_store::MemStore;
 use synevi_types::traits::Store;
-use synevi_types::types::{SyneviResult, TransactionPayload, UpsertEvent};
+use synevi_types::types::{
+    ExecutorResult, InternalSyneviResult, SyneviResult, TransactionPayload, UpsertEvent,
+};
 use synevi_types::{Executor, State, SyneviError, T};
 use tokio::sync::mpsc::Receiver;
 use tracing::instrument;
@@ -206,14 +208,21 @@ where
         let _permit = self.semaphore.acquire().await?;
         let mut coordinator =
             Coordinator::new(self.clone(), TransactionPayload::External(transaction), id).await;
-        coordinator.run().await
+        let tx_result = coordinator.run().await?;
+
+        match tx_result {
+            ExecutorResult::External(e) => Ok(e),
+            ExecutorResult::Internal(e) => {
+                Err(SyneviError::InternalTransaction(format!("{:?}", e)))
+            }
+        }
     }
 
     pub(super) async fn internal_transaction(
         self: Arc<Self>,
         id: u128,
         transaction: TransactionPayload<E::Tx>,
-    ) -> SyneviResult<E> {
+    ) -> InternalSyneviResult<E> {
         if !self.has_members.load(std::sync::atomic::Ordering::Relaxed) {
             tracing::warn!("Consensus omitted: No members in the network");
         } else if !self.is_ready.load(Ordering::Relaxed) {
@@ -444,7 +453,6 @@ mod tests {
     use synevi_network::network::GrpcNetwork;
     use synevi_network::network::Network;
     use synevi_types::traits::Store;
-    use synevi_types::types::ExecutorResult;
     use synevi_types::{Executor, State, SyneviError, T, T0};
     use ulid::Ulid;
 
@@ -569,15 +577,12 @@ mod tests {
                 .await
                 .unwrap();
         }
-        match coordinator
+        coordinator
             .clone()
             .transaction(0, Vec::from("last transaction"))
             .await
             .unwrap()
-        {
-            ExecutorResult::External(e) => e.unwrap(),
-            _ => panic!(),
-        };
+            .unwrap();
 
         let coordinator_store: BTreeMap<T0, T> = coordinator
             .event_store
@@ -641,10 +646,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = match node.transaction(0, vec![127u8]).await.unwrap() {
-            ExecutorResult::External(e) => e.unwrap(),
-            _ => panic!(),
-        };
+        let result = node.transaction(0, vec![127u8]).await.unwrap().unwrap();
 
         assert_eq!(result, vec![127u8]);
     }

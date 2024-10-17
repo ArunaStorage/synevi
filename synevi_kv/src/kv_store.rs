@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use synevi_core::node::Node;
 use synevi_network::network::Network;
-use synevi_types::types::{ExecutorResult, SyneviResult};
+use synevi_types::types::SyneviResult;
 use synevi_types::{error::SyneviError, Executor};
 use ulid::Ulid;
 
@@ -62,29 +62,29 @@ impl Executor for KVExecutor {
         Ok(match transaction {
             Transaction::Read { key } => {
                 let Some(key) = self.store.lock().unwrap().get(&key).cloned() else {
-                    return Ok(ExecutorResult::External(Err(KVError::KeyNotFound)));
+                    return Ok(Err(KVError::KeyNotFound));
                 };
-                ExecutorResult::External(Ok(key))
+                Ok(key)
             }
             Transaction::Write { key, value } => {
                 self.store
                     .lock()
                     .unwrap()
                     .insert(key.clone(), value.clone());
-                ExecutorResult::External(Ok(value))
+                Ok(value)
             }
             Transaction::Cas { key, from, to } => {
                 let mut store = self.store.lock().unwrap();
 
                 let Some(entry) = store.get_mut(&key) else {
-                    return Ok(ExecutorResult::External(Err(KVError::KeyNotFound)));
+                    return Ok(Err(KVError::KeyNotFound));
                 };
 
                 if entry == &from {
                     *entry = to.clone();
-                    ExecutorResult::External(Ok(to))
+                    Ok(to)
                 } else {
-                    return Ok(ExecutorResult::External(Err(KVError::MismatchError)));
+                    return Ok(Err(KVError::MismatchError));
                 }
             }
         })
@@ -116,13 +116,9 @@ where
 
     async fn transaction(&self, id: Ulid, transaction: Transaction) -> Result<String, KVError> {
         let node = self.node.clone();
-        match node
+        node
             .transaction(u128::from_be_bytes(id.to_bytes()), transaction)
             .await?
-        {
-            ExecutorResult::External(result) => result,
-            _ => Err(KVError::MismatchError), // TODO: Make a new error for this case
-        }
     }
 
     pub async fn read(&self, key: String) -> Result<String, KVError> {

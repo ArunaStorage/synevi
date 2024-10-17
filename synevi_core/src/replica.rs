@@ -217,7 +217,12 @@ where
             TransactionPayload::None => {
                 return Err(SyneviError::TransactionNotFound);
             }
-            TransactionPayload::External(tx) => self.node.executor.execute(tx).await,
+            TransactionPayload::External(tx) => self
+                .node
+                .executor
+                .execute(tx)
+                .await
+                .map(|e| ExecutorResult::<<E as Executor>::Tx>::External(e)),
             TransactionPayload::Internal(request) => {
                 // TODO: Build special execution
                 let result = match &request {

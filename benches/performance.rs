@@ -57,14 +57,7 @@ async fn parallel_execution(coordinator: Arc<Node<GrpcNetwork, DummyExecutor, Me
         });
     }
     while let Some(res) = joinset.join_next().await {
-        match res.unwrap().unwrap() {
-            synevi_types::types::ExecutorResult::External(res) => {
-                res.unwrap();
-            }
-            synevi_types::types::ExecutorResult::Internal(res) => {
-                res.unwrap();
-            }
-        }
+        res.unwrap().unwrap().unwrap();
     }
 }
 
@@ -82,14 +75,7 @@ async fn contention_execution(coordinators: Vec<Arc<Node<GrpcNetwork, DummyExecu
         }
     }
     while let Some(res) = joinset.join_next().await {
-        match res.unwrap().unwrap() {
-            synevi_types::types::ExecutorResult::External(res) => {
-                res.unwrap();
-            }
-            synevi_types::types::ExecutorResult::Internal(res) => {
-                res.unwrap();
-            }
-        }
+        res.unwrap().unwrap().unwrap();
     }
 }
 
@@ -105,14 +91,7 @@ async fn _bigger_payloads_execution(
         joinset.spawn(async move { coordinator.transaction(i, payload).await });
     }
     while let Some(res) = joinset.join_next().await {
-        match res.unwrap().unwrap() {
-            synevi_types::types::ExecutorResult::External(res) => {
-                res.unwrap();
-            }
-            synevi_types::types::ExecutorResult::Internal(res) => {
-                res.unwrap();
-            }
-        };
+        res.unwrap().unwrap().unwrap();
     }
 }
 

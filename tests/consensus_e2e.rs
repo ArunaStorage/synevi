@@ -62,14 +62,7 @@ mod tests {
             });
         }
         while let Some(res) = joinset.join_next().await {
-            match res.unwrap().unwrap() {
-                synevi::ExecutorResult::External(res) => {
-                    res.unwrap();
-                }
-                synevi::ExecutorResult::Internal(res) => {
-                    res.unwrap();
-                }
-            };
+            res.unwrap().unwrap().unwrap();
         }
 
         let (total, accepts, recovers) = coordinator.get_stats();
@@ -212,14 +205,7 @@ mod tests {
                 });
             }
             while let Some(res) = joinset.join_next().await {
-                match res.unwrap().unwrap() {
-                    synevi::ExecutorResult::External(res) => {
-                        res.unwrap();
-                    }
-                    synevi::ExecutorResult::Internal(res) => {
-                        res.unwrap();
-                    }
-                };
+                res.unwrap().unwrap().unwrap();
             }
 
             println!("Time: {:?}", start.elapsed());
@@ -361,19 +347,11 @@ mod tests {
             }
 
             for i in 0..1000 {
-                match coordinator
+                coordinator
                     .clone()
                     .transaction(i, Vec::from("This is a transaction"))
                     .await
-                    .unwrap()
-                {
-                    synevi::ExecutorResult::Internal(res) => {
-                        res.unwrap();
-                    }
-                    synevi::ExecutorResult::External(res) => {
-                        res.unwrap();
-                    }
-                };
+                    .unwrap().unwrap();
             }
 
             runtime.shutdown_background();
@@ -480,14 +458,7 @@ mod tests {
             }
         }
         while let Some(res) = joinset.join_next().await {
-            match res.unwrap().unwrap() {
-                synevi::ExecutorResult::External(res) => {
-                    res.unwrap();
-                }
-                synevi::ExecutorResult::Internal(res) => {
-                    res.unwrap();
-                }
-            };
+            res.unwrap().unwrap().unwrap();
         }
 
         let (total, accepts, recovers) = coordinator.get_stats();

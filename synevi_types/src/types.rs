@@ -13,10 +13,11 @@ use tokio::sync::oneshot;
 use ulid::Ulid;
 
 pub type SyneviResult<E> = Result<
-    ExecutorResult<<E as Executor>::Tx>,
-    //Result<<<E as Executor>::Tx as Transaction>::TxOk, <<E as Executor>::Tx as Transaction>::TxErr>,
+    Result<<<E as Executor>::Tx as Transaction>::TxOk, <<E as Executor>::Tx as Transaction>::TxErr>,
     SyneviError,
 >;
+
+pub type InternalSyneviResult<E> = Result<ExecutorResult<<E as Executor>::Tx>, SyneviError>;
 
 #[derive(Serialize)]
 pub enum ExecutorResult<T: Transaction> {

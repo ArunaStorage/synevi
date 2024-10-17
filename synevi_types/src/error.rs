@@ -68,9 +68,10 @@ pub enum SyneviError {
     NotReady,
     #[error("Mismatched hashes")]
     MismatchedHashes,
-
     #[error("Unrecoverable transaction")]
     UnrecoverableTransaction,
+    #[error("Expected external transaction: {0}")]
+    InternalTransaction(String),
 }
 
 impl Serialize for SyneviError {
