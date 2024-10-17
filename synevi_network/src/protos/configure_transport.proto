@@ -36,6 +36,7 @@ message Config {
     uint32 node_serial = 1;
     bytes node_id = 2;
     string host = 3;
+    bool ready = 4;
 }
 
 message JoinElectorateResponse {
@@ -71,14 +72,12 @@ message ReadyElectorateResponse {}
 
 
 service InitService {
-    rpc ReportLastApplied(ReportLastAppliedRequest) returns (ReportLastAppliedResponse) {}
+    rpc ReportElectorate(ReportElectorateRequest) returns (ReportElectorateResponse) {}
 }
 
-message ReportLastAppliedRequest {
-    Config config = 1;
-    bytes last_applied = 2;
-    bytes last_applied_hash = 3;
+message ReportElectorateRequest {
+    repeated Config configs = 1;
 }
 
-message ReportLastAppliedResponse {}
+message ReportElectorateResponse {}
 

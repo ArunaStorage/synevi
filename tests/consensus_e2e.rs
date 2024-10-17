@@ -351,7 +351,8 @@ mod tests {
                     .clone()
                     .transaction(i, Vec::from("This is a transaction"))
                     .await
-                    .unwrap().unwrap();
+                    .unwrap()
+                    .unwrap();
             }
 
             runtime.shutdown_background();

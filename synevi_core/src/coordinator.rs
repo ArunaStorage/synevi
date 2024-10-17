@@ -299,15 +299,14 @@ where
                 .map(|e| ExecutorResult::External(e)),
             TransactionPayload::Internal(request) => {
                 let result = match request {
-                    InternalExecution::JoinElectorate { id, serial, host } => {
+                    InternalExecution::JoinElectorate { id, serial, new_node_host } => {
                         let res = self
                             .node
-                            .add_member(*id, *serial, host.clone(), false)
+                            .add_member(*id, *serial, new_node_host.clone(), false)
                             .await;
-                        let (t, hash) = self.node.event_store.last_applied_hash()?; // TODO: Remove ?
                         self.node
                             .network
-                            .report_config(t, hash, host.clone())
+                            .report_config(new_node_host.to_string())
                             .await?;
                         res
                     }

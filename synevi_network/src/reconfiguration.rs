@@ -1,7 +1,7 @@
 use crate::configure_transport::{
     GetEventRequest, GetEventResponse, JoinElectorateRequest, JoinElectorateResponse,
-    ReadyElectorateRequest, ReadyElectorateResponse, ReportLastAppliedRequest,
-    ReportLastAppliedResponse,
+    ReadyElectorateRequest, ReadyElectorateResponse, ReportElectorateRequest,
+    ReportElectorateResponse,
 };
 use synevi_types::{SyneviError, T};
 use ulid::Ulid;
@@ -23,10 +23,10 @@ pub trait Reconfiguration {
     ) -> Result<ReadyElectorateResponse, SyneviError>;
 
     // Joining node
-    async fn report_last_applied(
+    async fn report_electorate(
         &self,
-        request: ReportLastAppliedRequest,
-    ) -> Result<ReportLastAppliedResponse, SyneviError>;
+        request: ReportElectorateRequest,
+    ) -> Result<ReportElectorateResponse, SyneviError>;
 }
 
 #[derive(Debug)]

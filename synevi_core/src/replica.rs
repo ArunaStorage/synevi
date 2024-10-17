@@ -5,9 +5,7 @@ use sha3::{Digest, Sha3_256};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use synevi_network::configure_transport::{
-    Config, GetEventRequest, GetEventResponse, JoinElectorateRequest, JoinElectorateResponse,
-    ReadyElectorateRequest, ReadyElectorateResponse, ReportLastAppliedRequest,
-    ReportLastAppliedResponse,
+    Config, GetEventRequest, GetEventResponse, JoinElectorateRequest, JoinElectorateResponse, ReadyElectorateRequest, ReadyElectorateResponse, ReportElectorateRequest, ReportElectorateResponse, ReportLastAppliedRequest, ReportLastAppliedResponse
 };
 use synevi_network::consensus_transport::{
     AcceptRequest, AcceptResponse, ApplyRequest, ApplyResponse, CommitRequest, CommitResponse,
@@ -70,6 +68,10 @@ where
         request: PreAcceptRequest,
         _node_serial: u16,
     ) -> Result<PreAcceptResponse, SyneviError> {
+        if !self.node.is_ready() {
+            return Ok(PreAcceptResponse::default());
+        }
+
         let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
 
@@ -105,10 +107,6 @@ where
 
         // let (t, deps) = rx.await?;
 
-        if !self.node.is_ready() {
-            return Ok(PreAcceptResponse::default());
-        }
-
         Ok(PreAcceptResponse {
             timestamp: t.into(),
             dependencies: into_dependency(&deps),
@@ -118,6 +116,9 @@ where
 
     #[instrument(level = "trace", skip(self, request))]
     async fn accept(&self, request: AcceptRequest) -> Result<AcceptResponse, SyneviError> {
+        if !self.node.is_ready() {
+            return Ok(AcceptResponse::default());
+        }
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         let t = T::try_from(request.timestamp.as_slice())?;
@@ -153,9 +154,6 @@ where
             self.node.event_store.get_tx_dependencies(&t, &t_zero)
         };
 
-        if !self.node.is_ready() {
-            return Ok(AcceptResponse::default());
-        }
         Ok(AcceptResponse {
             dependencies: into_dependency(&dependencies),
             nack: false,
@@ -226,17 +224,17 @@ where
             TransactionPayload::Internal(request) => {
                 // TODO: Build special execution
                 let result = match &request {
-                    InternalExecution::JoinElectorate { id, serial, host } => {
+                    InternalExecution::JoinElectorate {
+                        id,
+                        serial,
+                        new_node_host,
+                    } => {
                         if id != &self.node.info.id {
                             let res = self
                                 .node
-                                .add_member(*id, *serial, host.clone(), false)
+                                .add_member(*id, *serial, new_node_host.clone(), false)
                                 .await;
-                            let (t, hash) = self.node.event_store.last_applied_hash()?;
-                            self.node
-                                .network
-                                .report_config(t, hash, host.clone())
-                                .await?;
+                            self.node.network.report_config(new_node_host.clone()).await?;
                             res
                         } else {
                             Ok(())
@@ -485,38 +483,23 @@ where
     }
 
     // TODO: Move trait to Joining Node -> Rename to receive_config, Ready checks
-    async fn report_last_applied(
+    async fn report_electorate(
         &self,
-        request: ReportLastAppliedRequest,
-    ) -> Result<ReportLastAppliedResponse, SyneviError> {
-        if self.ready.load(Ordering::SeqCst) {
+        request: ReportElectorateRequest,
+    ) -> Result<ReportElectorateResponse, SyneviError> {
+        if self.ready.load(Ordering::Relaxed) {
             return Ok(ReportLastAppliedResponse::default());
         }
-        let Some(Config {
-            node_serial,
-            node_id,
-            host,
-        }) = request.config
-        else {
-            return Err(SyneviError::InvalidConversionRequest(
-                "Invalid config".to_string(),
-            ));
-        };
-        let report = Report {
-            node_id: Ulid::from_bytes(node_id.try_into().map_err(|_| {
-                SyneviError::InvalidConversionFromBytes("Invalid Ulid conversion".to_string())
-            })?),
-            node_serial: node_serial.try_into()?,
-            node_host: host,
-            last_applied: request.last_applied.as_slice().try_into()?,
-            last_applied_hash: request.last_applied_hash.try_into().map_err(|_| {
-                SyneviError::InvalidConversionFromBytes("Invalid hash conversion".to_string())
-            })?,
-        };
-        //dbg!(&report);
-        self.notifier.send(report).await.map_err(|_| {
-            SyneviError::SendError("Sender for reporting last applied closed".to_string())
-        })?;
+        for member in request.config {
+            self.node.add_member(
+                member.node_id,
+                member.node_serial,
+                member.host,
+                true,
+            )
+            .await?;
+        }
+        self.node.members_responded.fetch_add(1, Ordering::Relaxed);
         Ok(ReportLastAppliedResponse {})
     }
 }

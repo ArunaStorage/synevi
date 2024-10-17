@@ -116,8 +116,7 @@ where
 
     async fn transaction(&self, id: Ulid, transaction: Transaction) -> Result<String, KVError> {
         let node = self.node.clone();
-        node
-            .transaction(u128::from_be_bytes(id.to_bytes()), transaction)
+        node.transaction(u128::from_be_bytes(id.to_bytes()), transaction)
             .await?
     }
 

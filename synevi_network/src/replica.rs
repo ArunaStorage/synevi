@@ -3,7 +3,7 @@ use crate::{
         init_service_server::InitService, reconfiguration_service_server::ReconfigurationService,
         time_service_server::TimeService, GetEventRequest, GetEventResponse, GetTimeRequest,
         GetTimeResponse, JoinElectorateRequest, JoinElectorateResponse, ReadyElectorateRequest,
-        ReadyElectorateResponse, ReportLastAppliedRequest, ReportLastAppliedResponse,
+        ReadyElectorateResponse, ReportElectorateRequest, ReportElectorateResponse,
     },
     consensus_transport::*,
     reconfiguration::Reconfiguration,
@@ -247,13 +247,13 @@ impl<R: Replica + 'static + Reconfiguration> ReconfigurationService for ReplicaB
 }
 #[async_trait::async_trait]
 impl<R: Replica + 'static + Reconfiguration> InitService for ReplicaBox<R> {
-    async fn report_last_applied(
+    async fn report_electorate(
         &self,
-        request: tonic::Request<ReportLastAppliedRequest>,
-    ) -> Result<tonic::Response<ReportLastAppliedResponse>, tonic::Status> {
+        request: tonic::Request<ReportElectorateRequest>,
+    ) -> Result<tonic::Response<ReportElectorateResponse>, tonic::Status> {
         Ok(Response::new(
             self.inner
-                .report_last_applied(request.into_inner())
+                .report_electorate(request.into_inner())
                 .await
                 .map_err(|e| tonic::Status::internal(e.to_string()))?,
         ))

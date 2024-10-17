@@ -15,7 +15,6 @@ pub mod tests {
     use synevi_types::types::SyneviResult;
     use synevi_types::Executor;
     use synevi_types::SyneviError;
-    use synevi_types::T;
     use synevi_types::T0;
     use tokio::sync::mpsc::Receiver;
     use tokio::sync::Mutex;
@@ -78,8 +77,8 @@ pub mod tests {
             0
         }
 
-        async fn broadcast_config(&self, _host: String) -> Result<(u32, Vec<u8>), SyneviError> {
-            Ok((0, vec![0]))
+        async fn join_electorate(&self, _host: String) -> Result<u32, SyneviError> {
+            Ok(0)
         }
         async fn get_stream_events(
             &self,
@@ -99,8 +98,6 @@ pub mod tests {
 
         async fn report_config(
             &self,
-            _last_applied: T,
-            _last_applied_hash: [u8; 32],
             _host: String,
         ) -> Result<(), SyneviError> {
             Ok(())

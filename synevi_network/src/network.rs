@@ -5,7 +5,7 @@ use crate::configure_transport::reconfiguration_service_server::ReconfigurationS
 use crate::configure_transport::time_service_server::TimeServiceServer;
 use crate::configure_transport::{
     Config, GetEventRequest, GetEventResponse, JoinElectorateRequest, ReadyElectorateRequest,
-    ReportLastAppliedRequest,
+    ReportElectorateRequest,
 };
 use crate::consensus_transport::{RecoverRequest, RecoverResponse, TryRecoveryRequest};
 use crate::latency_service::get_latency;
@@ -20,10 +20,10 @@ use crate::{
     replica::{Replica, ReplicaBox},
 };
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::{net::SocketAddr, sync::Arc};
 use synevi_types::error::SyneviError;
-use synevi_types::{T, T0};
+use synevi_types::T0;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
 use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
@@ -57,13 +57,8 @@ pub trait Network: Send + Sync + 'static {
     async fn get_interface(&self) -> Arc<Self::Ni>;
     async fn get_waiting_time(&self, node_serial: u16) -> u64;
     async fn get_member_len(&self) -> u32;
-    async fn broadcast_config(&self, host: String) -> Result<(u32, Vec<u8>), SyneviError>; // All members
-    async fn report_config(
-        &self,
-        last_applied: T,
-        last_applied_hash: [u8; 32],
-        host: String,
-    ) -> Result<(), SyneviError>;
+    async fn join_electorate(&self, host: String) -> Result<u32, SyneviError>; // All members
+    async fn report_config(&self, host: String) -> Result<(), SyneviError>;
     async fn get_stream_events(
         &self,
         last_applied: Vec<u8>,
@@ -113,8 +108,8 @@ where
     async fn get_member_len(&self) -> u32 {
         self.as_ref().get_member_len().await
     }
-    async fn broadcast_config(&self, host: String) -> Result<(u32, Vec<u8>), SyneviError> {
-        self.as_ref().broadcast_config(host).await
+    async fn join_electorate(&self, host: String) -> Result<u32, SyneviError> {
+        self.as_ref().join_electorate(host).await
     }
     async fn get_stream_events(
         &self,
@@ -134,15 +129,8 @@ where
         self.as_ref().ready_member(id, serial).await
     }
 
-    async fn report_config(
-        &self,
-        last_applied: T,
-        last_applied_hash: [u8; 32],
-        host: String,
-    ) -> Result<(), SyneviError> {
-        self.as_ref()
-            .report_config(last_applied, last_applied_hash, host)
-            .await
+    async fn report_config(&self, host: String) -> Result<(), SyneviError> {
+        self.as_ref().report_config(host).await
     }
 }
 
@@ -166,14 +154,14 @@ where
 pub struct NodeInfo {
     pub id: Ulid,
     pub serial: u16,
+    pub host: String,
+    pub ready: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Member {
     pub info: NodeInfo,
-    pub host: String,
     pub channel: Channel,
-    pub ready_electorate: bool,
 }
 
 #[derive(Debug)]
@@ -204,7 +192,7 @@ pub enum BroadcastResponse {
 #[derive(Debug)]
 pub struct GrpcNetwork {
     pub socket_addr: SocketAddr,
-    pub self_info: (NodeInfo, String),
+    pub self_info: NodeInfo,
     pub members: Arc<RwLock<HashMap<Ulid, MemberWithLatency, ahash::RandomState>>>,
     join_set: Mutex<JoinSet<Result<(), SyneviError>>>,
 }
@@ -215,16 +203,16 @@ pub struct GrpcNetworkSet {
 }
 
 impl GrpcNetwork {
-    pub fn new(socket_addr: SocketAddr, address: String, node_id: Ulid, node_serial: u16) -> Self {
+    pub fn new(socket_addr: SocketAddr, host: String, node_id: Ulid, node_serial: u16, ready: Arc<AtomicBool>) -> Self {
         Self {
             socket_addr,
-            self_info: (
+            self_info: 
                 NodeInfo {
                     id: node_id,
                     serial: node_serial,
+                    host,
+                    ready,
                 },
-                address,
-            ),
             members: Arc::new(RwLock::new(HashMap::default())),
             join_set: Mutex::new(JoinSet::new()),
         }
@@ -267,10 +255,8 @@ impl Network for GrpcNetwork {
                 id,
                 MemberWithLatency {
                     member: Arc::new(Member {
-                        info: NodeInfo { id, serial },
-                        host,
+                        info: NodeInfo { id, serial, host, ready: Arc::new(AtomicBool::new(ready)) },
                         channel,
-                        ready_electorate: ready,
                     }),
                     latency: AtomicU64::new(500),
                     skew: AtomicI64::new(0),
@@ -328,11 +314,12 @@ impl Network for GrpcNetwork {
         (self.members.read().await.len() + 1) as u32
     }
 
-    async fn broadcast_config(&self, host: String) -> Result<(u32, Vec<u8>), SyneviError> {
+    async fn join_electorate(&self, host: String) -> Result<u32, SyneviError> {
         let config = Config {
-            node_serial: self.self_info.0.serial as u32,
-            node_id: self.self_info.0.id.to_bytes().to_vec(),
-            host: self.self_info.1.clone(),
+            node_serial: self.self_info.serial as u32,
+            node_id: self.self_info.id.to_bytes().to_vec(),
+            host: self.self_info.host.clone(),
+            ready: self.self_info.ready.load(Ordering::Relaxed),
         };
         let channel = Channel::from_shared(host)?.connect().await?;
         let request = tonic::Request::new(JoinElectorateRequest {
@@ -341,28 +328,35 @@ impl Network for GrpcNetwork {
         let mut client = ReconfigurationServiceClient::new(channel);
         let response = client.join_electorate(request).await?;
         let response = response.into_inner();
-        Ok((response.majority, response.self_event))
+        Ok(response.majority)
     }
 
-    async fn report_config(
-        &self,
-        last_applied: T,
-        last_applied_hash: [u8; 32],
-        host: String,
-    ) -> Result<(), SyneviError> {
+    async fn report_config(&self, host: String) -> Result<(), SyneviError> {
         let config = Config {
-            node_serial: self.self_info.0.serial as u32,
-            node_id: self.self_info.0.id.to_bytes().to_vec(),
-            host: self.self_info.1.clone(),
+            node_serial: self.self_info.serial as u32,
+            node_id: self.self_info.id.to_bytes().to_vec(),
+            host: self.self_info.host.clone(),
+            ready: self.self_info.ready.load(Ordering::Relaxed),
         };
+
+        let mut configs: Vec<_> = self
+            .members
+            .read()
+            .await
+            .iter()
+            .map(|(_, m)| Config {
+                node_serial: m.member.info.serial as u32,
+                node_id: m.member.info.id.to_bytes().to_vec(),
+                host: m.member.info.host.clone(),
+                ready: m.member.info.ready.load(Ordering::Relaxed),
+            })
+            .collect();
+        configs.push(config);
+
         let channel = Channel::from_shared(host)?.connect().await?;
-        let request = tonic::Request::new(ReportLastAppliedRequest {
-            config: Some(config),
-            last_applied: last_applied.into(),
-            last_applied_hash: last_applied_hash.into(),
-        });
+        let request = tonic::Request::new(ReportElectorateRequest { configs });
         let mut client = InitServiceClient::new(channel);
-        let _res = client.report_last_applied(request).await?;
+        let _res = client.report_electorate(request).await?;
         Ok(())
     }
 
@@ -373,7 +367,7 @@ impl Network for GrpcNetwork {
     ) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError> {
         let lock = self.members.read().await;
         let mut members = lock.iter();
-        let Some((_, member)) = members.find(|(_, m)| m.member.ready_electorate) else {
+        let Some((_, member)) = members.find(|(_, m)| m.member.info.ready.load(Ordering::Relaxed)) else {
             return Err(SyneviError::NoMembersFound);
         };
         let channel = member.member.channel.clone();
@@ -414,8 +408,8 @@ impl Network for GrpcNetwork {
         };
         let channel = member.member.channel.clone();
         let request = tonic::Request::new(ReadyElectorateRequest {
-            node_id: self.self_info.0.id.to_bytes().to_vec(),
-            node_serial: self.self_info.0.serial as u32,
+            node_id: self.self_info.id.to_bytes().to_vec(),
+            node_serial: self.self_info.serial as u32,
         });
         let mut client = ReconfigurationServiceClient::new(channel);
         let _res = client.ready_electorate(request).await?.into_inner();
@@ -427,10 +421,9 @@ impl Network for GrpcNetwork {
         if let Some(member) = lock.get_mut(&id) {
             let new_member = Member {
                 info: member.member.info.clone(),
-                host: member.member.host.clone(),
                 channel: member.member.channel.clone(),
-                ready_electorate: true,
             };
+            new_member.info.ready.store(true, Ordering::Relaxed);
             member.member = Arc::new(new_member);
         } else {
             return Err(SyneviError::NoMembersFound);
@@ -456,7 +449,7 @@ impl NetworkInterface for GrpcNetworkSet {
             BroadcastRequest::PreAccept(req, serial) => {
                 // ... and then iterate over every member ...
                 for replica in &self.members {
-                    let ready = replica.ready_electorate;
+                    let ready = replica.info.ready.load(Ordering::Relaxed);
                     let channel = replica.channel.clone();
                     let inner = req.clone();
                     let mut request = tonic::Request::new(inner);
@@ -478,7 +471,7 @@ impl NetworkInterface for GrpcNetworkSet {
             }
             BroadcastRequest::Accept(req) => {
                 for replica in &self.members {
-                    let ready = replica.ready_electorate;
+                    let ready = replica.info.ready.load(Ordering::Relaxed);
                     let channel = replica.channel.clone();
                     let request = req.clone();
                     responses.spawn(async move {
@@ -492,7 +485,7 @@ impl NetworkInterface for GrpcNetworkSet {
             }
             BroadcastRequest::Commit(req) => {
                 for replica in &self.members {
-                    let ready = replica.ready_electorate;
+                    let ready = replica.info.ready.load(Ordering::Relaxed);
                     let channel = replica.channel.clone();
                     let request = req.clone();
                     responses.spawn(async move {
@@ -507,7 +500,7 @@ impl NetworkInterface for GrpcNetworkSet {
             BroadcastRequest::Apply(req) => {
                 await_majority = false;
                 for replica in &self.members {
-                    let ready = replica.ready_electorate;
+                    let ready = replica.info.ready.load(Ordering::Relaxed);
                     let channel = replica.channel.clone();
                     let request = req.clone();
                     responses.spawn(async move {
@@ -524,7 +517,7 @@ impl NetworkInterface for GrpcNetworkSet {
                 broadcast_all = true;
                 for replica in &self.members {
                     // TODO: Not sure if neccessary
-                    let ready = replica.ready_electorate;
+                    let ready = replica.info.ready.load(Ordering::Relaxed);
                     let channel = replica.channel.clone();
                     let request = req.clone();
                     responses.spawn(async move {
@@ -541,7 +534,7 @@ impl NetworkInterface for GrpcNetworkSet {
         let all = self
             .members
             .iter()
-            .filter(|member| member.ready_electorate)
+            .filter(|member| member.info.ready.load(Ordering::Relaxed))
             .count();
         let majority = if all == 0 { 0 } else { (all / 2) + 1 };
         let mut counter = 0_usize;

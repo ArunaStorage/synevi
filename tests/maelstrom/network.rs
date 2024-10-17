@@ -184,7 +184,7 @@ impl Network for MaelstromNetwork {
         todo!()
     }
 
-    async fn broadcast_config(&self, _host: String) -> Result<(u32, Vec<u8>), SyneviError> {
+    async fn join_electorate(&self, _host: String) -> Result<(u32, Vec<u8>), SyneviError> {
         todo!()
     }
 

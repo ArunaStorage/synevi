@@ -7,7 +7,6 @@ use std::sync::RwLock;
 use std::sync::{atomic::AtomicU64, Arc};
 use synevi_network::consensus_transport::{ApplyRequest, CommitRequest};
 use synevi_network::network::{Network, NetworkInterface, NodeInfo};
-use synevi_network::reconfiguration::Report;
 use synevi_network::replica::Replica;
 use synevi_persistence::mem_store::MemStore;
 use synevi_types::traits::Store;
@@ -15,7 +14,6 @@ use synevi_types::types::{
     ExecutorResult, InternalSyneviResult, SyneviResult, TransactionPayload, UpsertEvent,
 };
 use synevi_types::{Executor, State, SyneviError, T};
-use tokio::sync::mpsc::Receiver;
 use tracing::instrument;
 use ulid::Ulid;
 
@@ -32,15 +30,12 @@ where
     E: Executor + Send + Sync,
     S: Store + Send + Sync,
 {
-    pub info: NodeInfo,
     pub network: N,
     pub executor: E,
     pub event_store: Arc<S>,
     pub stats: Stats,
     pub wait_handler: WaitHandler<S>,
     semaphore: Arc<tokio::sync::Semaphore>,
-    has_members: AtomicBool,
-    is_ready: Arc<AtomicBool>,
     self_clone: RwLock<Option<Arc<Self>>>,
 }
 
@@ -75,7 +70,6 @@ where
         executor: E,
         store: S,
     ) -> Result<Arc<Self>, SyneviError> {
-        let node_name = NodeInfo { id, serial };
 
         let stats = Stats {
             total_requests: AtomicU64::new(0),
@@ -94,7 +88,6 @@ where
         let wait_handler = WaitHandler::new(arc_store.clone());
 
         let node = Arc::new(Node {
-            info: node_name,
             event_store: arc_store,
             wait_handler,
             network,
@@ -102,7 +95,7 @@ where
             semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
             executor,
             has_members: AtomicBool::new(false),
-            is_ready: Arc::new(AtomicBool::new(true)),
+            members_responded: Arc::new(AtomicU64::new(0)),
             self_clone: RwLock::new(None),
         });
         node.self_clone
@@ -356,15 +349,20 @@ where
         &self,
         replica: ReplicaConfig<N, E, S>,
         member_host: String,
-        config_receiver: Receiver<Report>,
         ready: Arc<AtomicBool>,
     ) -> Result<(), SyneviError> {
         // 1. Broadcast self_config to other member
-        let (all_members, self_id) = self.network.broadcast_config(member_host).await?;
+        let expected = self.network.join_electorate(member_host).await?;
 
         // 2. wait for JoinElectorate responses with expected majority and config from others
-        self.join_electorate(config_receiver, all_members, self_id, &replica)
-            .await?;
+
+        while self.members_responded.load(Ordering::Relaxed) < self.network.get_member_len().await as u64 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+
+
+        let (last_applied, _) = self.event_store.last_applied();
+        self.sync_events(last_applied, self_id, &replica).await?;
 
         // 3. Send ReadyJoinElectorate && set myself to ready
         ready.store(true, Ordering::Relaxed);
@@ -372,35 +370,9 @@ where
         Ok(())
     }
 
-    async fn join_electorate(
-        &self,
-        mut receiver: Receiver<Report>,
-        all_members: u32,
-        self_id: Vec<u8>,
-        replica: &ReplicaConfig<N, E, S>,
-    ) -> Result<(), SyneviError> {
-        let mut member_count = 0;
-        while let Some(report) = receiver.recv().await {
-            self.add_member(report.node_id, report.node_serial, report.node_host, true)
-                .await?;
-            member_count += 1;
-            if member_count >= all_members {
-                break;
-            }
-        }
-
-        let (last_applied, _) = self.event_store.last_applied();
-
-        // 2.1 if majority replies with 0 events -> skip to 2.4.
-        self.sync_events(last_applied, self_id, &replica).await?;
-
-        Ok(())
-    }
-
     async fn sync_events(
         &self,
         last_applied: T,
-        self_id: Vec<u8>,
         replica: &ReplicaConfig<N, E, S>,
     ) -> Result<(), SyneviError> {
         // 2.2 else Request stream with events until last_applied (highest t of JoinElectorate)

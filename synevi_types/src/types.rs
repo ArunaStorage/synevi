@@ -41,8 +41,15 @@ pub enum TransactionPayload<T: Transaction> {
 
 #[derive(Debug, Clone, Serialize, Eq, PartialEq, PartialOrd, Ord)]
 pub enum InternalExecution {
-    JoinElectorate { id: Ulid, serial: u16, host: String },
-    ReadyElectorate { id: Ulid, serial: u16 },
+    JoinElectorate {
+        id: Ulid,
+        serial: u16,
+        new_node_host: String,
+    },
+    ReadyElectorate {
+        id: Ulid,
+        serial: u16,
+    },
 }
 
 // #[derive(Debug, Clone, Serialize, Eq, PartialEq, PartialOrd, Ord)]
@@ -90,11 +97,15 @@ impl Transaction for InternalExecution {
         let mut bytes = Vec::new();
 
         match self {
-            InternalExecution::JoinElectorate { id, serial, host } => {
+            InternalExecution::JoinElectorate {
+                id,
+                serial,
+                new_node_host,
+            } => {
                 bytes.push(0);
                 bytes.extend_from_slice(&id.to_bytes());
                 bytes.extend_from_slice(&serial.to_be_bytes());
-                bytes.extend_from_slice(&host.as_bytes());
+                bytes.extend_from_slice(&new_node_host.as_bytes());
             }
             InternalExecution::ReadyElectorate { id, serial } => {
                 bytes.push(1);
@@ -112,15 +123,19 @@ impl Transaction for InternalExecution {
             Some(0) => {
                 let (id, rest) = rest.split_at(16);
                 let id = Ulid::from_bytes(id.try_into()?);
-                let (serial, host) = rest.split_at(2);
+                let (serial, new_node_host) = rest.split_at(2);
                 let serial = u16::from_be_bytes(
                     serial
                         .try_into()
                         .map_err(|_| SyneviError::InvalidConversionFromBytes(String::new()))?,
                 );
-                let host = String::from_utf8(host.to_owned())
+                let new_node_host = String::from_utf8(new_node_host.to_owned())
                     .map_err(|e| SyneviError::InvalidConversionFromBytes(e.to_string()))?;
-                Ok(InternalExecution::JoinElectorate { id, serial, host })
+                Ok(InternalExecution::JoinElectorate {
+                    id,
+                    serial,
+                    new_node_host,
+                })
             }
             Some(1) => {
                 let (id, serial) = rest.split_at(16);
@@ -462,7 +477,7 @@ mod test {
             TransactionPayload::Internal(crate::types::InternalExecution::JoinElectorate {
                 id: ulid::Ulid::new(),
                 serial: 1,
-                host: "http://test.org:1234".to_string(),
+                new_node_host: "http://test.org:1234".to_string(),
             });
         let bytes = internal_join.as_bytes();
         assert_eq!(
