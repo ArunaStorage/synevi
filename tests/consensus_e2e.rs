@@ -397,7 +397,6 @@ mod tests {
                 // Copy & create db
                 let test_path = format!("/dev/shm/{m}/");
                 fs::create_dir(&test_path).await.unwrap();
-                dbg!(&test_path);
                 let store = PersistentStore::new(test_path, i as u16).unwrap();
                 //let store = MemStore::new(i as u16).unwrap();
                 let node = Node::new_with_member(

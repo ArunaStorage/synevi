@@ -58,11 +58,17 @@ where
         request: PreAcceptRequest,
         _node_serial: u16,
     ) -> Result<PreAcceptResponse, SyneviError> {
+        let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
+
+        println!(
+            "Received pre-accept request for event: {:?} @ {:?}",
+            t0, _node_serial
+        );
+
         if !self.node.is_ready() {
             return Ok(PreAcceptResponse::default());
         }
 
-        let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
 
         trace!(?request_id, "Replica: PreAccept");
@@ -178,6 +184,14 @@ where
     #[instrument(level = "trace", skip(self, request))]
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse, SyneviError> {
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
+
+        if self.node.get_serial() == 2 {
+            println!(
+                "Received apply request for event: {:?} @ {:?}",
+                t_zero,
+                self.node.get_serial()
+            );
+        }
         let t = T::try_from(request.timestamp.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Apply");
@@ -378,6 +392,7 @@ where
         let node = self.node.clone();
         let member_count = self.node.network.get_members().await.len() as u32;
         let self_event = Ulid::new();
+        println!("Before joining transaction");
         let _res = node
             .internal_transaction(
                 self_event.0,
@@ -388,6 +403,7 @@ where
                 }),
             )
             .await?;
+        println!("After joining transaction");
         Ok(JoinElectorateResponse { member_count })
     }
 
