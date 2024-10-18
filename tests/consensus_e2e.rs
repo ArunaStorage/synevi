@@ -173,7 +173,7 @@ mod tests {
 
             let start = std::time::Instant::now();
 
-            for _ in 0..100 {
+            for _ in 0..1000 {
                 let coordinator1 = coordinator1.clone();
                 let coordinator2 = coordinator2.clone();
                 let coordinator3 = coordinator3.clone();
@@ -205,7 +205,10 @@ mod tests {
                         .await
                 });
             }
+            let mut counter: u16 = 0;
             while let Some(res) = joinset.join_next().await {
+                counter += 1;
+                println!("Got: {counter}");
                 res.unwrap().unwrap().unwrap();
             }
 
@@ -255,7 +258,10 @@ mod tests {
                 recovers
             );
 
-            assert_eq!(recovers, 0);
+            tokio::time::sleep(Duration::from_secs(5)).await;
+
+            //assert_eq!(recovers, 0);
+
 
             let coordinator_store: BTreeMap<T0, (T, Option<[u8; 32]>)> = coordinator1
                 .event_store

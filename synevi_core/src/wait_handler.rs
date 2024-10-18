@@ -3,12 +3,13 @@ use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
 };
-use synevi_types::{traits::Store, types::RecoverEvent, State, T, T0};
+use synevi_types::{traits::Store, types::{RecoverEvent, UpsertEvent}, State, T, T0};
 use tokio::{sync::oneshot, time::Instant};
 
 pub struct Waiter {
+    t: T,
     waited_since: Instant,
-    finished_dependencies: HashSet<T0, RandomState>,
+    dependencies: HashSet<T0, RandomState>,
     sender: Vec<oneshot::Sender<()>>,
 }
 
@@ -75,39 +76,35 @@ where
         }
     }
 
-    pub fn get_waiter(&self, t0: &T0) -> Option<oneshot::Receiver<()>> {
+    pub fn get_waiter(&self, upsert_event: &UpsertEvent) -> Option<oneshot::Receiver<()>> {
         let (sdx, rcv) = oneshot::channel();
         let mut waiter_lock = self.waiters.lock().expect("Locking waiters failed");
 
-        let Some(event) = self.store.get_event(*t0).ok().flatten() else {
-            tracing::error!("Unexpected state in wait_handler: Event not found in store");
-            return None;
-        };
-
-        let waiter = waiter_lock.entry(*t0).or_insert(Waiter {
+        let waiter = waiter_lock.entry(upsert_event.t_zero).or_insert(Waiter {
+            t: upsert_event.t,
             waited_since: Instant::now(),
-            finished_dependencies: HashSet::default(),
+            dependencies: upsert_event.dependencies.clone().unwrap_or_default(),
             sender: Vec::new(),
         });
         waiter.waited_since = Instant::now();
 
-        for dep_t0 in event.dependencies.iter() {
+        for dep_t0 in upsert_event.dependencies.clone().unwrap_or_default().iter() {
             let Some(dep_event) = self.store.get_event(*dep_t0).ok().flatten() else {
                 continue;
             };
 
             match dep_event.state {
-                State::Committed if dep_event.t > event.t => {
-                    waiter.finished_dependencies.insert(*dep_t0);
+                State::Committed if dep_event.t > upsert_event.t => {
+                    waiter.dependencies.remove(dep_t0);
                 }
                 State::Applied => {
-                    waiter.finished_dependencies.insert(*dep_t0);
+                    waiter.dependencies.remove(dep_t0);
                 }
                 _ => {}
             }
         }
 
-        if waiter.finished_dependencies.len() >= event.dependencies.len() {
+        if waiter.dependencies.is_empty() {
             return None;
         }
 
@@ -117,16 +114,12 @@ where
 
     pub fn notify_commit(&self, t0_commit: &T0, t_commit: &T) {
         let mut waiter_lock = self.waiters.lock().expect("Locking waiters failed");
-        waiter_lock.retain(|t0_waiting, waiter| {
-            let Some(event) = self.store.get_event(*t0_waiting).ok().flatten() else {
-                tracing::error!("Unexpected state in wait_handler: Event not found in store");
-                return true;
-            };
-            if event.dependencies.contains(t0_commit) {
-                if t_commit > &event.t {
-                    waiter.finished_dependencies.insert(*t0_commit);
+        waiter_lock.retain(|_, waiter| {
+            if waiter.dependencies.contains(t0_commit) {
+                if t_commit > &waiter.t {
+                    waiter.dependencies.remove(t0_commit);
                     waiter.waited_since = Instant::now();
-                    if waiter.finished_dependencies.len() >= event.dependencies.len() {
+                    if waiter.dependencies.is_empty() {
                         for sdx in waiter.sender.drain(..) {
                             let _ = sdx.send(());
                         }
@@ -140,15 +133,11 @@ where
 
     pub fn notify_apply(&self, t0_commit: &T0) {
         let mut waiter_lock = self.waiters.lock().expect("Locking waiters failed");
-        waiter_lock.retain(|t0_waiting, waiter| {
-            let Some(event) = self.store.get_event(*t0_waiting).ok().flatten() else {
-                tracing::error!("Unexpected state in wait_handler: Event not found in store");
-                return true;
-            };
-            if event.dependencies.contains(t0_commit) {
-                waiter.finished_dependencies.insert(*t0_commit);
+        waiter_lock.retain(|_, waiter| {
+            if waiter.dependencies.contains(t0_commit) {
+                waiter.dependencies.remove(t0_commit);
                 waiter.waited_since = Instant::now();
-                if waiter.finished_dependencies.len() >= event.dependencies.len() {
+                if waiter.dependencies.is_empty() {
                     for sdx in waiter.sender.drain(..) {
                         let _ = sdx.send(());
                     }

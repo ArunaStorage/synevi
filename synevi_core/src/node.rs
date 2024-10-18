@@ -264,10 +264,10 @@ where
 
         let prev_event = self.event_store.get_event(t0_commit)?;
 
-        self.event_store.upsert_tx(event)?;
+        self.event_store.upsert_tx(event.clone())?;
         self.wait_handler.notify_commit(&t0_commit, &t_commit);
         if !prev_event.is_some_and(|e| e.state > State::Committed || e.dependencies.is_empty()) {
-            if let Some(waiter) = self.wait_handler.get_waiter(&t0_commit) {
+            if let Some(waiter) = self.wait_handler.get_waiter(&event) {
                 waiter.await.map_err(|e| {
                     tracing::error!("Error waiting for commit: {:?}", e);
                     SyneviError::ReceiveError(format!("Error waiting for commit"))
@@ -300,7 +300,7 @@ where
             .is_some_and(|deps| !deps.is_empty())
             && needs_wait
         {
-            if let Some(waiter) = self.wait_handler.get_waiter(&t0_apply) {
+            if let Some(waiter) = self.wait_handler.get_waiter(&event) {
                 waiter.await.map_err(|e| {
                     tracing::error!("Error waiting for commit: {:?}", e);
                     SyneviError::ReceiveError(format!("Error waiting for commit"))

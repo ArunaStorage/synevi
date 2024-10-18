@@ -218,25 +218,6 @@ impl Store for PersistentStore {
             .get_event(t_zero)
     }
 
-    //     fn get_and_update_hash(
-    //         &self,
-    //         t_zero: T0,
-    //         execution_hash: [u8; 32],
-    //     ) -> Result<Hashes, SyneviError> {
-    //         self.data
-    //             .lock()
-    //             .expect("poisoned lock, aborting")
-    //             .get_and_update_hash(t_zero, execution_hash)
-    //     }
-    //
-    //     #[instrument(level = "trace", skip(self))]
-    //     fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError> {
-    //         self.data
-    //             .lock()
-    //             .expect("poisoned lock, aborting")
-    //             .last_applied_hash()
-    //     }
-
     fn inc_time_with_guard(&self, guard: T0) -> Result<(), SyneviError> {
         let mut lock = self.data.lock().expect("poisoned lock, aborting");
         lock.latest_time = lock
