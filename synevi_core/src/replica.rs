@@ -160,16 +160,6 @@ where
 
         let deps = from_dependency(request.dependencies)?;
 
-        println!(
-            "[{}] Try commit
-t0: {:?}
-deps: {:?}
-",
-            self.node.get_serial(),
-            t_zero,
-            deps,
-        );
-
         self.node
             .commit(UpsertEvent {
                 id: request_id,
@@ -183,13 +173,6 @@ deps: {:?}
             })
             .await?;
 
-        println!(
-            "[{}] Committed
-t0: {:?}
-",
-            self.node.get_serial(),
-            t_zero,
-        );
         Ok(CommitResponse {})
     }
 
@@ -199,15 +182,6 @@ t0: {:?}
         let t = T::try_from(request.timestamp.as_slice())?;
         let deps = from_dependency(request.dependencies.clone())?;
 
-        println!(
-            "[{}] Try apply
-t0: {:?}
-t:   {:?}
-",
-            self.node.get_serial(),
-            t_zero,
-            t,
-        );
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Apply");
 
@@ -238,16 +212,6 @@ t:   {:?}
             )
             .await
             .unwrap();
-
-        println!(
-            "[{}] Applied
-t0: {:?}
-t:   {:?}
-",
-            self.node.get_serial(),
-            t_zero,
-            t,
-        );
 
         Ok(ApplyResponse {})
     }

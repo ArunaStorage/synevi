@@ -262,11 +262,8 @@ where
     #[instrument(level = "trace", skip(self))]
     async fn apply(&mut self) -> InternalSyneviResult<E> {
         trace!(id = ?self.transaction.id, "Coordinator: Apply");
-        println!("Coordinator: Apply");
 
         let (synevi_result, hashes) = self.execute_consensus().await?;
-
-        println!("Coordinator: Apply after execute");
 
         let applied_request = ApplyRequest {
             id: self.transaction.id.to_be_bytes().into(),
@@ -278,14 +275,12 @@ where
             transaction_hash: hashes.transaction_hash.to_vec(),
         };
 
-        println!("Coordinator: Apply before broadcast");
 
         let network_interface = self.node.network.get_interface().await;
         network_interface
             .broadcast(BroadcastRequest::Apply(applied_request))
             .await?; // TODO: This should not be awaited, but can be used to compare hashes
 
-        println!("Coordinator: Apply after broadcast");
 
         synevi_result
     }

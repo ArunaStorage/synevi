@@ -407,7 +407,6 @@ got:     {:?}",
         while !self.is_ready() {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
-        println!("{} ready", self.get_serial());
 
         let self_clonable = self
             .self_clone

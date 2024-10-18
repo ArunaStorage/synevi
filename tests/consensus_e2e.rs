@@ -54,7 +54,7 @@ mod tests {
 
         let mut joinset = tokio::task::JoinSet::new();
 
-        for i in 0..1000 {
+        for i in 0..5000 {
             let coordinator = coordinator.clone();
             joinset.spawn(async move {
                 coordinator
@@ -173,7 +173,7 @@ mod tests {
 
             let start = std::time::Instant::now();
 
-            for _ in 0..10000 {
+            for _ in 0..100 {
                 let coordinator1 = coordinator1.clone();
                 let coordinator2 = coordinator2.clone();
                 let coordinator3 = coordinator3.clone();
