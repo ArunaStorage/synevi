@@ -16,6 +16,7 @@ use synevi_types::types::{
     TransactionPayload, UpsertEvent,
 };
 use synevi_types::{Executor, State, SyneviError, Transaction, T};
+use tokio::task::JoinSet;
 use tracing::instrument;
 use ulid::Ulid;
 
@@ -273,6 +274,7 @@ where
                 })?
             };
         }
+
         Ok(())
     }
 
@@ -285,10 +287,6 @@ where
         let t0_apply = event.t_zero.clone();
 
         let needs_wait = if let Some(prev_event) = self.event_store.get_event(t0_apply)? {
-            if prev_event.state == State::Applied {
-                println!("Skipped at first apply check");
-                return Ok((None, prev_event.hashes.unwrap()));
-            }
             prev_event.state < State::Applied
         } else {
             let mut commit_event = event.clone();
@@ -311,12 +309,6 @@ where
             }
         }
 
-        if let Some(prev_event) = self.event_store.get_event(t0_apply)? {
-            if prev_event.state == State::Applied {
-                println!("Skipped at second apply check");
-                return Ok((None, prev_event.hashes.unwrap()));
-            }
-        }
         println!(
             "[{:?}]Applied event: t0: {:?}, t: {:?}, deps: {:?}",
             self.get_serial(),
@@ -328,19 +320,17 @@ where
         // - Check transaction hash -> SyneviError::MismatchingTransactionHash
         let mut node_hashes = self
             .event_store
-            .get_and_check_transaction_hash(event.clone());
+            .get_or_update_transaction_hash(event.clone())?;
+
         if let Some(hashes) = &request_hashes {
             if hashes.transaction_hash != node_hashes.transaction_hash {
                 println!(
-                    "{}",
-                    format!(
-                        "Node: {}
+                    "Node: {}
 request: {:?}
 got:     {:?}",
-                        self.get_serial(),
-                        hashes.transaction_hash,
-                        node_hashes.transaction_hash
-                    )
+                    self.get_serial(),
+                    hashes.transaction_hash,
+                    node_hashes.transaction_hash
                 );
                 return Err(SyneviError::MismatchedTransactionHashes);
             }
@@ -424,7 +414,7 @@ got:     {:?}",
 
     async fn run_check_recovery(&self) {
         while !self.is_ready() {
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
         println!("{} ready", self.get_serial());
 
@@ -486,7 +476,7 @@ got:     {:?}",
     ) -> Result<(), SyneviError> {
         // 1. Broadcast self_config to other member
         println!("{} Before join", self.get_serial());
-        let expected = self.network.join_electorate(member_host).await?;
+        let expected = self.network.join_electorate(member_host.clone()).await?;
         // 2. wait for JoinElectorate responses with expected majority and config from others
 
         println!("{} Waiting for responded", self.get_serial());
@@ -507,7 +497,7 @@ got:     {:?}",
         // 3. Send ReadyJoinElectorate && set myself to ready
         self.set_ready();
         println!("{}, Before electorate", self.get_serial());
-        self.network.ready_electorate().await?;
+        self.network.ready_electorate(member_host).await?;
 
         println!("{}, Ready electorate finished", self.get_serial());
 
@@ -521,36 +511,52 @@ got:     {:?}",
     ) -> Result<(), SyneviError> {
         // 2.2 else Request stream with events until last_applied (highest t of JoinElectorate)
         let mut rcv = self.network.get_stream_events(last_applied.into()).await?;
+        let mut join_set = JoinSet::new();
         while let Some(event) = rcv.recv().await {
             let state: State = event.state.into();
             match state {
                 State::Applied => {
-                    replica
-                        .apply(ApplyRequest {
-                            id: event.id,
-                            event: event.transaction,
-                            timestamp_zero: event.t_zero,
-                            timestamp: event.t,
-                            dependencies: event.dependencies,
-                            execution_hash: event.execution_hash,
-                            transaction_hash: event.transaction_hash,
-                        })
-                        .await?;
+                    let clone = replica.clone();
+                    join_set.spawn(async move {
+                        let _response = clone
+                            .apply(ApplyRequest {
+                                id: event.id,
+                                event: event.transaction,
+                                timestamp_zero: event.t_zero,
+                                timestamp: event.t,
+                                dependencies: event.dependencies,
+                                execution_hash: event.execution_hash,
+                                transaction_hash: event.transaction_hash,
+                            })
+                            .await?;
+                        //println!("{response}");
+                        Ok::<(), SyneviError>(())
+                    });
                 }
                 State::Committed => {
-                    replica
-                        .commit(CommitRequest {
-                            id: event.id,
-                            event: event.transaction,
-                            timestamp_zero: event.t_zero,
-                            timestamp: event.t,
-                            dependencies: event.dependencies,
-                        })
-                        .await?;
+                    let clone = replica.clone();
+                    join_set.spawn(async move {
+                        let _response = clone
+                            .commit(CommitRequest {
+                                id: event.id,
+                                event: event.transaction,
+                                timestamp_zero: event.t_zero,
+                                timestamp: event.t,
+                                dependencies: event.dependencies,
+                            })
+                            .await?;
+                        //println!("{response}");
+                        Ok::<(), SyneviError>(())
+                    });
                 }
                 _ => (),
             }
         }
+
+        while let Some(response) = join_set.join_next().await {
+            response.unwrap().unwrap()
+        }
+
         Ok(())
     }
 }

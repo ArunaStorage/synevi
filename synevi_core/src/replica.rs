@@ -17,11 +17,9 @@ use synevi_network::network::Network;
 use synevi_network::reconfiguration::Reconfiguration;
 use synevi_network::replica::Replica;
 use synevi_types::traits::Store;
-use synevi_types::types::{
-    Hashes, InternalExecution, TransactionPayload, UpsertEvent,
-};
-use synevi_types::{Ballot, Executor, State, T, T0};
+use synevi_types::types::{Hashes, InternalExecution, TransactionPayload, UpsertEvent};
 use synevi_types::SyneviError;
+use synevi_types::{Ballot, Executor, State, T, T0};
 use tokio::sync::mpsc::Receiver;
 use tracing::{instrument, trace};
 use ulid::Ulid;
@@ -180,19 +178,23 @@ where
     #[instrument(level = "trace", skip(self, request))]
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse, SyneviError> {
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
+        let deps = from_dependency(request.dependencies.clone())?;
 
         println!(
-            "Received apply request for event: {:?} @ {:?}",
+            "[{}] APPLY 
+t0: {:?}
+deps: {:?}
+",
+            self.node.get_serial(),
             t_zero,
-            self.node.get_serial()
+            deps,
         );
         let t = T::try_from(request.timestamp.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Apply");
 
-        let deps = from_dependency(request.dependencies.clone())?;
-
-        let _ = self.node
+        let _ = self
+            .node
             .apply(
                 UpsertEvent {
                     id: request_id,

@@ -105,7 +105,7 @@ pub mod tests {
             let (_, rcv) = tokio::sync::mpsc::channel(1);
             Ok(rcv)
         }
-        async fn ready_electorate(&self) -> Result<(), SyneviError> {
+        async fn ready_electorate(&self, _host: String) -> Result<(), SyneviError> {
             Ok(())
         }
 

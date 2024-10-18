@@ -64,7 +64,7 @@ pub trait Network: Send + Sync + 'static {
         &self,
         last_applied: Vec<u8>,
     ) -> Result<tokio::sync::mpsc::Receiver<GetEventResponse>, SyneviError>;
-    async fn ready_electorate(&self) -> Result<(), SyneviError>;
+    async fn ready_electorate(&self, host: String) -> Result<(), SyneviError>;
     async fn ready_member(&self, id: Ulid, serial: u16) -> Result<(), SyneviError>;
 }
 
@@ -123,8 +123,8 @@ where
         self.as_ref().get_stream_events(last_applied).await
     }
 
-    async fn ready_electorate(&self) -> Result<(), SyneviError> {
-        self.as_ref().ready_electorate().await
+    async fn ready_electorate(&self, host: String) -> Result<(), SyneviError> {
+        self.as_ref().ready_electorate(host).await
     }
 
     async fn ready_member(&self, id: Ulid, serial: u16) -> Result<(), SyneviError> {
@@ -413,13 +413,8 @@ impl Network for GrpcNetwork {
         Ok(rcv)
     }
 
-    async fn ready_electorate(&self) -> Result<(), SyneviError> {
-        let lock = self.members.read().await;
-        let mut members = lock.iter();
-        let Some((_, member)) = members.next() else {
-            return Err(SyneviError::NoMembersFound);
-        };
-        let channel = member.member.channel.clone();
+    async fn ready_electorate(&self, host: String) -> Result<(), SyneviError> {
+        let channel = Channel::from_shared(host.clone())?.connect().await?;
         let request = tonic::Request::new(ReadyElectorateRequest {
             node_id: self.self_status.info.id.to_bytes().to_vec(),
             node_serial: self.self_status.info.serial as u32,

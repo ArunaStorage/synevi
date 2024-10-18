@@ -341,6 +341,7 @@ where
         //     .node
         //     .event_store
         //     .get_and_update_hash(self.transaction.t_zero, hash.into())?;
+
         Ok((result.unwrap(), hashes))
     }
 

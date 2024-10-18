@@ -177,7 +177,7 @@ impl Network for MaelstromNetwork {
         todo!()
     }
 
-    async fn ready_electorate(&self) -> Result<(), SyneviError> {
+    async fn ready_electorate(&self, _host: String) -> Result<(), SyneviError> {
         todo!()
     }
 

@@ -113,7 +113,7 @@ pub trait Store: Send + Sync + Sized + 'static {
 //        execution_hash: [u8; 32],
 //    ) -> Result<Hashes, SyneviError>;
 
-    fn get_and_check_transaction_hash(&self, event: UpsertEvent) -> Hashes;
+    fn get_or_update_transaction_hash(&self, event: UpsertEvent) -> Result<Hashes, SyneviError>;
 
     // Increases the max time to be above the specified guard
     // Ensures that the guards t0 will not get a fast path afterwards

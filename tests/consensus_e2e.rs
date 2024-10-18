@@ -6,6 +6,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
+    use std::time::Duration;
     use synevi::{State, Store, T, T0};
     use synevi_core::node::Node;
     use synevi_core::tests::DummyExecutor;
@@ -418,7 +419,7 @@ mod tests {
 
         let mut joinset = tokio::task::JoinSet::new();
 
-        let num = 10;
+        let num = 100;
         let random_number: u128 = rand::thread_rng().gen_range(0..num - 1);
         for i in 0..num {
             if i == random_number {
@@ -427,7 +428,7 @@ mod tests {
                     SocketAddr::from_str("0.0.0.0:13006").unwrap(),
                     "http://0.0.0.0:13006".to_string(),
                     id,
-                    6,
+                    5,
                 );
 
                 // Copy & create db
@@ -438,7 +439,7 @@ mod tests {
                 //let store = MemStore::new(6).unwrap();
                 let node = Node::new_with_member(
                     id,
-                    6,
+                    5,
                     network,
                     DummyExecutor,
                     store,
@@ -460,6 +461,8 @@ mod tests {
         while let Some(res) = joinset.join_next().await {
             res.unwrap().unwrap().unwrap();
         }
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         let (total, accepts, recovers) = coordinator.get_stats();
         println!(
