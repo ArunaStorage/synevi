@@ -91,7 +91,7 @@ where
             };
 
             match dep_event.state {
-                State::Commited if dep_event.t > event.t => {
+                State::Committed if dep_event.t > event.t => {
                     counter += 1;
                 }
                 State::Applied => {
@@ -182,7 +182,7 @@ where
                         continue;
                     }
                     match event_dep.state {
-                        State::Commited => {
+                        State::Committed => {
                             if event_dep.t > event.t {
                                 // Dependency is newer than event (and already commited)
                                 continue;

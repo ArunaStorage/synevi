@@ -2,7 +2,6 @@ use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
 use ahash::RandomState;
 use serde::Serialize;
-use sha3::{Digest, Sha3_256};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -14,7 +13,7 @@ use synevi_network::network::{BroadcastRequest, Network, NetworkInterface};
 use synevi_network::utils::IntoInner;
 use synevi_types::traits::Store;
 use synevi_types::types::{
-    ExecutorResult, Hashes, InternalExecution, InternalSyneviResult, RecoverEvent, RecoveryState,
+    ExecutorResult, Hashes, InternalSyneviResult, RecoverEvent, RecoveryState,
     TransactionPayload,
 };
 use synevi_types::{Ballot, Executor, State, SyneviError, Transaction, T, T0};
@@ -33,7 +32,7 @@ where
     pub transaction: TransactionStateMachine<E::Tx>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default)] //, PartialEq, Eq)]
 pub struct TransactionStateMachine<Tx: Transaction> {
     pub id: u128,
     pub state: State,
@@ -42,6 +41,7 @@ pub struct TransactionStateMachine<Tx: Transaction> {
     pub t: T,
     pub dependencies: HashSet<T0, RandomState>,
     pub ballot: Ballot,
+    pub hashes: Option<Hashes>,
 }
 
 impl<Tx> TransactionStateMachine<Tx>
@@ -77,6 +77,7 @@ where
                 t: T(*t0),
                 dependencies: HashSet::default(),
                 ballot: Ballot::default(),
+                hashes: None,
             },
         }
     }
@@ -253,7 +254,7 @@ where
 
     #[instrument(level = "trace", skip(self))]
     async fn commit_consensus(&mut self) -> Result<(), SyneviError> {
-        self.transaction.state = State::Commited;
+        self.transaction.state = State::Committed;
         self.node.commit((&self.transaction).into()).await?;
         Ok(())
     }
@@ -295,52 +296,52 @@ where
     ) -> Result<(InternalSyneviResult<E>, Hashes), SyneviError> {
         self.transaction.state = State::Applied;
 
-        self.node.apply((&self.transaction).into()).await?;
+        let (result, hashes) = self.node.apply((&self.transaction).into(), None).await?;
 
-        let result = match &self.transaction.transaction {
-            TransactionPayload::None => Err(SyneviError::TransactionNotFound),
-            TransactionPayload::External(tx) => self
-                .node
-                .executor
-                .execute(tx.clone())
-                .await
-                .map(|e| ExecutorResult::External(e)),
-            TransactionPayload::Internal(request) => {
-                let result = match request {
-                    InternalExecution::JoinElectorate {
-                        id,
-                        serial,
-                        new_node_host,
-                    } => {
-                        let res = self
-                            .node
-                            .add_member(*id, *serial, new_node_host.clone(), false)
-                            .await;
-                        self.node
-                            .network
-                            .report_config(new_node_host.to_string())
-                            .await?;
-                        res
-                    }
-                    InternalExecution::ReadyElectorate { id, serial } => {
-                        self.node.ready_member(*id, *serial).await
-                    }
-                };
-                match result {
-                    Ok(_) => Ok(ExecutorResult::Internal(Ok(request.clone()))),
-                    Err(err) => Ok(ExecutorResult::Internal(Err(err))),
-                }
-            }
-        };
+        // let result = match &self.transaction.transaction {
+        //     TransactionPayload::None => Err(SyneviError::TransactionNotFound),
+        //     TransactionPayload::External(tx) => self
+        //         .node
+        //         .executor
+        //         .execute(tx.clone())
+        //         .await
+        //         .map(|e| ExecutorResult::External(e)),
+        //     TransactionPayload::Internal(request) => {
+        //         let result = match request {
+        //             InternalExecution::JoinElectorate {
+        //                 id,
+        //                 serial,
+        //                 new_node_host,
+        //             } => {
+        //                 let res = self
+        //                     .node
+        //                     .add_member(*id, *serial, new_node_host.clone(), false)
+        //                     .await;
+        //                 self.node
+        //                     .network
+        //                     .report_config(new_node_host.to_string())
+        //                     .await?;
+        //                 res
+        //             }
+        //             InternalExecution::ReadyElectorate { id, serial } => {
+        //                 self.node.ready_member(*id, *serial).await
+        //             }
+        //         };
+        //         match result {
+        //             Ok(_) => Ok(ExecutorResult::Internal(Ok(request.clone()))),
+        //             Err(err) => Ok(ExecutorResult::Internal(Err(err))),
+        //         }
+        //     }
+        // };
 
-        let mut hasher = Sha3_256::new();
-        postcard::to_io(&result, &mut hasher)?;
-        let hash = hasher.finalize();
-        let hashes = self
-            .node
-            .event_store
-            .get_and_update_hash(self.transaction.t_zero, hash.into())?;
-        Ok((result, hashes))
+        // let mut hasher = Sha3_256::new();
+        // postcard::to_io(&result, &mut hasher)?;
+        // let hash = hasher.finalize();
+        // let hashes = self
+        //     .node
+        //     .event_store
+        //     .get_and_update_hash(self.transaction.t_zero, hash.into())?;
+        Ok((result.unwrap(), hashes))
     }
 
     #[instrument(level = "trace", skip(node))]
@@ -371,6 +372,7 @@ where
                     state: recover_event.state,
                     id: recover_event.id,
                     dependencies: recover_event.dependencies.clone(),
+                    hashes: None,
                 },
             };
 
@@ -490,7 +492,7 @@ where
         // Wait for deps
         Ok(match self.transaction.state {
             State::Applied => RecoveryState::Recovered(self.apply().await?),
-            State::Commited => RecoveryState::Recovered(self.commit().await?),
+            State::Committed => RecoveryState::Recovered(self.commit().await?),
             State::Accepted => RecoveryState::Recovered(self.accept().await?),
 
             State::PreAccepted => {

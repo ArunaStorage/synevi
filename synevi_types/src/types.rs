@@ -275,7 +275,7 @@ pub enum State {
     Undefined = 0,
     PreAccepted = 1,
     Accepted = 2,
-    Commited = 3,
+    Committed = 3,
     Applied = 4,
 }
 
@@ -284,7 +284,7 @@ impl From<i32> for State {
         match value {
             1 => Self::PreAccepted,
             2 => Self::Accepted,
-            3 => Self::Commited,
+            3 => Self::Committed,
             4 => Self::Applied,
             _ => Self::Undefined,
         }
@@ -296,7 +296,7 @@ impl From<State> for i32 {
         match val {
             State::PreAccepted => 1,
             State::Accepted => 2,
-            State::Commited => 3,
+            State::Committed => 3,
             State::Applied => 4,
             _ => 0,
         }
@@ -359,7 +359,7 @@ pub struct UpsertEvent {
     pub transaction: Option<Vec<u8>>,
     pub dependencies: Option<HashSet<T0, RandomState>>,
     pub ballot: Option<Ballot>,
-    pub execution_hash: Option<[u8; 32]>,
+    pub hashes: Option<Hashes>,
 }
 
 impl Event {
@@ -435,11 +435,7 @@ impl From<UpsertEvent> for Event {
             transaction: value.transaction.unwrap_or_default(),
             dependencies: value.dependencies.unwrap_or_default(),
             ballot: value.ballot.unwrap_or_default(),
-            hashes: value.execution_hash.map(|hash| Hashes {
-                previous_hash: [0; 32],
-                transaction_hash: [0; 32],
-                execution_hash: hash,
-            }),
+            hashes: value.hashes,
             last_updated: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap() // This must fail if the system clock is before the UNIX_EPOCH

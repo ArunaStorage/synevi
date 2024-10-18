@@ -149,40 +149,40 @@ impl Store for MemStore {
             .cloned())
     }
 
-    fn get_and_update_hash(
-        &self,
-        t_zero: T0,
-        execution_hash: [u8; 32],
-    ) -> Result<Hashes, SyneviError> {
-        let mut lock = self.store.lock().expect("poisoned lock, aborting");
-        if let Some(event) = lock.events.get_mut(&t_zero) {
-            let hashes = event
-                .hashes
-                .as_mut()
-                .ok_or_else(|| SyneviError::MissingTransactionHash)?;
-            hashes.execution_hash = execution_hash;
-            Ok(hashes.clone())
-        } else {
-            Err(SyneviError::EventNotFound(t_zero.get_inner()))
-        }
-    }
-
-    fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError> {
-        let lock = self.store.lock().expect("poisoned lock, aborting");
-        let last = lock.last_applied;
-        let last_t0 = lock
-            .mappings
-            .get(&last)
-            .ok_or_else(|| SyneviError::EventNotFound(last.get_inner()))?;
-        let hash = lock
-            .events
-            .get(last_t0)
-            .cloned()
-            .ok_or_else(|| SyneviError::EventNotFound(last.get_inner()))?
-            .hashes
-            .ok_or_else(|| SyneviError::MissingExecutionHash)?;
-        Ok((last, hash.execution_hash))
-    }
+//     fn get_and_update_hash(
+//         &self,
+//         t_zero: T0,
+//         execution_hash: [u8; 32],
+//     ) -> Result<Hashes, SyneviError> {
+//         let mut lock = self.store.lock().expect("poisoned lock, aborting");
+//         if let Some(event) = lock.events.get_mut(&t_zero) {
+//             let hashes = event
+//                 .hashes
+//                 .as_mut()
+//                 .ok_or_else(|| SyneviError::MissingTransactionHash)?;
+//             hashes.execution_hash = execution_hash;
+//             Ok(hashes.clone())
+//         } else {
+//             Err(SyneviError::EventNotFound(t_zero.get_inner()))
+//         }
+//     }
+// 
+//     fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError> {
+//         let lock = self.store.lock().expect("poisoned lock, aborting");
+//         let last = lock.last_applied;
+//         let last_t0 = lock
+//             .mappings
+//             .get(&last)
+//             .ok_or_else(|| SyneviError::EventNotFound(last.get_inner()))?;
+//         let hash = lock
+//             .events
+//             .get(last_t0)
+//             .cloned()
+//             .ok_or_else(|| SyneviError::EventNotFound(last.get_inner()))?
+//             .hashes
+//             .ok_or_else(|| SyneviError::MissingExecutionHash)?;
+//         Ok((last, hash.execution_hash))
+//     }
 
     fn inc_time_with_guard(&self, guard: T0) -> Result<(), SyneviError> {
         let mut lock = self.store.lock().expect("poisoned lock, aborting");
@@ -191,6 +191,13 @@ impl Store for MemStore {
             .next_with_guard_and_node(&guard, lock.node_serial)
             .into_time();
         Ok(())
+    }
+
+    fn get_and_check_transaction_hash(&self, event: UpsertEvent) -> Hashes {
+        let lock = self.store.lock().expect("poisoned lock, aborting");
+        let mut event = Event::from(event);
+        event.state = State::Applied;
+        event.hash_event(lock.latest_hash)
     }
 }
 
@@ -297,7 +304,7 @@ impl InternalStore {
                 }
                 assert!(self.last_applied < event.t);
                 self.last_applied = event.t;
-                let hashes = event.hash_event(self.latest_hash);
+                let hashes = upsert_event.hashes.ok_or_else(|| SyneviError::MissingExecutionHash)?;
                 self.latest_hash = hashes.transaction_hash;
                 event.hashes = Some(hashes);
                 self.events.insert(upsert_event.t_zero, event);
@@ -348,7 +355,7 @@ impl InternalStore {
                 }
                 assert!(self.last_applied < event.t);
                 self.last_applied = event.t;
-                let hashes = event.hash_event(self.latest_hash);
+                let hashes = upsert_event.hashes.ok_or_else(|| SyneviError::MissingExecutionHash)?;
                 self.latest_hash = hashes.transaction_hash;
                 event.hashes = Some(hashes);
             };
@@ -391,7 +398,7 @@ impl InternalStore {
                         }
                     }
                 }
-                State::Commited => {
+                State::Committed => {
                     if dep_event
                         .dependencies
                         .iter()

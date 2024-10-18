@@ -1,6 +1,7 @@
 use crate::coordinator::Coordinator;
 use crate::replica::ReplicaConfig;
 use crate::wait_handler::{CheckResult, WaitHandler};
+use sha3::{Digest, Sha3_256};
 use std::fmt::Debug;
 use std::sync::atomic::Ordering;
 use std::sync::RwLock;
@@ -11,9 +12,10 @@ use synevi_network::replica::Replica;
 use synevi_persistence::mem_store::MemStore;
 use synevi_types::traits::Store;
 use synevi_types::types::{
-    ExecutorResult, InternalSyneviResult, SyneviResult, TransactionPayload, UpsertEvent,
+    ExecutorResult, Hashes, InternalExecution, InternalSyneviResult, SyneviResult,
+    TransactionPayload, UpsertEvent,
 };
-use synevi_types::{Executor, State, SyneviError, T};
+use synevi_types::{Executor, State, SyneviError, Transaction, T};
 use tracing::instrument;
 use ulid::Ulid;
 
@@ -263,7 +265,7 @@ where
 
         self.event_store.upsert_tx(event)?;
         self.wait_handler.notify_commit(&t0_commit, &t_commit);
-        if !prev_event.is_some_and(|e| e.state > State::Commited || e.dependencies.is_empty()) {
+        if !prev_event.is_some_and(|e| e.state > State::Committed || e.dependencies.is_empty()) {
             if let Some(waiter) = self.wait_handler.get_waiter(&t0_commit) {
                 waiter.await.map_err(|e| {
                     tracing::error!("Error waiting for commit: {:?}", e);
@@ -275,16 +277,22 @@ where
     }
 
     #[instrument(level = "trace", skip(self))]
-    pub async fn apply(&self, event: UpsertEvent) -> Result<(), SyneviError> {
+    pub async fn apply(
+        &self,
+        mut event: UpsertEvent,
+        request_hashes: Option<Hashes>,
+    ) -> Result<(Option<InternalSyneviResult<E>>, Hashes), SyneviError> {
         let t0_apply = event.t_zero.clone();
 
-        let prev_event = self.event_store.get_event(t0_apply)?;
-
-        let needs_wait = if let Some(prev_event) = prev_event {
+        let needs_wait = if let Some(prev_event) = self.event_store.get_event(t0_apply)? {
+            if prev_event.state == State::Applied {
+                println!("Skipped at first apply check");
+                return Ok((None, prev_event.hashes.unwrap()));
+            }
             prev_event.state < State::Applied
         } else {
             let mut commit_event = event.clone();
-            commit_event.state = State::Commited;
+            commit_event.state = State::Committed;
             self.commit(commit_event).await?;
             true
         };
@@ -295,10 +303,18 @@ where
             && needs_wait
         {
             if let Some(waiter) = self.wait_handler.get_waiter(&t0_apply) {
+                println!("[{}] waiting on {:?}", self.get_serial(), t0_apply);
                 waiter.await.map_err(|e| {
                     tracing::error!("Error waiting for commit: {:?}", e);
                     SyneviError::ReceiveError(format!("Error waiting for commit"))
                 })?;
+            }
+        }
+
+        if let Some(prev_event) = self.event_store.get_event(t0_apply)? {
+            if prev_event.state == State::Applied {
+                println!("Skipped at second apply check");
+                return Ok((None, prev_event.hashes.unwrap()));
             }
         }
         println!(
@@ -309,15 +325,108 @@ where
             event.dependencies,
         );
 
+        // - Check transaction hash -> SyneviError::MismatchingTransactionHash
+        let mut node_hashes = self
+            .event_store
+            .get_and_check_transaction_hash(event.clone());
+        if let Some(hashes) = &request_hashes {
+            if hashes.transaction_hash != node_hashes.transaction_hash {
+                println!(
+                    "{}",
+                    format!(
+                        "Node: {}
+request: {:?}
+got:     {:?}",
+                        self.get_serial(),
+                        hashes.transaction_hash,
+                        node_hashes.transaction_hash
+                    )
+                );
+                return Err(SyneviError::MismatchedTransactionHashes);
+            }
+        }
+
+        // - Execute
+        let transaction = TransactionPayload::from_bytes(
+            event
+                .transaction
+                .clone()
+                .ok_or_else(|| SyneviError::TransactionNotFound)?,
+        )?;
+        let result = self.execute(transaction).await;
+
+        // - Check execution hash -> SyneviError::MismatchingExecutionHash
+        let mut hasher = Sha3_256::new();
+        postcard::to_io(&result, &mut hasher)?;
+        let execution_hash: [u8; 32] = hasher.finalize().into();
+        if let Some(hashes) = request_hashes {
+            if hashes.execution_hash != execution_hash {
+                return Err(SyneviError::MismatchedExecutionHashes);
+            }
+        }
+        node_hashes.execution_hash = execution_hash;
+        event.hashes = Some(node_hashes.clone());
+
+        // - Upsert
         self.event_store.upsert_tx(event)?;
         self.wait_handler.notify_apply(&t0_apply);
-        Ok(())
+        Ok((Some(result), node_hashes))
+    }
+
+    async fn execute(
+        &self,
+        transaction: TransactionPayload<<E as Executor>::Tx>,
+    ) -> Result<ExecutorResult<<E as Executor>::Tx>, SyneviError> {
+        // TODO: Refactor in execute function
+        let result = match transaction {
+            TransactionPayload::None => {
+                return Err(SyneviError::TransactionNotFound);
+            }
+            TransactionPayload::External(tx) => self
+                .executor
+                .execute(tx)
+                .await
+                .map(|e| ExecutorResult::<<E as Executor>::Tx>::External(e)),
+            TransactionPayload::Internal(request) => {
+                // TODO: Build special execution
+                let result = match &request {
+                    InternalExecution::JoinElectorate {
+                        id,
+                        serial,
+                        new_node_host,
+                    } => {
+                        if id != &self.get_ulid() {
+                            let res = self
+                                .add_member(*id, *serial, new_node_host.clone(), false)
+                                .await;
+                            self.network.report_config(new_node_host.clone()).await?;
+                            res
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    InternalExecution::ReadyElectorate { id, serial } => {
+                        if id != &self.get_ulid() {
+                            self.ready_member(*id, *serial).await
+                        } else {
+                            Ok(())
+                        }
+                    }
+                };
+                match result {
+                    Ok(_) => Ok(ExecutorResult::Internal(Ok(request.clone()))),
+                    Err(err) => Ok(ExecutorResult::Internal(Err(err))),
+                }
+            }
+        };
+        result
     }
 
     async fn run_check_recovery(&self) {
         while !self.is_ready() {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         }
+        println!("{} ready", self.get_serial());
 
         let self_clonable = self
             .self_clone
@@ -428,7 +537,7 @@ where
                         })
                         .await?;
                 }
-                State::Commited => {
+                State::Committed => {
                     replica
                         .commit(CommitRequest {
                             id: event.id,
@@ -454,6 +563,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
     use std::sync::Arc;
+    use std::time::Duration;
     use synevi_network::network::GrpcNetwork;
     use synevi_network::network::Network;
     use synevi_types::traits::Store;
@@ -527,6 +637,9 @@ mod tests {
             .await
             .unwrap();
 
+        // This sleep accounts for replicas apply step, that is not neccessarily completed after
+        // the coordinator returns its result
+        tokio::time::sleep(Duration::from_secs(1)).await;
         let coord = coordinator.event_store.get_event_store();
         for node in nodes {
             assert_eq!(
@@ -587,6 +700,10 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+
+        // This sleep accounts for replicas apply step, that is not neccessarily completed after
+        // the coordinator returns its result
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         let coordinator_store: BTreeMap<T0, T> = coordinator
             .event_store

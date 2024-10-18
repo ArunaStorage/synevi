@@ -597,7 +597,8 @@ impl NetworkInterface for GrpcNetworkSet {
             } else {
                 println!("Waiting for results");
 
-                tokio::spawn(async move {
+                tokio::spawn(
+                    async move {
                     while let Some(r) = &responses.join_next().await {
                         println!("Got result: {:?}", r);
 

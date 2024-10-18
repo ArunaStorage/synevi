@@ -1,7 +1,6 @@
 use crate::coordinator::Coordinator;
 use crate::node::Node;
 use crate::utils::{from_dependency, into_dependency};
-use sha3::{Digest, Sha3_256};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use synevi_network::configure_transport::{
@@ -18,9 +17,11 @@ use synevi_network::network::Network;
 use synevi_network::reconfiguration::Reconfiguration;
 use synevi_network::replica::Replica;
 use synevi_types::traits::Store;
-use synevi_types::types::{ExecutorResult, InternalExecution, TransactionPayload, UpsertEvent};
+use synevi_types::types::{
+    Hashes, InternalExecution, TransactionPayload, UpsertEvent,
+};
 use synevi_types::{Ballot, Executor, State, T, T0};
-use synevi_types::{SyneviError, Transaction};
+use synevi_types::SyneviError;
 use tokio::sync::mpsc::Receiver;
 use tracing::{instrument, trace};
 use ulid::Ulid;
@@ -59,11 +60,6 @@ where
         _node_serial: u16,
     ) -> Result<PreAcceptResponse, SyneviError> {
         let t0 = T0::try_from(request.timestamp_zero.as_slice())?;
-
-        println!(
-            "Received pre-accept request for event: {:?} @ {:?}",
-            t0, _node_serial
-        );
 
         if !self.node.is_ready() {
             return Ok(PreAcceptResponse::default());
@@ -144,7 +140,7 @@ where
                 transaction: Some(request.event),
                 dependencies: Some(from_dependency(request.dependencies)?),
                 ballot: Some(request_ballot),
-                execution_hash: None,
+                hashes: None,
             })?;
 
             self.node.event_store.get_tx_dependencies(&t, &t_zero)
@@ -171,11 +167,11 @@ where
                 id: request_id,
                 t_zero,
                 t,
-                state: State::Commited,
+                state: State::Committed,
                 transaction: Some(request.event),
                 dependencies: Some(deps),
                 ballot: None,
-                execution_hash: None,
+                hashes: None,
             })
             .await?;
         Ok(CommitResponse {})
@@ -185,110 +181,122 @@ where
     async fn apply(&self, request: ApplyRequest) -> Result<ApplyResponse, SyneviError> {
         let t_zero = T0::try_from(request.timestamp_zero.as_slice())?;
 
-        if self.node.get_serial() == 2 {
-            println!(
-                "Received apply request for event: {:?} @ {:?}",
-                t_zero,
-                self.node.get_serial()
-            );
-        }
+        println!(
+            "Received apply request for event: {:?} @ {:?}",
+            t_zero,
+            self.node.get_serial()
+        );
         let t = T::try_from(request.timestamp.as_slice())?;
         let request_id = u128::from_be_bytes(request.id.as_slice().try_into()?);
         trace!(?request_id, "Replica: Apply");
 
-        let transaction: TransactionPayload<<E as Executor>::Tx> =
-            TransactionPayload::from_bytes(request.event.clone())?;
-
         let deps = from_dependency(request.dependencies.clone())?;
 
-        self.node
-            .apply(UpsertEvent {
-                id: request_id,
-                t_zero,
-                t,
-                state: State::Applied,
-                transaction: Some(request.event),
-                dependencies: Some(deps),
-                ballot: None,
-                execution_hash: None,
-            })
+        let _ = self.node
+            .apply(
+                UpsertEvent {
+                    id: request_id,
+                    t_zero,
+                    t,
+                    state: State::Applied,
+                    transaction: Some(request.event),
+                    dependencies: Some(deps),
+                    ballot: None,
+                    hashes: None,
+                },
+                Some(Hashes {
+                    transaction_hash: request
+                        .transaction_hash
+                        .try_into()
+                        .map_err(|_e| SyneviError::MissingTransactionHash)?,
+                    execution_hash: request
+                        .execution_hash
+                        .try_into()
+                        .map_err(|_e| SyneviError::MissingExecutionHash)?,
+                    ..Default::default()
+                }),
+            )
             .await?;
 
+        Ok(ApplyResponse {})
         // TODO: Refactor in execute function
-        let result = match transaction {
-            TransactionPayload::None => {
-                return Err(SyneviError::TransactionNotFound);
-            }
-            TransactionPayload::External(tx) => self
-                .node
-                .executor
-                .execute(tx)
-                .await
-                .map(|e| ExecutorResult::<<E as Executor>::Tx>::External(e)),
-            TransactionPayload::Internal(request) => {
-                // TODO: Build special execution
-                let result = match &request {
-                    InternalExecution::JoinElectorate {
-                        id,
-                        serial,
-                        new_node_host,
-                    } => {
-                        if id != &self.node.get_ulid() {
-                            let res = self
-                                .node
-                                .add_member(*id, *serial, new_node_host.clone(), false)
-                                .await;
-                            self.node
-                                .network
-                                .report_config(new_node_host.clone())
-                                .await?;
-                            res
-                        } else {
-                            Ok(())
-                        }
-                    }
-                    InternalExecution::ReadyElectorate { id, serial } => {
-                        if id != &self.node.get_ulid() {
-                            self.node.ready_member(*id, *serial).await
-                        } else {
-                            Ok(())
-                        }
-                    }
-                };
-                match result {
-                    Ok(_) => Ok(ExecutorResult::Internal(Ok(request.clone()))),
-                    Err(err) => Ok(ExecutorResult::Internal(Err(err))),
-                }
-            }
-        };
+        //
+        // let transaction: TransactionPayload<<E as Executor>::Tx> =
+        //     TransactionPayload::from_bytes(request.event.clone())?;
+        //let result = match transaction {
+        //    TransactionPayload::None => {
+        //        return Err(SyneviError::TransactionNotFound);
+        //    }
+        //    TransactionPayload::External(tx) => self
+        //        .node
+        //        .executor
+        //        .execute(tx)
+        //        .await
+        //        .map(|e| ExecutorResult::<<E as Executor>::Tx>::External(e)),
+        //    TransactionPayload::Internal(request) => {
+        //        // TODO: Build special execution
+        //        let result = match &request {
+        //            InternalExecution::JoinElectorate {
+        //                id,
+        //                serial,
+        //                new_node_host,
+        //            } => {
+        //                if id != &self.node.get_ulid() {
+        //                    let res = self
+        //                        .node
+        //                        .add_member(*id, *serial, new_node_host.clone(), false)
+        //                        .await;
+        //                    self.node
+        //                        .network
+        //                        .report_config(new_node_host.clone())
+        //                        .await?;
+        //                    res
+        //                } else {
+        //                    Ok(())
+        //                }
+        //            }
+        //            InternalExecution::ReadyElectorate { id, serial } => {
+        //                if id != &self.node.get_ulid() {
+        //                    self.node.ready_member(*id, *serial).await
+        //                } else {
+        //                    Ok(())
+        //                }
+        //            }
+        //        };
+        //        match result {
+        //            Ok(_) => Ok(ExecutorResult::Internal(Ok(request.clone()))),
+        //            Err(err) => Ok(ExecutorResult::Internal(Err(err))),
+        //        }
+        //    }
+        //};
 
-        let mut hasher = Sha3_256::new();
-        postcard::to_io(&result, &mut hasher)?;
-        let hash = hasher.finalize();
-        let hashes = self
-            .node
-            .event_store
-            .get_and_update_hash(t_zero, hash.into())?;
-        if request.transaction_hash != hashes.transaction_hash {
-            println!(
-                "{} | Mismatched transaction hash in Tx {:?}",
-                self.node.get_serial(),
-                t_zero
-            );
-            Err(SyneviError::MismatchedHashes)
-        } else if request.execution_hash != hashes.execution_hash {
-            println!(
-                "{} | Mismatched execution hash in Tx {:?} | expected: {:?} != {:?}",
-                self.node.get_serial(),
-                t_zero,
-                request.execution_hash,
-                hashes.execution_hash
-            );
+        //let mut hasher = Sha3_256::new();
+        //postcard::to_io(&result, &mut hasher)?;
+        //let hash = hasher.finalize();
+        //let hashes = self
+        //    .node
+        //    .event_store
+        //    .get_and_update_hash(t_zero, hash.into())?;
+        //if request.transaction_hash != hashes.transaction_hash {
+        //    println!(
+        //        "{} | Mismatched transaction hash in Tx {:?}",
+        //        self.node.get_serial(),
+        //        t_zero
+        //    );
+        //    Err(SyneviError::MismatchedHashes)
+        //} else if request.execution_hash != hashes.execution_hash {
+        //    println!(
+        //        "{} | Mismatched execution hash in Tx {:?} | expected: {:?} != {:?}",
+        //        self.node.get_serial(),
+        //        t_zero,
+        //        request.execution_hash,
+        //        hashes.execution_hash
+        //    );
 
-            Err(SyneviError::MismatchedHashes)
-        } else {
-            Ok(ApplyResponse {})
-        }
+        //    Err(SyneviError::MismatchedHashes)
+        //} else {
+        //Ok(ApplyResponse {})
+        //}
     }
 
     #[instrument(level = "trace", skip(self))]

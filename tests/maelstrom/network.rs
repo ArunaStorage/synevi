@@ -282,7 +282,7 @@ impl NetworkInterface for MaelstromNetwork {
                 self.broadcast_responses
                     .lock()
                     .await
-                    .insert((State::Commited, t0), sx);
+                    .insert((State::Committed, t0), sx);
                 for replica in members {
                     if let Err(err) = self
                         .message_sender
@@ -308,7 +308,7 @@ impl NetworkInterface for MaelstromNetwork {
                         continue;
                     };
                 }
-                (State::Commited, t0)
+                (State::Committed, t0)
             }
             BroadcastRequest::Apply(req) => {
                 let t0 = T0::try_from(req.timestamp_zero.as_slice()).unwrap();
@@ -635,7 +635,7 @@ impl MaelstromNetwork {
             MessageType::CommitOk { t0 } => {
                 let key = T0::try_from(t0.as_slice())?;
                 let lock = self.broadcast_responses.lock().await;
-                if let Some(entry) = lock.get(&(State::Commited, key)) {
+                if let Some(entry) = lock.get(&(State::Committed, key)) {
                     entry
                         .send(BroadcastResponse::Commit(CommitResponse {}))
                         .await?;
