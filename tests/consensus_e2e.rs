@@ -20,9 +20,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn parallel_execution() {
         let node_names: Vec<_> = (0..5).map(|_| Ulid::new()).collect();
-        let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, MemStore>>> = vec![];
+        let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, PersistentStore>>> = vec![];
 
         for (i, m) in node_names.iter().enumerate() {
+            let test_path = format!("/dev/shm/{m}/");
+            fs::create_dir(&test_path).await.unwrap();
+            dbg!(&test_path);
+            let store = PersistentStore::new(test_path, i as u16).unwrap();
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
             let network = synevi_network::network::GrpcNetwork::new(
                 socket_addr,
@@ -30,7 +34,7 @@ mod tests {
                 *m,
                 i as u16,
             );
-            let node = Node::new_with_network_and_executor(*m, i as u16, network, DummyExecutor)
+            let node = Node::new(*m, i as u16, network, DummyExecutor, store)
                 .await
                 .unwrap();
             nodes.push(node);
@@ -76,6 +80,7 @@ mod tests {
         );
 
         //assert_eq!(recovers, 0);
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         let coordinator_store: BTreeMap<T0, (T, Option<[u8; 32]>)> = coordinator
             .event_store
@@ -261,7 +266,6 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(5)).await;
 
             //assert_eq!(recovers, 0);
-
 
             let coordinator_store: BTreeMap<T0, (T, Option<[u8; 32]>)> = coordinator1
                 .event_store

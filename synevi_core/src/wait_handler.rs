@@ -3,7 +3,11 @@ use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
 };
-use synevi_types::{traits::Store, types::{RecoverEvent, UpsertEvent}, State, T, T0};
+use synevi_types::{
+    traits::Store,
+    types::{RecoverEvent, UpsertEvent},
+    State, T, T0,
+};
 use tokio::{sync::oneshot, time::Instant};
 
 pub struct Waiter {
@@ -150,9 +154,10 @@ where
 
     pub fn check_recovery(&self) -> CheckResult {
         let mut waiter_lock = self.waiters.lock().expect("Locking waiters failed");
+        let len = waiter_lock.len() as u128 + 1;
         let mut smallest_hanging_dep = CheckResult::NoRecovery;
         for (t0, waiter) in waiter_lock.iter_mut() {
-            if waiter.waited_since.elapsed().as_millis() > 100 {
+            if waiter.waited_since.elapsed().as_millis() > len * 2 {
                 // Get deps and find smallest dep that is not committed / applied
                 let Some(event) = self.store.get_event(*t0).ok().flatten() else {
                     tracing::error!(
