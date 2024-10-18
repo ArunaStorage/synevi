@@ -1,6 +1,6 @@
 use ahash::RandomState;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 use synevi_types::{traits::Store, types::RecoverEvent, State, T, T0};
@@ -8,7 +8,7 @@ use tokio::{sync::oneshot, time::Instant};
 
 pub struct Waiter {
     waited_since: Instant,
-    dependency_states: u64,
+    finished_dependencies: HashSet<T0, RandomState>,
     sender: Vec<oneshot::Sender<()>>,
 }
 
@@ -84,7 +84,13 @@ where
             return None;
         };
 
-        let mut counter = 0;
+        let waiter = waiter_lock.entry(*t0).or_insert(Waiter {
+            waited_since: Instant::now(),
+            finished_dependencies: HashSet::default(),
+            sender: Vec::new(),
+        });
+        waiter.waited_since = Instant::now();
+
         for dep_t0 in event.dependencies.iter() {
             let Some(dep_event) = self.store.get_event(*dep_t0).ok().flatten() else {
                 continue;
@@ -92,26 +98,19 @@ where
 
             match dep_event.state {
                 State::Committed if dep_event.t > event.t => {
-                    counter += 1;
+                    waiter.finished_dependencies.insert(*dep_t0);
                 }
                 State::Applied => {
-                    counter += 1;
+                    waiter.finished_dependencies.insert(*dep_t0);
                 }
                 _ => {}
             }
         }
 
-        if counter >= event.dependencies.len() as u64 {
+        if waiter.finished_dependencies.len() >= event.dependencies.len() {
             return None;
         }
 
-        let waiter = waiter_lock.entry(*t0).or_insert(Waiter {
-            waited_since: Instant::now(),
-            dependency_states: 0,
-            sender: Vec::new(),
-        });
-        waiter.waited_since = Instant::now();
-        waiter.dependency_states = counter;
         waiter.sender.push(sdx);
         Some(rcv)
     }
@@ -125,9 +124,9 @@ where
             };
             if event.dependencies.contains(t0_commit) {
                 if t_commit > &event.t {
-                    waiter.dependency_states += 1;
+                    waiter.finished_dependencies.insert(*t0_commit);
                     waiter.waited_since = Instant::now();
-                    if waiter.dependency_states >= event.dependencies.len() as u64 {
+                    if waiter.finished_dependencies.len() >= event.dependencies.len() {
                         for sdx in waiter.sender.drain(..) {
                             let _ = sdx.send(());
                         }
@@ -147,9 +146,9 @@ where
                 return true;
             };
             if event.dependencies.contains(t0_commit) {
-                waiter.dependency_states += 1;
+                waiter.finished_dependencies.insert(*t0_commit);
                 waiter.waited_since = Instant::now();
-                if waiter.dependency_states >= event.dependencies.len() as u64 {
+                if waiter.finished_dependencies.len() >= event.dependencies.len() {
                     for sdx in waiter.sender.drain(..) {
                         let _ = sdx.send(());
                     }

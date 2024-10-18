@@ -503,7 +503,6 @@ impl NetworkInterface for GrpcNetworkSet {
             BroadcastRequest::Apply(req) => {
                 await_majority = false;
                 for replica in &self.members {
-                    println!("Replica: {:?}", replica);
                     let ready = replica.member.info.ready.load(Ordering::Relaxed);
                     let channel = replica.member.channel.clone();
                     let request = req.clone();
@@ -545,7 +544,6 @@ impl NetworkInterface for GrpcNetworkSet {
 
         // Poll majority
         // TODO: Electorates for PA ?
-        println!("Await majority: {}", await_majority);
         if await_majority {
             while let Some(response) = responses.join_next().await {
                 // TODO: Resiliency to network errors
@@ -590,12 +588,10 @@ impl NetworkInterface for GrpcNetworkSet {
                     }
                 }
             } else {
-                println!("Waiting for results");
 
                 tokio::spawn(
                     async move {
                     while let Some(r) = &responses.join_next().await {
-                        println!("Got result: {:?}", r);
 
                         match r {
                             Ok(Err(e)) => {
@@ -612,8 +608,6 @@ impl NetworkInterface for GrpcNetworkSet {
                         };
                     }
                 });
-
-                println!("Waited for results");
 
                 //});
                 return Ok(result); // No majority needed -> return early

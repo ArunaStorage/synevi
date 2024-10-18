@@ -257,7 +257,6 @@ impl Store for PersistentStore {
         }
         let mut event = Event::from(event);
         event.state = State::Applied;
-        println!("{:?}, {:?}", event, lock.latest_hash);
         Ok(event.hash_event(lock.latest_hash))
     }
 }

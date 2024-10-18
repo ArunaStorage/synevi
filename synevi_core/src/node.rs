@@ -301,21 +301,12 @@ where
             && needs_wait
         {
             if let Some(waiter) = self.wait_handler.get_waiter(&t0_apply) {
-                println!("[{}] waiting on {:?}", self.get_serial(), t0_apply);
                 waiter.await.map_err(|e| {
                     tracing::error!("Error waiting for commit: {:?}", e);
                     SyneviError::ReceiveError(format!("Error waiting for commit"))
                 })?;
             }
         }
-
-        println!(
-            "[{:?}]Applied event: t0: {:?}, t: {:?}, deps: {:?}",
-            self.get_serial(),
-            event.t_zero,
-            event.t,
-            event.dependencies,
-        );
 
         // - Check transaction hash -> SyneviError::MismatchingTransactionHash
         let mut node_hashes = self
@@ -325,7 +316,7 @@ where
         if let Some(hashes) = &request_hashes {
             if hashes.transaction_hash != node_hashes.transaction_hash {
                 println!(
-                    "Node: {}
+                    "MismatchedTransactionHashes @ Node: {}
 request: {:?}
 got:     {:?}",
                     self.get_serial(),
