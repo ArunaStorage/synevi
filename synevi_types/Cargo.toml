@@ -10,7 +10,7 @@ description.workspace = true
 [dependencies]
 bytes = { workspace = true }
 tokio = { workspace = true }
-monotime = { path = "../monotime", version = "0.1.0"}
+monotime = { path = "../monotime", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tonic = { workspace = true }
@@ -21,6 +21,7 @@ async-channel = "2.3.1"
 ahash = { workspace = true }
 heed = { workspace = true }
 http = "1.1.0"
-postcard = {version = "1.0.10", features = ["use-std"]}
+postcard = { version = "1.0.10", features = ["use-std"] }
 sha3 = "0.10.8"
-ulid = {workspace = true}
+ulid = { workspace = true }
+redb = { version = "2.1.4" }

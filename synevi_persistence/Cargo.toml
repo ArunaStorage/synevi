@@ -8,7 +8,7 @@ license.workspace = true
 description.workspace = true
 
 [dependencies]
-monotime = { path = "../monotime", version = "0.1.0"}
+monotime = { path = "../monotime", version = "0.1.0" }
 synevi_types = { path = "../synevi_types", version = "0.1.0" }
 bytes = { workspace = true }
 tokio = { workspace = true }
@@ -26,3 +26,4 @@ thiserror = { workspace = true }
 async-channel = "2.3.1"
 ahash = { workspace = true }
 bincode = "1.3.3"
+redb = { version = "2.1.4" }

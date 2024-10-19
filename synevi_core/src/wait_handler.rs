@@ -154,7 +154,7 @@ where
 
     pub fn check_recovery(&self) -> CheckResult {
         let mut waiter_lock = self.waiters.lock().expect("Locking waiters failed");
-        let len = waiter_lock.len() as u128 + 1;
+        let len = waiter_lock.len() as u128 + 10;
         let mut smallest_hanging_dep = CheckResult::NoRecovery;
         for (t0, waiter) in waiter_lock.iter_mut() {
             if waiter.waited_since.elapsed().as_millis() > len * 2 {

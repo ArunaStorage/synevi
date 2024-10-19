@@ -1,10 +1,6 @@
 use ahash::RandomState;
-use heed::{
-    byteorder::BigEndian,
-    types::{SerdeBincode, U128},
-    Database, Env, EnvFlags, EnvOpenOptions,
-};
 use monotime::MonoTime;
+use redb::{Database, ReadableTable, ReadableTableMetadata, TableDefinition};
 use std::{
     collections::{BTreeMap, HashSet},
     sync::{Arc, Mutex},
@@ -18,8 +14,7 @@ use synevi_types::{
 use tokio::sync::mpsc::Receiver;
 use tracing::instrument;
 
-const EVENT_DB_NAME: &str = "events";
-type EventDb = Database<U128<BigEndian>, SerdeBincode<Event>>;
+const TABLE: TableDefinition<u128, &[u8]> = TableDefinition::new("events");
 
 #[derive(Clone, Debug)]
 pub struct PersistentStore {
@@ -28,7 +23,7 @@ pub struct PersistentStore {
 
 #[derive(Clone, Debug)]
 struct InternalData {
-    db: Env,
+    db: Arc<redb::Database>,
     pub(crate) mappings: BTreeMap<T, T0>, // Key: t, value t0
     pub last_applied: T,                  // t of last applied entry
     pub(crate) latest_time: MonoTime,     // last created or recognized t0
@@ -38,74 +33,63 @@ struct InternalData {
 
 impl PersistentStore {
     pub fn new(path: String, node_serial: u16) -> Result<PersistentStore, SyneviError> {
-        let env = unsafe {
-            EnvOpenOptions::new()
-                .map_size(1024 * 1024 * 1024)
-                .max_dbs(16)
-                .flags(EnvFlags::MAP_ASYNC | EnvFlags::WRITE_MAP)
-                .open(path)?
-        };
-        let env_clone = env.clone();
-        let mut write_txn = env.write_txn()?;
-        let events_db: Option<EventDb> = env.open_database(&write_txn, Some(EVENT_DB_NAME))?;
-        match events_db {
-            Some(db) => {
-                let result = db
-                    .iter(&write_txn)?
-                    .filter_map(|e| {
-                        if let Ok((_, event)) = e {
-                            Some(event)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>();
+        let db = Database::create(path).unwrap();
+        let read_txn = db.begin_read().unwrap();
+        let events_db = read_txn.open_table(TABLE).unwrap();
 
-                let mut mappings = BTreeMap::default();
-                let mut last_applied = T::default();
-                let mut latest_time = MonoTime::default();
-                let mut latest_hash: [u8; 32] = [0; 32];
-                for event in result {
-                    mappings.insert(event.t, event.t_zero);
-                    if event.state == State::Applied && event.t > last_applied {
-                        last_applied = event.t;
-                        latest_hash = if let Some(hashes) = event.hashes {
-                            hashes.transaction_hash
-                        } else {
-                            return Err(SyneviError::MissingTransactionHash);
-                        };
+        if !events_db.is_empty().unwrap() {
+            let result = events_db
+                .range(0..)
+                .unwrap()
+                .filter_map(|e| {
+                    if let Ok((_, event)) = e {
+                        Some(bincode::deserialize(event.value()).unwrap())
+                    } else {
+                        None
                     }
-                    if *event.t > latest_time {
-                        latest_time = *event.t;
-                    }
+                })
+                .collect::<Vec<Event>>();
+
+            let mut mappings = BTreeMap::default();
+            let mut last_applied = T::default();
+            let mut latest_time = MonoTime::default();
+            let mut latest_hash: [u8; 32] = [0; 32];
+            for event in result {
+                mappings.insert(event.t, event.t_zero);
+                if event.state == State::Applied && event.t > last_applied {
+                    last_applied = event.t;
+                    latest_hash = if let Some(hashes) = event.hashes {
+                        hashes.transaction_hash
+                    } else {
+                        return Err(SyneviError::MissingTransactionHash);
+                    };
                 }
-                write_txn.commit()?;
-                Ok(PersistentStore {
-                    //db: env_clone,
-                    data: Arc::new(Mutex::new(InternalData {
-                        db: env_clone,
-                        mappings,
-                        last_applied,
-                        latest_time,
-                        node_serial,
-                        latest_hash,
-                    })),
-                })
+                if *event.t > latest_time {
+                    latest_time = *event.t;
+                }
             }
-            None => {
-                let _: EventDb = env.create_database(&mut write_txn, Some(EVENT_DB_NAME))?;
-                write_txn.commit()?;
-                Ok(PersistentStore {
-                    data: Arc::new(Mutex::new(InternalData {
-                        db: env_clone,
-                        mappings: BTreeMap::default(),
-                        last_applied: T::default(),
-                        latest_time: MonoTime::default(),
-                        node_serial,
-                        latest_hash: [0; 32],
-                    })),
-                })
-            }
+            Ok(PersistentStore {
+                //db: env_clone,
+                data: Arc::new(Mutex::new(InternalData {
+                    db: Arc::new(db),
+                    mappings,
+                    last_applied,
+                    latest_time,
+                    node_serial,
+                    latest_hash,
+                })),
+            })
+        } else {
+            Ok(PersistentStore {
+                data: Arc::new(Mutex::new(InternalData {
+                    db: Arc::new(db),
+                    mappings: BTreeMap::default(),
+                    last_applied: T::default(),
+                    latest_time: MonoTime::default(),
+                    node_serial,
+                    latest_hash: [0; 32],
+                })),
+            })
         }
     }
 }
@@ -315,16 +299,19 @@ impl InternalData {
 
     #[instrument(level = "trace")]
     fn accept_tx_ballot(&self, t_zero: &T0, ballot: Ballot) -> Option<Ballot> {
-        let mut write_txn = self.db.write_txn().ok()?;
-        let events_db: EventDb = self
-            .db
-            .open_database(&write_txn, Some(EVENT_DB_NAME))
-            .ok()??;
-        let mut event = events_db.get(&write_txn, &t_zero.get_inner()).ok()??;
+        let write_txn = self.db.begin_write().ok()?;
+        let mut event: Event = {
+            let table = write_txn.open_table(TABLE).ok()?;
+            let event = table.get(&t_zero.get_inner()).ok()??;
+            bincode::deserialize(event.value()).ok()?
+        };
 
         if event.ballot < ballot {
             event.ballot = ballot;
-            let _ = events_db.put(&mut write_txn, &t_zero.get_inner(), &event);
+            let mut table = write_txn.open_table(TABLE).ok()?;
+
+            let bytes = bincode::serialize(&event).ok()?;
+            let _ = table.insert(&t_zero.get_inner(), bytes.as_slice());
         }
         write_txn.commit().ok()?;
 
@@ -340,12 +327,15 @@ impl InternalData {
             self.latest_time = *upsert_event.t;
         }
 
-        let mut write_txn = self.db.write_txn()?;
-        let events_db: EventDb = self
-            .db
-            .open_database(&write_txn, Some(EVENT_DB_NAME))?
-            .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
-        let event = events_db.get(&write_txn, &upsert_event.t_zero.get_inner())?;
+        let write_txn = self.db.begin_write().ok().unwrap();
+        let event: Option<Event> = {
+            let table = write_txn.open_table(TABLE).ok().unwrap();
+            table
+                .get(&upsert_event.t_zero.get_inner())
+                .ok()
+                .unwrap()
+                .map(|e| bincode::deserialize(e.value()).ok().unwrap())
+        };
 
         let Some(mut event) = event else {
             let mut event = Event::from(upsert_event.clone());
@@ -385,25 +375,32 @@ impl InternalData {
                     .ok_or_else(|| SyneviError::MissingExecutionHash)?;
                 self.latest_hash = hashes.transaction_hash;
                 event.hashes = Some(hashes.clone());
-
-                events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
+                {
+                    let mut table = write_txn.open_table(TABLE).ok().unwrap();
+                    let bytes = bincode::serialize(&event).ok().unwrap();
+                    let _ = table.insert(&upsert_event.t_zero.get_inner(), bytes.as_slice());
+                }
             } else {
-                events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
+                {
+                    let mut table = write_txn.open_table(TABLE).ok().unwrap();
+                    let bytes = bincode::serialize(&event).ok().unwrap();
+                    let _ = table.insert(&upsert_event.t_zero.get_inner(), bytes.as_slice());
+                }
                 self.mappings.insert(upsert_event.t, upsert_event.t_zero);
             }
-            write_txn.commit()?;
+            write_txn.commit().unwrap();
             return Ok(());
         };
 
         // Do not update to a "lower" state
         if upsert_event.state < event.state {
-            write_txn.commit()?;
+            write_txn.commit().unwrap();
             return Ok(());
         }
 
         // Event is already applied
         if event.state == State::Applied {
-            write_txn.commit()?;
+            write_txn.commit().unwrap();
             return Ok(());
         }
 
@@ -451,35 +448,47 @@ impl InternalData {
                 self.latest_hash = hashes.transaction_hash;
                 event.hashes = Some(hashes.clone());
             };
-            events_db.put(&mut write_txn, &upsert_event.t_zero.get_inner(), &event)?;
-            write_txn.commit()?;
+            {
+                let mut table = write_txn.open_table(TABLE).ok().unwrap();
+                let bytes = bincode::serialize(&event).ok().unwrap();
+                let _ = table.insert(&upsert_event.t_zero.get_inner(), bytes.as_slice());
+            }
+            write_txn.commit().unwrap();
             Ok(())
         } else {
-            write_txn.commit()?;
+            write_txn.commit().unwrap();
             Ok(())
         }
     }
 
     #[instrument(level = "trace")]
     fn get_recover_deps(&self, t_zero: &T0) -> Result<RecoverDependencies, SyneviError> {
-        let read_txn = self.db.read_txn()?;
-        let db: EventDb = self
-            .db
-            .open_database(&read_txn, Some(EVENT_DB_NAME))?
-            .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
-        let timestamp = db
-            .get(&read_txn, &t_zero.get_inner())?
-            .ok_or_else(|| SyneviError::EventNotFound(t_zero.get_inner()))?
-            .t;
+        let read_txn = self.db.begin_read().unwrap();
+        let timestamp = {
+            let table = read_txn.open_table(TABLE).ok().unwrap();
+            table
+                .get(&t_zero.get_inner())
+                .ok()
+                .unwrap()
+                .map(|e| bincode::deserialize::<Event>(e.value()).ok().unwrap())
+                .unwrap()
+                .t
+        };
         let mut recover_deps = RecoverDependencies {
             timestamp,
             ..Default::default()
         };
 
         for (t_dep, t_zero_dep) in self.mappings.range(self.last_applied..) {
-            let dep_event = db
-                .get(&read_txn, &t_zero_dep.get_inner())?
-                .ok_or_else(|| SyneviError::DependencyNotFound(t_zero_dep.get_inner()))?;
+            let dep_event = {
+                let table = read_txn.open_table(TABLE).ok().unwrap();
+                table
+                    .get(&t_zero.get_inner())
+                    .ok()
+                    .unwrap()
+                    .map(|e| bincode::deserialize::<Event>(e.value()).ok().unwrap())
+                    .unwrap()
+            };
             match dep_event.state {
                 State::Accepted => {
                     if dep_event
@@ -516,24 +525,14 @@ impl InternalData {
                 recover_deps.dependencies.insert(*t_zero_dep);
             }
         }
-        read_txn.commit()?;
         Ok(recover_deps)
     }
 
     fn get_event_state(&self, t_zero: &T0) -> Option<State> {
-        let read_txn = self.db.read_txn().ok()?;
-        let db: EventDb = self
-            .db
-            .open_database(&read_txn, Some(EVENT_DB_NAME))
-            .ok()??;
-        let state = db
-            .get(&read_txn, &t_zero.get_inner())
-            .ok()?
-            .ok_or_else(|| SyneviError::EventNotFound(t_zero.get_inner()))
-            .ok()?
-            .state;
-        read_txn.commit().ok()?;
-        Some(state)
+        self.get_event(*t_zero)
+            .map(|event| event.map(|e| e.state))
+            .ok()
+            .flatten()
     }
 
     fn recover_event(
@@ -548,17 +547,24 @@ impl InternalData {
             return Err(SyneviError::UndefinedRecovery);
         }
 
-        let mut write_txn = self.db.write_txn()?;
-        let db: EventDb = self
-            .db
-            .open_database(&write_txn, Some(EVENT_DB_NAME))?
-            .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
-        let event = db.get(&write_txn, &t_zero_recover.get_inner())?;
+        let write_txn = self.db.begin_write().ok().unwrap();
+        let event = {
+            let table = write_txn.open_table(TABLE).ok().unwrap();
+            table
+                .get(&t_zero_recover.get_inner())
+                .ok()
+                .unwrap()
+                .map(|e| bincode::deserialize::<Event>(e.value()).ok().unwrap())
+        };
 
         if let Some(mut event) = event {
             event.ballot = Ballot(event.ballot.next_with_node(node_serial).into_time());
-            db.put(&mut write_txn, &t_zero_recover.get_inner(), &event)?;
-            write_txn.commit()?;
+            {
+                let mut table = write_txn.open_table(TABLE).ok().unwrap();
+                let bytes = bincode::serialize(&event).ok().unwrap();
+                let _ = table.insert(&t_zero_recover.get_inner(), bytes.as_slice());
+            }
+            write_txn.commit().unwrap();
 
             Ok(Some(RecoverEvent {
                 id: event.id,
@@ -576,25 +582,21 @@ impl InternalData {
 
     fn get_event_store(&self) -> BTreeMap<T0, Event> {
         // TODO: Remove unwrap and change trait result
-        let read_txn = self.db.read_txn().unwrap();
-        let events_db: Database<U128<BigEndian>, SerdeBincode<Event>> = self
-            .db
-            .open_database(&read_txn, Some(EVENT_DB_NAME))
-            .unwrap()
-            .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))
-            .unwrap();
-        let result = events_db
-            .iter(&read_txn)
-            .unwrap()
+        let read_txn = self.db.begin_read().ok().unwrap();
+        let table = read_txn.open_table(TABLE).ok().unwrap();
+        let range = table.range(0..).unwrap();
+        let result = range
             .filter_map(|e| {
                 if let Ok((t0, event)) = e {
-                    Some((T0(MonoTime::from(t0)), event))
+                    Some((
+                        T0(MonoTime::from(t0.value())),
+                        bincode::deserialize(event.value()).ok().unwrap(),
+                    ))
                 } else {
                     None
                 }
             })
             .collect::<BTreeMap<T0, Event>>();
-        read_txn.commit().unwrap();
         result
     }
 
@@ -616,31 +618,30 @@ impl InternalData {
             _ => return Err(SyneviError::EventNotFound(last_applied.get_inner())),
         };
         tokio::task::spawn_blocking(move || {
-            let read_txn = db.read_txn()?;
-            let range = last_applied_t0.get_inner()..;
-            let events_db: EventDb = db
-                .open_database(&read_txn, Some(EVENT_DB_NAME))?
-                .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
-
-            for result in events_db.range(&read_txn, &range)? {
-                let (_t0, event) = result?;
+            let write_txn = db.begin_read().ok().unwrap();
+            let table = write_txn.open_table(TABLE).ok().unwrap();
+            for result in table.range(last_applied_t0.get_inner()..).unwrap() {
+                let event = bincode::deserialize(result.unwrap().1.value())
+                    .ok()
+                    .unwrap();
                 sdx.blocking_send(Ok(event))
                     .map_err(|e| SyneviError::SendError(e.to_string()))?;
             }
-            read_txn.commit()?;
             Ok::<(), SyneviError>(())
         });
         Ok(rcv)
     }
 
     fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError> {
-        let read_txn = self.db.read_txn()?;
-        let db: EventDb = self
-            .db
-            .open_database(&read_txn, Some(EVENT_DB_NAME))?
-            .ok_or_else(|| SyneviError::DatabaseNotFound(EVENT_DB_NAME))?;
-        let event = db.get(&read_txn, &t_zero.get_inner())?;
-        read_txn.commit()?;
+        let write_txn = self.db.begin_read().ok().unwrap();
+        let event = {
+            let table = write_txn.open_table(TABLE).ok().unwrap();
+            table
+                .get(&t_zero.get_inner())
+                .ok()
+                .unwrap()
+                .map(|e| bincode::deserialize::<Event>(e.value()).ok().unwrap())
+        };
         Ok(event)
     }
 

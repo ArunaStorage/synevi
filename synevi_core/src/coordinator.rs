@@ -13,8 +13,7 @@ use synevi_network::network::{BroadcastRequest, Network, NetworkInterface};
 use synevi_network::utils::IntoInner;
 use synevi_types::traits::Store;
 use synevi_types::types::{
-    ExecutorResult, Hashes, InternalSyneviResult, RecoverEvent, RecoveryState,
-    TransactionPayload,
+    ExecutorResult, Hashes, InternalSyneviResult, RecoverEvent, RecoveryState, TransactionPayload,
 };
 use synevi_types::{Ballot, Executor, State, SyneviError, Transaction, T, T0};
 use tracing::{instrument, trace};
@@ -275,12 +274,10 @@ where
             transaction_hash: hashes.transaction_hash.to_vec(),
         };
 
-
         let network_interface = self.node.network.get_interface().await;
         network_interface
             .broadcast(BroadcastRequest::Apply(applied_request))
             .await?; // TODO: This should not be awaited, but can be used to compare hashes
-
 
         synevi_result
     }

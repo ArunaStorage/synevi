@@ -99,7 +99,7 @@ pub trait Store: Send + Sync + Sized + 'static {
 
     fn get_event_store(&self) -> BTreeMap<T0, Event>;
     fn last_applied(&self) -> (T, T0);
-//    fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError>;
+    //    fn last_applied_hash(&self) -> Result<(T, [u8; 32]), SyneviError>;
 
     fn get_event(&self, t_zero: T0) -> Result<Option<Event>, SyneviError>;
     fn get_events_after(
@@ -107,11 +107,11 @@ pub trait Store: Send + Sync + Sized + 'static {
         last_applied: T,
     ) -> Result<Receiver<Result<Event, SyneviError>>, SyneviError>;
 
-//    fn get_and_update_hash(
-//        &self,
-//        t_zero: T0,
-//        execution_hash: [u8; 32],
-//    ) -> Result<Hashes, SyneviError>;
+    //    fn get_and_update_hash(
+    //        &self,
+    //        t_zero: T0,
+    //        execution_hash: [u8; 32],
+    //    ) -> Result<Hashes, SyneviError>;
 
     fn get_or_update_transaction_hash(&self, event: UpsertEvent) -> Result<Hashes, SyneviError>;
 

@@ -23,7 +23,7 @@ mod tests {
         let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, PersistentStore>>> = vec![];
 
         for (i, m) in node_names.iter().enumerate() {
-            let test_path = format!("/dev/shm/{m}/");
+            let test_path = format!("/home/beavis/tmp/{m}/");
             fs::create_dir(&test_path).await.unwrap();
             dbg!(&test_path);
             let store = PersistentStore::new(test_path, i as u16).unwrap();
