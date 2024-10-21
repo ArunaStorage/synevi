@@ -17,7 +17,7 @@ use tracing::instrument;
 const TABLE: TableDefinition<u128, &[u8]> = TableDefinition::new("events");
 
 #[derive(Clone, Debug)]
-pub struct PersistentStore {
+pub struct RedbStore {
     data: Arc<Mutex<InternalData>>,
 }
 
@@ -31,10 +31,16 @@ struct InternalData {
     latest_hash: [u8; 32],
 }
 
-impl PersistentStore {
-    pub fn new(path: String, node_serial: u16) -> Result<PersistentStore, SyneviError> {
+impl RedbStore {
+    pub fn new(path: String, node_serial: u16) -> Result<RedbStore, SyneviError> {
         let db = Database::create(path).unwrap();
+        {
+            let write_txn = db.begin_write().unwrap();
+            let _ = write_txn.open_table(TABLE).unwrap();
+            write_txn.commit().unwrap();
+        }
         let read_txn = db.begin_read().unwrap();
+
         let events_db = read_txn.open_table(TABLE).unwrap();
 
         if !events_db.is_empty().unwrap() {
@@ -68,7 +74,7 @@ impl PersistentStore {
                     latest_time = *event.t;
                 }
             }
-            Ok(PersistentStore {
+            Ok(RedbStore {
                 //db: env_clone,
                 data: Arc::new(Mutex::new(InternalData {
                     db: Arc::new(db),
@@ -80,7 +86,7 @@ impl PersistentStore {
                 })),
             })
         } else {
-            Ok(PersistentStore {
+            Ok(RedbStore {
                 data: Arc::new(Mutex::new(InternalData {
                     db: Arc::new(db),
                     mappings: BTreeMap::default(),
@@ -94,7 +100,7 @@ impl PersistentStore {
     }
 }
 
-impl Store for PersistentStore {
+impl Store for RedbStore {
     #[instrument(level = "trace")]
     fn init_t_zero(&self, node_serial: u16) -> T0 {
         self.data

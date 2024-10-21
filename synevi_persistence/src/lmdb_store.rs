@@ -22,7 +22,7 @@ const EVENT_DB_NAME: &str = "events";
 type EventDb = Database<U128<BigEndian>, SerdeBincode<Event>>;
 
 #[derive(Clone, Debug)]
-pub struct PersistentStore {
+pub struct LmdbStore {
     data: Arc<Mutex<InternalData>>,
 }
 
@@ -36,8 +36,8 @@ struct InternalData {
     latest_hash: [u8; 32],
 }
 
-impl PersistentStore {
-    pub fn new(path: String, node_serial: u16) -> Result<PersistentStore, SyneviError> {
+impl LmdbStore {
+    pub fn new(path: String, node_serial: u16) -> Result<LmdbStore, SyneviError> {
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(1024 * 1024 * 1024)
@@ -80,7 +80,7 @@ impl PersistentStore {
                     }
                 }
                 write_txn.commit()?;
-                Ok(PersistentStore {
+                Ok(LmdbStore {
                     //db: env_clone,
                     data: Arc::new(Mutex::new(InternalData {
                         db: env_clone,
@@ -95,7 +95,7 @@ impl PersistentStore {
             None => {
                 let _: EventDb = env.create_database(&mut write_txn, Some(EVENT_DB_NAME))?;
                 write_txn.commit()?;
-                Ok(PersistentStore {
+                Ok(LmdbStore {
                     data: Arc::new(Mutex::new(InternalData {
                         db: env_clone,
                         mappings: BTreeMap::default(),
@@ -110,7 +110,7 @@ impl PersistentStore {
     }
 }
 
-impl Store for PersistentStore {
+impl Store for LmdbStore {
     #[instrument(level = "trace")]
     fn init_t_zero(&self, node_serial: u16) -> T0 {
         self.data
@@ -284,6 +284,7 @@ impl InternalData {
             ..Default::default()
         };
         self.upsert_tx(event)?;
+        //self.db.force_sync()?;
         Ok((t, deps))
     }
 
@@ -327,6 +328,7 @@ impl InternalData {
             let _ = events_db.put(&mut write_txn, &t_zero.get_inner(), &event);
         }
         write_txn.commit().ok()?;
+        //self.db.force_sync().ok()?;
 
         Some(event.ballot)
     }

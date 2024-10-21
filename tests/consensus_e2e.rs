@@ -11,7 +11,7 @@ mod tests {
     use synevi_core::node::Node;
     use synevi_core::tests::DummyExecutor;
     use synevi_network::network::GrpcNetwork;
-    use synevi_persistence::lmdb_store::PersistentStore;
+    use synevi_persistence::lmdb_store::LmdbStore;
     use synevi_persistence::mem_store::MemStore;
     use tokio::fs;
     use tokio::runtime::Builder;
@@ -20,13 +20,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn parallel_execution() {
         let node_names: Vec<_> = (0..5).map(|_| Ulid::new()).collect();
-        let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, PersistentStore>>> = vec![];
+        let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, LmdbStore>>> = vec![];
 
         for (i, m) in node_names.iter().enumerate() {
-            let test_path = format!("/home/beavis/tmp/{m}/");
+            let test_path = format!("dev/shm/{m}");
             fs::create_dir(&test_path).await.unwrap();
             dbg!(&test_path);
-            let store = PersistentStore::new(test_path, i as u16).unwrap();
+            let store = LmdbStore::new(test_path, i as u16).unwrap();
             let socket_addr = SocketAddr::from_str(&format!("0.0.0.0:{}", 10000 + i)).unwrap();
             let network = synevi_network::network::GrpcNetwork::new(
                 socket_addr,
@@ -373,7 +373,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn reconfiguration() {
         let node_names: Vec<_> = (0..5).map(|_| Ulid::new()).collect();
-        let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, PersistentStore>>> = vec![];
+        let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, LmdbStore>>> = vec![];
         //let mut nodes: Vec<Arc<Node<GrpcNetwork, DummyExecutor, MemStore>>> = vec![];
 
         for (i, m) in node_names.iter().enumerate() {
@@ -390,7 +390,7 @@ mod tests {
                 let test_path = format!("/dev/shm/{m}/");
                 fs::create_dir(&test_path).await.unwrap();
                 dbg!(&test_path);
-                let store = PersistentStore::new(test_path, i as u16).unwrap();
+                let store = LmdbStore::new(test_path, i as u16).unwrap();
                 //let store = MemStore::new(i as u16).unwrap();
                 let node = Node::new(*m, i as u16, network, DummyExecutor, store)
                     .await
@@ -408,7 +408,7 @@ mod tests {
                 // Copy & create db
                 let test_path = format!("/dev/shm/{m}/");
                 fs::create_dir(&test_path).await.unwrap();
-                let store = PersistentStore::new(test_path, i as u16).unwrap();
+                let store = LmdbStore::new(test_path, i as u16).unwrap();
                 //let store = MemStore::new(i as u16).unwrap();
                 let node = Node::new_with_member(
                     *m,
@@ -445,7 +445,7 @@ mod tests {
                 let test_path = format!("/dev/shm/{id}/");
                 fs::create_dir(&test_path).await.unwrap();
                 dbg!(&test_path);
-                let store = PersistentStore::new(test_path, 6).unwrap();
+                let store = LmdbStore::new(test_path, 6).unwrap();
                 //let store = MemStore::new(6).unwrap();
                 let node = Node::new_with_member(
                     id,
